@@ -1,0 +1,9 @@
+pinned/
+success/
+
+# The credentials themselves, and the auth file written from them.
+.env
+.ovpn-auth
+
+# pid, log and what-is-connected, written while a tunnel is up.
+.state/
