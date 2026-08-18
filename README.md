@@ -34,6 +34,7 @@ ovpn-pin/
   Resolve-OvpnRemote.ps1   <- Windows: pin the configs
   Sweep-OvpnExits.ps1      <- Windows: judge every exit in turn
   run.cmd                  <- Windows: double-click this
+  run.sh                   <- Linux: the same menu
   resolve-ovpn-remote.sh   <- Linux: pin the configs
   ovpn-connect.sh          <- Linux: connect, and drop the proxy
   ovpn-lib.sh              <- what the two Linux scripts share
@@ -71,7 +72,28 @@ on the machine is changed. It also passes arguments straight through, so
 **Linux**
 
 ```bash
-chmod +x resolve-ovpn-remote.sh
+chmod +x run.sh resolve-ovpn-remote.sh ovpn-connect.sh
+./run.sh
+```
+
+The same menu `run.cmd` gives on Windows, numbered the same way: pin, pin
+through a proxy, judge the exit you are on, sweep every location, who owns
+the addresses, connect, status. Each item asks the few questions that item
+needs — which folder, which configs, which landlords — and then prints the
+command your answers came to before running it:
+
+```
+  $ ./ovpn-connect.sh --sweep --retest --pick-landlord
+```
+
+So it is a way of learning the flags rather than a substitute for them.
+`./run.sh --print-only` answers the questions and stops at that line, and
+anything you pass straight through — `./run.sh --sweep --one-per` — skips the
+menu and goes to whichever of the two scripts owns that flag.
+
+Or run the scripts directly, which is all the menu does:
+
+```bash
 ./resolve-ovpn-remote.sh
 ```
 
