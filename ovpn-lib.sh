@@ -682,7 +682,7 @@ UA_BROWSER='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Geck
 cf_probe() {
     local url=$1 rc t
     t=$(tmp_dir)
-    CF_STATUS=''; CF_VERDICT=''; CF_RAY=''; CF_ERR=''
+    CF_STATUS=''; CF_VERDICT=''; CF_RAY=''; CF_ERR=''; CF_SLOW=0
     CF_BODY=$t/body.$$; CF_HDRS=$t/hdrs.$$
 
     CF_STATUS=$(curl -sS -L --noproxy '*' --max-time "$TIMEOUT" \
@@ -693,8 +693,18 @@ cf_probe() {
     if [ $rc -ne 0 ]; then
         CF_ERR=$(tr -d '\r' < "$t/err.$$" | sed 's/^curl: ([0-9]*) //' | tail -n1)
         [ -z "$CF_ERR" ] && CF_ERR="curl exit $rc"
-        CF_VERDICT='unreachable'
-        return 0
+        # A transfer that ran out of time having already had a status line and
+        # part of a page is not a site you could not reach - it is a page too
+        # slow to finish inside the budget, over an exit that answered you.
+        # Judging it on what did arrive is the difference between "this exit
+        # is blocked" and "this exit works but is slow", and the two want
+        # opposite decisions from you. Cloudflare's challenge markers sit at
+        # the top of the page, so a partial body still shows them.
+        if [ "${CF_STATUS:-000}" = 000 ]; then
+            CF_VERDICT='unreachable'
+            return 0
+        fi
+        CF_SLOW=1
     fi
 
     local mitigated challenged=0
@@ -758,10 +768,26 @@ cf_exit_verdict() {
         # is the question a folder named after a site has to answer.
         per="${per:+$per }$h=$CF_VERDICT"
         case $CF_VERDICT in
-            ok)         good=$((good + 1)) ;;
+            # Served, but worth saying it only just did: an exit that needs
+            # longer than the budget to hand over a page is one you would
+            # rather know about before you pick it.
+            ok)         good=$((good + 1))
+                        [ "${CF_SLOW:-0}" = 1 ] && detail="${detail:+$detail, }$h slow" ;;
             challenged) bad_=$((bad_ + 1)); detail="${detail:+$detail, }$h challenged" ;;
             blocked)    bad_=$((bad_ + 1)); detail="${detail:+$detail, }$h 403" ;;
-            *)          detail="${detail:+$detail, }$h ${CF_VERDICT}" ;;
+            # Anything else - unreachable, a timeout, a DNS failure - counts
+            # against it too. It used to count as neither, which left good=1
+            # from cloudflare.com and bad=0, and the exit came out "clean"
+            # while the one site you actually asked about had never answered.
+            # Clean has to mean every site you named was served; not knowing
+            # is not the same as fine.
+            # curl's own words go in too. "unreachable" on its own is a dead
+            # end when you come back to it later - it cannot tell a name that
+            # would not resolve from an address with no route to it from a
+            # handshake that timed out, and those want three different fixes.
+            # Tabs out: this ends up in a tab-separated table.
+            *)          bad_=$((bad_ + 1))
+                        detail="${detail:+$detail, }$h ${CF_VERDICT}${CF_ERR:+ (${CF_ERR//$'\t'/ })}" ;;
         esac
     done
 

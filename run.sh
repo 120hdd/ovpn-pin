@@ -323,8 +323,11 @@ case ${1:-} in
             *' --sweep'*|*' --status'*|*' --stop'*|*' --switch'*|*' --dns-check'*|\
             *' --retest'*|*' --landlord'*|*' --one-per'*|*' --kill-switch'*|\
             *' --set-dns'*|*' --dry-run'*|*' --supervise'*|*' --install-service'*)
-                exec "$CON" "$@" ;;
-            *)  exec "$PIN" "$@" ;;
+                exec bash "$CON" "$@" ;;
+            # Through bash for the same reason run() does it: this path never
+            # reaches run(), so without it a tree whose executable bits did
+            # not survive the trip fails here and nowhere else.
+            *)  exec bash "$PIN" "$@" ;;
         esac ;;
 esac
 

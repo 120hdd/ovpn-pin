@@ -26,7 +26,7 @@
 
 set -uo pipefail
 
-VERSION=1.0.0
+VERSION=1.2.0
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 SELF=$(basename -- "${BASH_SOURCE[0]}")
 
@@ -1141,7 +1141,7 @@ filter_by_landlord() {
     # Said plainly when it is not the final number. This line lands right
     # after you pick, it is the biggest figure on the screen, and read on its
     # own it looks like the whole lot is about to be connected.
-    if [ "$ONE_PER" -eq 1 ] || [ "$ONE_PER_LANDLORD" -eq 1 ]; then
+    if [ "$ONE_PER" -eq 1 ] || [ "$ONE_PER_LANDLORD" -eq 1 ] || [ "$ONE_PER_LANDLORD_LOC" -eq 1 ]; then
         info "${#keep[@]} config(s) are rented from those, before narrowing further"
     else
         info "${#keep[@]} config(s) are rented from those"

@@ -837,8 +837,13 @@ function Invoke-CfProbe {
                   ($body -match 'Just a moment|Attention Required|Checking your browser|cf-challenge|__cf_chl') -or
                   ($body -match 'Error 10(20|15|09)')
 
+    # A read that ran out of time having already had a status line is not a
+    # site you could not reach - it is a page too slow to finish inside the
+    # budget, over an exit that answered. Judged on what did arrive, which is
+    # the difference between "blocked" and "works but slow".
+    $slow = [bool]($err -and $status)
     $verdict =
-        if ($err)                       { 'unreachable' }
+        if ($err -and -not $status)     { 'unreachable' }
         elseif ($challenged)            { 'challenged' }
         elseif ($status -eq 403)        { 'blocked' }
         elseif ($status -ge 200 -and $status -lt 400) { 'ok' }
@@ -851,6 +856,7 @@ function Invoke-CfProbe {
         Ray     = $ray
         Body    = $body
         Error   = $err
+        Slow    = $slow
     }
 }
 

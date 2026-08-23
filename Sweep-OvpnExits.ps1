@@ -803,10 +803,26 @@ function Get-ExitVerdict {
         # the question a folder named after a site has to answer.
         $per += [pscustomobject]@{ Host = $h; Verdict = $p.Verdict }
         switch ($p.Verdict) {
-            'ok'         { $good++ }
+            # Served, but worth saying it only just did: an exit that needs
+            # longer than the budget to hand over a page is one you would
+            # rather know about before you pick it.
+            'ok'         { $good++; if ($p.Slow) { $detail += "$h slow" } }
             'challenged' { $bad++; $detail += "$h challenged" }
             'blocked'    { $bad++; $detail += "$h 403" }
-            default      { $detail += "$h $($p.Verdict)" }
+            # Anything else - unreachable, a timeout, a DNS failure - counts
+            # against it too. It used to count as neither, which left good=1
+            # from cloudflare.com and bad=0, and the exit came out "clean"
+            # while the one site you actually asked about had never answered.
+            # Clean has to mean every site you named was served; not knowing
+            # is not the same as fine.
+            # The probe's own words go in too. "unreachable" on its own is a
+            # dead end when you come back to it later - it cannot tell a name
+            # that would not resolve from an address with no route to it from
+            # a handshake that timed out, and those want three different
+            # fixes. Tabs out: this ends up in a tab-separated table.
+            default      { $bad++
+                           $why = if ($p.Error) { " ($($p.Error -replace "`t", ' '))" } else { '' }
+                           $detail += "$h $($p.Verdict)$why" }
         }
     }
 
