@@ -1160,6 +1160,35 @@ filter_by_landlord() {
 
 #------------------------------------------------------------------- sweeping
 
+# Most folders this can be pointed at are only read from. Two are not.
+#
+# success/ is written to, but every deletion there is keyed on the config's own
+# name, so a config only ever replaces its own earlier entry - it has its own
+# line further down and needs nothing here. The landlord folders are different:
+# they keep one entry per *company*, so the deletions are keyed on a tag that
+# several different configs share, and the first M247 to come up takes the
+# other M247 files with it - files still sitting in this sweep's queue.
+#
+# Not forbidden: re-testing your per-company picks is a reasonable thing to
+# want, and the loop below now skips what has gone and says why. But it should
+# not be a surprise, and there is a better way to ask the same question.
+warn_if_pruned_folder() {
+    case ${OUT_DIR%/} in
+        "${SUCCESS_DIR%/}"/landlord|"${SUCCESS_DIR%/}"/landlord/fastest) ;;
+        *) return 0 ;;
+    esac
+    printf '\n'
+    warn 'this folder keeps one entry per hosting company, and the sweep is what'
+    info '       prunes it - so as each config comes up, the slower entries for that'
+    info '       same company are deleted, including any still queued here. They are'
+    info '       skipped and named rather than reported as broken.'
+    info '       Their names also carry the company tag, which ends up in the copies'
+    info '       written to the success folder.'
+    printf '\n'
+    info '       The same question without either problem:'
+    info "            ./$SELF --sweep --retest --one-per-landlord"
+}
+
 # Connect each pinned config in turn and ask Cloudflare what it makes of the
 # exit. There is no way to know this without connecting: nothing measurable
 # from your own line says how an exit you are not using will be treated.
@@ -1279,6 +1308,7 @@ do_sweep() {
     info 'waits on a clock - every step moves on the moment it is done - so'
     info "reckon on half a minute each, ${#idxs[@]} to go."
     [ "$RETESTING" -eq 1 ] && info 'Re-testing what worked: anything that has stopped connecting is dropped from it.'
+    warn_if_pruned_folder
 
     if running_pid >/dev/null; then
         info 'bringing down what is connected first'
@@ -1295,6 +1325,22 @@ do_sweep() {
         # folder or from the success one.
         base=$(base_config_name "${CFG_NAME[$i]}")
         info "-> $base  ${CFG_IP[$i]}:${CFG_PORT[$i]}"
+
+        # The queue was taken before the first connect, and a sweep of one of
+        # the landlord folders deletes from the folder it is reading - see
+        # warn_if_pruned_folder. Without this check openvpn gets handed a path
+        # that stopped existing ten minutes ago, fails the way any missing file
+        # fails, and a config that is perfectly fine is written down as
+        # "openvpn would not start". Checked here rather than trusted, because
+        # the cost of being wrong is a lie in the results table.
+        if [ ! -e "${CFG_FILE[$i]}" ]; then
+            warn 'gone from the folder since this sweep started - skipped'
+            info 'A quicker entry for the same company replaced it. Nothing is'
+            info 'wrong with the config; this folder only keeps one of them.'
+            results+=("$(printf '%s\t%s\t%s\t%s\t%s' \
+                'skipped' "$base" '-' 'replaced mid-sweep by a quicker entry for the same company' '')")
+            continue
+        fi
 
         mode=direct
         if [ "$VIA" = proxy ]; then

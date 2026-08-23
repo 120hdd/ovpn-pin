@@ -179,10 +179,43 @@ It declines more often than it accepts, which is the point:
 - `configs/` it will use, but warns first: those are the downloaded originals
   that still name a hostname, which is the thing this repo exists to work around
 
-One consequence worth knowing: standing in `success/` and running `ovpn sweep`
-is the same as `--retest`, so anything that has stopped connecting is **dropped
-from that folder**. The sweep says so before it starts. Standing in a `sitetest/`
-folder is not — nothing is deleted there.
+`ovpn help folders` prints all of this, plus which folders get written to.
+
+### Which folders a sweep writes to
+
+A sweep only ever *reads* the folder you point it at. What it writes goes to
+`success/`, `success/landlord/`, `success/landlord/fastest/` and
+`sitetest/<host>/`, wherever it was pointed from. So sweeping `configs/` cannot
+damage `configs/` — it is only pointless, because those files still name a
+hostname.
+
+Standing in `success/` and running `ovpn sweep` is the same as `--retest`:
+anything that has stopped connecting is **dropped from that folder**, because a
+folder that says these all work should not be quietly wrong. It says so before
+it starts, and every deletion there is keyed on a config's own name, so nothing
+else is touched.
+
+The landlord folders are the exception, and worth understanding before you
+sweep one. They keep one entry per **company**, so their deletions are keyed on
+a tag that several different configs share: the first M247 to come up deletes
+the other M247 files, including any still queued in that same sweep. Those are
+skipped and named —
+
+```
+  [warn] gone from the folder since this sweep started - skipped
+         A quicker entry for the same company replaced it. Nothing is
+         wrong with the config; this folder only keeps one of them.
+```
+
+— rather than reported as `openvpn would not start`, which is what used to
+happen and is a lie about a file that was working ten minutes ago. The sweep
+also warns at the start. But the same question is better asked as
+
+```bash
+ovpn sweep --retest --one-per-landlord
+```
+
+which tests one address per company out of `success/` and prunes nothing.
 
 ## Stop the client asking for a password (Linux)
 

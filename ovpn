@@ -187,48 +187,164 @@ do_uninstall() {
 usage() {
     cat <<EOF
 
-  ${C_CYAN}ovpn${C_OFF} - pin, connect, and judge OpenVPN exits
+  ${C_CYAN}ovpn${C_OFF} - pin OpenVPN configs to real addresses, connect to them, and find
+         out which of them the web will actually serve.
 
-  ${C_GRAY}The folder you are in is the folder it acts on, if that folder has
-  .ovpn files in it. Otherwise: pinned/${C_OFF}
+  ${C_GRAY}Standing in a folder that has .ovpn files in it makes that the folder
+  every command below acts on. Otherwise pinned/. It says which one it
+  chose before anything happens - \`ovpn help folders\` for the rules.${C_OFF}
 
-  Connecting
-    ovpn                      the menu
-    ovpn connect [name]       a number, a filename, or part of one
-    ovpn switch <name>        stop what is up, then connect that
-    ovpn stop                 tunnel down, proxy back, kill switch off
-    ovpn status               what is up, and where traffic leaves from
+  ${C_CYAN}Connecting${C_OFF}
 
-  Testing
-    ovpn sweep [name]         connect to each in turn and judge its exit
-    ovpn sweep --one-per      one address per location
-    ovpn sweep --one-per-landlord
-                              one per hosting company. Start here
-    ovpn sweep --one-per-landlord-location
-                              one per company per location
-    ovpn check                judge the exit you are on right now
-    ovpn dns-check            is DNS going through the tunnel?
+    ovpn
+        The menu. Every item prints the command your answers came to before
+        running it, so it is a way of learning the flags rather than hiding them.
 
-  Pinning
-    ovpn pin [args]           resolve the hostnames, write pinned/
-    ovpn sync                 re-resolve what is already pinned
-    ovpn who                  name the company each address is rented from
+    ovpn connect [name]
+        A number from the list, a whole filename, or enough of one to be
+        unambiguous - \`ovpn connect uk-lon\`. Ambiguous is refused, not guessed.
+        No name at all lists what is there, with the last sweep's verdict beside
+        each. Probes the address first and only reaches for the proxy if it has
+        to, then switches the system proxy off once the tunnel is up.
 
-  Housekeeping
-    ovpn install [dir]        symlink into ~/.local/bin (or dir)
-    ovpn uninstall [dir]      remove that symlink
-    ovpn where                which repo this name points at
-    ovpn help                 this
-    ovpn help connect         every flag ovpn-connect.sh takes
-    ovpn help pin             every flag resolve-ovpn-remote.sh takes
+    ovpn <name>
+        Same thing. Any word that is not a command below is taken as a config
+        name, so \`ovpn uk-lon\` is the short form.
 
-  Anything not listed above is treated as a config name, so
+    ovpn switch <name>
+        Bring down what is up, wait for its routes to go with it, then connect
+        that one. Not the same as stop-then-connect typed quickly.
 
-      ovpn uk-lon
+    ovpn stop
+        Tunnel down, system proxy back to what it was, kill switch removed.
 
-  is the same as \`ovpn connect uk-lon\`. Flags are passed straight through:
+    ovpn status
+        What is up, which device it is on, and - by asking Cloudflare - where
+        your traffic is actually leaving from. That last part is the one your
+        own machine cannot tell you.
+
+  ${C_CYAN}Finding out which exits are any good${C_OFF}
+
+    ovpn sweep [name]
+        Connect to each config in turn, ask Cloudflare what it makes of that
+        exit, drop it, next. Half a minute each. What comes up is copied into
+        success/ with the handshake time in the name, so that folder sorted by
+        name is "what to reach for when a tunnel drops". Narrow it:
+
+          --one-per                     one address per location   (~140)
+          --one-per-landlord            one per hosting company    (~20, start here)
+          --one-per-landlord-location   one per company per location
+          --landlord M247,Datacamp      only those companies
+          --pick-landlord               list the companies, choose by number
+          --retest                      sweep success/ instead of pinned/
+          --site a.com,b.com            also test those hosts on every exit
+          --first N                     stop after N
+          --pick                        connect the best one when it is done
+
+        Out of each group it takes whichever address connected quickest last
+        time, read off the names in success/.
+
+    ovpn check
+        Judge the exit you are on this second. Connects to nothing. Cloudflare
+        rules are per-customer, so a strict site can refuse an exit that
+        Cloudflare's own pages serve happily - \`--site\` names extra ones.
+
+    ovpn dns-check
+        Is DNS going through the tunnel, or still being answered by your ISP?
+        A poisoned answer reaches you through a perfectly good tunnel.
+
+    ovpn who
+        Name the hosting company behind each address - M247, Datacamp,
+        Clouvider - and group them by it. Connects to nothing. One company is
+        near enough one address as far as being blocked goes.
+
+  ${C_CYAN}Pinning${C_OFF}
+
+    ovpn pin
+        Read every file in configs/, look each hostname up over DNS-over-HTTPS,
+        and write copies into pinned/ with the real address written in. The
+        originals are never touched. Start here.
+
+    ovpn sync
+        Re-resolve the hostnames behind what is already pinned. Providers move
+        addresses; a pinned file cannot follow them.
+
+  ${C_CYAN}Housekeeping${C_OFF}
+
+    ovpn install [dir]     symlink this into ~/.local/bin, or dir
+    ovpn uninstall [dir]   remove that symlink. The repo is untouched
+    ovpn where             which repo this name points at, and which folder
+                           it would act on if you ran something now
+    ovpn version
+
+  ${C_CYAN}More${C_OFF}
+
+    ovpn help folders      the folder rules, and which ones get written to
+    ovpn help connect      every flag ovpn-connect.sh takes
+    ovpn help pin          every flag resolve-ovpn-remote.sh takes
+
+  Flags are passed straight through, so anything in those two lists works here:
 
       cd success && ovpn sweep --one-per --landlord M247 --site example.com
+
+EOF
+}
+
+help_folders() {
+    cat <<EOF
+
+  ${C_CYAN}Which folder ovpn acts on${C_OFF}
+
+  If the directory you are standing in has .ovpn files in it, that is the one.
+  Otherwise pinned/. Either way it says so on one line before anything runs:
+
+      folder: /home/you/ovpn-pin/success  (528 configs)
+
+  It declines more often than it accepts, because acting on a folder you did
+  not mean fails silently - a sweep of the wrong twenty configs looks exactly
+  like a sweep of the right twenty. It stays out of it when:
+
+    - OVPN_OUT_DIR is already set in your shell. You said it; it stands.
+    - the command line carries --retest, --success-dir or --sitetest-dir.
+      Same reason.
+    - you are in the repo root. That holds scripts, not configs.
+    - the folder has no .ovpn in it. Otherwise \`ovpn stop\` typed at home
+      would fail complaining there are no configs in your home directory.
+
+  configs/ it will use, with a warning: those are the files you downloaded,
+  and they still name a hostname - which is the thing your resolver lies
+  about, and the reason this repo exists. Pin them first.
+
+  ${C_CYAN}Which folders get written to${C_OFF}
+
+  A sweep only ever reads the folder you point it at. What it writes, it
+  writes to these, wherever it was pointed:
+
+      success/                    everything that connected, time in the name
+      success/landlord/           the quickest per company, per country
+      success/landlord/fastest/   the quickest per company, anywhere
+      sitetest/<host>/            what actually served that --site host
+
+  So sweeping configs/ cannot damage configs/. It is merely pointless, for the
+  hostname reason above.
+
+  ${C_CYAN}The two folders worth knowing about${C_OFF}
+
+  Point a sweep at success/ and it becomes a re-test: anything that has stopped
+  connecting is dropped from it, because a folder that says these all work
+  should not be quietly wrong. It says so before it starts. Every deletion
+  there is keyed on a config's own name, so nothing else is touched.
+
+  The landlord folders are the exception. They keep one entry per *company*,
+  so their deletions are keyed on a tag that several different configs share:
+  sweep one of them and the first M247 to come up deletes the other M247 files,
+  including ones still queued in that same sweep. Those are skipped and named
+  rather than reported as broken, and the sweep warns you at the start - but
+  the question is better asked as
+
+      ovpn sweep --retest --one-per-landlord
+
+  which tests one address per company out of success/ and prunes nothing.
 
 EOF
 }
@@ -288,10 +404,15 @@ case $cmd in
     version|-V|--version) exec bash "$CON" --version ;;
     help|-h|--help)
         case ${1:-} in
-            connect|sweep|stop|status|c|s) exec bash "$CON" --help ;;
+            folders|folder|where)          help_folders ;;
+            connect|sweep|stop|status|switch|dns-check|c|s) exec bash "$CON" --help ;;
             pin|sync|who|check|p)          exec bash "$PIN" --help ;;
             '')                            usage ;;
-            *) die "no help for '$1'. Try: ovpn help, ovpn help connect, ovpn help pin" ;;
+            *) die "no help for '$1'. Try one of:
+         ovpn help            every command, and what it does
+         ovpn help folders    which folder it acts on, and what gets written
+         ovpn help connect    every flag ovpn-connect.sh takes
+         ovpn help pin        every flag resolve-ovpn-remote.sh takes" ;;
         esac ;;
 
     # Not a subcommand. Either a flag, which belongs to ovpn-connect.sh, or a
