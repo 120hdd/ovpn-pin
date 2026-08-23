@@ -163,6 +163,20 @@ Some notes on what it does and doesn't touch:
 - Without a `.env`, nothing about auth is touched at all — the Linux script
   then behaves exactly like the Windows one.
 
+### Changing your password
+
+Edit `OVPN_USER` / `OVPN_PASS` in `.env` and connect as usual. `.ovpn-auth` is
+only a cache of those two lines, and every script that reads it now checks it
+against `.env` first and rewrites it if the two disagree — so there is nothing
+to re-pin and nothing to delete by hand.
+
+It compares the contents, not the timestamps: an auth file touched after the
+`.env` edit — a `chmod`, a restored backup, a folder sync — would still be
+stale while looking newer.
+
+If `.env` has no credentials at all, an existing `.ovpn-auth` is left exactly
+as it is and used as-is; a hand-written one is not clobbered.
+
 `.env` and `.ovpn-auth` are both gitignored.
 
 ## Connect, and get the proxy out of the way (Linux)
@@ -503,6 +517,7 @@ Everything below is on both sides of the repo now, in the same words and
 writing to the same tables:
 
 ```bash
+./ovpn-connect.sh --sweep --one-per-landlord   # one per company: ~21 tests
 ./ovpn-connect.sh --sweep --one-per            # one address per location
 ./ovpn-connect.sh --sweep --first 5            # stop after five
 ./ovpn-connect.sh --sweep --landlord M247,CDN77
@@ -523,9 +538,10 @@ that no longer connects.
 ### The same sweep on Windows
 
 ```powershell
+.\Sweep-OvpnExits.ps1 -OnePerLandlord            # ~21 tests, start here
 .\Sweep-OvpnExits.ps1 -OnePer
 .\Sweep-OvpnExits.ps1 -Name de- -Site chatgpt.com,github.com
-.\Sweep-OvpnExits.ps1 -OnePer -PickLandlord
+.\Sweep-OvpnExits.ps1 -OnePerLandlord -PickLandlord
 .\Sweep-OvpnExits.ps1 -OnePer -Landlord M247,CDN77 -Pick
 ```
 
@@ -554,22 +570,35 @@ leaving one per run. `-SuccessDir` puts them somewhere else.
 
 ### The same list, by landlord
 
-Inside it, `success/landlord/` gets a second copy of everything whose exit
-could be traced to a hosting company — labelled with the company and the
-country the exit actually came out in:
+Inside it, `success/landlord/` keeps the **quickest** exit from each hosting
+company in each country — labelled with the company and the country the exit
+actually came out in:
 
 ```
 success/landlord/
   02.7s-Cyberzonehub-AS209854-CY-ad-leu.prod...._62.197.152.115.ovpn
   03.1s-Datacamp-AS60068-DE-de-fra.prod...._138.199.19.157.ovpn
   04.2s-M247-AS9009-DE-de-fra.prod...._146.70.160.213.ovpn
+  05.5s-M247-AS9009-NL-nl-ams.prod...._146.70.161.237.ovpn
 ```
 
-The same files, sorted differently on purpose. When something blocks "a VPN"
-it is almost always blocking a hosting company rather than your provider, so
-the useful question at that point is *what else have I got, and where does it
-come out* — which is what this folder is a list of. Sort it by name for the
-quickest; search it for `M247` to see everything sharing that fate.
+One file per company-and-country, not one per config: of six M247 exits in
+Germany you only ever dial the fastest, and the other five are noise in a
+folder you go to in a hurry.
+
+And `success/landlord/fastest/` goes one step coarser — the quickest from each
+company, wherever it lands:
+
+```
+success/landlord/fastest/
+  02.7s-Cyberzonehub-AS209854-ad-leu.prod...._62.197.152.115.ovpn
+  04.2s-M247-AS9009-de-fra.prod...._146.70.160.213.ovpn
+```
+
+About twenty files, one per company. When something blocks "a VPN" it is
+almost always blocking a hosting company rather than your provider, so the
+useful question at that point is *whose racks still work* — and this answers
+it at a glance, quickest first.
 
 The country is Cloudflare's reading of the exit, not the provider's label on
 the file: `de-fra` is where they say it is, `DE` is where it answered from,
@@ -578,9 +607,38 @@ config for a country-specific reason.
 
 A config that turns up under a different landlord next time replaces its own
 entry rather than appearing twice, because providers do move a location onto
-someone else's racks. One that stops connecting leaves both folders together:
-two folders disagreeing about the same config is worse than either being out
-of date.
+someone else's racks. One that stops connecting on a re-test leaves *every*
+folder that claimed it works — `success/`, both landlord folders, and each
+`sitetest/` folder — in the same breath. A config that cannot connect is not
+serving anybody's site either, and folders disagreeing about the same config
+are worse than any one of them being out of date.
+
+### A folder per site
+
+Pass `--site chatgpt.com,github.com` and each host gets a folder of its own
+under `sitetest/`, holding the configs whose exit actually served **that**
+site:
+
+```
+sitetest/
+  chatgpt-com/
+    02.0s-de-fra.prod...._146.70.160.213.ovpn
+    03.0s-nl-ams.prod...._146.70.161.237.ovpn
+  github-com/
+    02.0s-de-fra.prod...._146.70.160.213.ovpn
+    05.0s-de-ber.prod...._152.89.163.229.ovpn
+```
+
+This is a different question from the verdict. A `partly` exit is one that
+served some things and was challenged on others, and which of the two your
+site fell into is exactly what you wanted to know — reading it back out of a
+detail string afterwards is not an answer. Every config that served the site
+goes in, not just the quickest: this is a list of what works, and one entry
+would be a single point of failure dressed up as a survey.
+
+An exit that stops serving a site is taken back out on the next sweep, so the
+folder keeps meaning what its name says. `--sitetest-dir` / `-SiteTestDir`
+puts them somewhere else. It is gitignored, like `success/`.
 
 ### Re-testing what worked
 
@@ -645,11 +703,24 @@ routes both do — so it asks for them once and reruns itself elevated.
 
 ### Choosing what not to sweep
 
-The two flags worth knowing, because a full sweep of a real download folder —
+The flags worth knowing, because a full sweep of a real download folder —
 791 files here — is six hours nobody has.
 
 `-OnePer` takes one file per location rather than all of the four-odd
 addresses each hostname resolved to. 791 files becomes 141 locations.
+
+`-OnePerLandlord` is coarser again: one address per hosting company, so
+1561 files becomes **21 tests**. Being blocked is mostly a property of the
+company rather than of the individual address, so this answers *whose
+addresses still work* in ten minutes. Run it first, then narrow with
+`-Landlord` and sweep the survivors properly. Given together with `-OnePer`
+it wins, and says so.
+
+The three are not the same question, and it is worth being clear which one
+you asked. One per **company** is ~21 tests; one per **location** is ~141;
+everything is ~1561. Choosing sixteen companies and asking for one per
+location still leaves you most of the 141 — the companies each cover dozens
+of locations. If you wanted sixteen tests, that is `-OnePerLandlord`.
 
 `-PickLandlord` is the bigger cut. It shows you who the addresses are rented
 from and sweeps only the companies you choose:
@@ -689,8 +760,9 @@ Two things it does that the Linux one does not have to:
 - **Credentials up front.** Most pinned configs carry a bare `auth-user-pass`,
   and openvpn.exe stops and asks for it. A sweep that stops and asks 40 times
   is not a sweep, so the credentials are settled once before anything
-  connects — from `.ovpn-auth`, or `.env`, or by asking you once and writing a
-  temp file that is deleted at the end.
+  connects — from `.env`, or from `.ovpn-auth` if there is no `.env`, or by
+  asking you once and writing a temp file that is deleted at the end. `.env`
+  wins over the cached `.ovpn-auth`, and refreshes it when the two disagree.
 - **A baseline.** It records the address Cloudflare sees *before* connecting
   anything. If an exit reports that same address, the tunnel came up but the
   traffic never went into it, and the run says `noroute` rather than filing a
@@ -713,6 +785,12 @@ rather not install anything on Windows. It needs `openvpn` in there
 tunnel exists inside WSL only — Windows itself is not on the VPN while it
 runs. For a measurement that is fine, since the probes are in there too, but
 do not expect your browser to be affected.
+
+The narrowing flags cross the border with it — `-OnePer`, `-OnePerLandlord`,
+`-Landlord`, `-PickLandlord`, `-First`, `-Pick`, `-NoOwner`, `-Timeout`, the
+`success\` folder — and the translated command line is printed before it
+runs, so you can see what actually went in. `-Force` has no counterpart on
+the Linux side and is not passed on; it says so rather than pretending.
 
 ## Options
 
@@ -748,11 +826,13 @@ And for `ovpn-connect.sh`:
 | `--site HOST[,HOST]` | the sites to test on each exit. |
 | `--pick` | connect the best exit when the sweep is done. |
 | `--one-per` | one address per location rather than all of them. |
+| `--one-per-landlord` | one address per hosting company. ~21 tests, not ~141. Run this first. |
 | `--first N` | stop after N configs. |
 | `--landlord A,B` | only the configs rented from these hosting companies. |
 | `--pick-landlord` | list the companies behind them and pick by number. |
 | `--retest` | sweep `success/` instead of `pinned/`, dropping what no longer connects. |
 | `--success-dir DIR` | where the ones that connect are kept. Default `success/`. |
+| `--sitetest-dir DIR` | where the per-`--site` folders go. Default `sitetest/`. |
 | `--no-owner` | do not look up who owns each exit. |
 | `--dns-check` | is DNS going through the tunnel, or still being forged? |
 | `--via MODE` | `auto` (default), `direct`, `proxy`. |

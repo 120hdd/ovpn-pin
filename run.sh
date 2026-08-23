@@ -76,6 +76,10 @@ options() {
     --switch NAME      stop what is up, then connect NAME
     --sweep [NAME]     connect each config in turn and judge its exit
     --one-per          one address per location, not all of them
+    --one-per-landlord one address per hosting company. About twenty tests
+                       instead of a hundred and forty - run this first
+    --site a,b         extra sites to test on each exit. Each one gets a
+                       folder under sitetest/ with what actually served it
     --first N          stop after N of them
     --landlord A,B     only the ones rented from these hosting companies
     --pick-landlord    list the companies and pick by number
@@ -124,7 +128,7 @@ do_cloudflare() {
 }
 
 do_sweep() {
-    local dir which sites lord args=()
+    local dir which sites lord percompany args=()
 
     printf '\n'
     info 'This connects to each config in turn and measures what the web does'
@@ -173,6 +177,24 @@ do_sweep() {
     ask 'choose by landlord first? [y/N]:'
     read -r lord
     [ "${lord,,}" = y ] && args+=(--pick-landlord)
+
+    printf '\n'
+    info 'And how many addresses out of each company? One apiece is the coarse,'
+    info 'fast answer - about twenty tests, ten minutes, and it tells you whose'
+    info 'addresses still work. One per location is the normal answer and takes'
+    info 'around seven times longer. Coarse first, then sweep the survivors.'
+    printf '\n'
+    ask 'one address per company? [y/N]:'
+    read -r percompany
+    # Narrows whatever is left, including the "all" and name answers above.
+    # It also supersedes one-per-location: sending both works, since the sweep
+    # takes the narrower of the two, but it says so when you do - and from the
+    # menu that note would appear on every single run.
+    if [ "${percompany,,}" = y ]; then
+        local a filtered=()
+        for a in "${args[@]}"; do [ "$a" = --one-per ] || filtered+=("$a"); done
+        args=("${filtered[@]}" --one-per-landlord)
+    fi
 
     run "$CON" --sweep "${args[@]}"
 }

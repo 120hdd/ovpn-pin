@@ -1,5 +1,6 @@
 pinned/
 success/
+sitetest/
 
 # The credentials themselves, and the auth file written from them.
 .env

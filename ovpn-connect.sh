@@ -74,6 +74,9 @@ usage() {
         --site HOST[,HOST] the sites you actually care about, tested on each
         --pick             connect the best exit when the sweep is done
         --one-per          one address per location, not all of them
+        --one-per-landlord one address per hosting company. Coarser and much
+                           faster than --one-per: about twenty tests, not a
+                           hundred and forty. The one to run first
         --first N          stop after N of them
         --landlord A,B     only the configs rented from these hosting
                            companies: --landlord M247,CDN77 or AS9009
@@ -83,6 +86,9 @@ usage() {
                            re-test what worked, and drop what no longer does
         --success-dir DIR  where the ones that connect are kept. Default
                            success/, with a landlord/ folder inside it
+        --sitetest-dir DIR where the per-site folders go. Default sitetest/:
+                           one folder per --site host, holding the configs
+                           that actually served it
         --no-owner         do not look up who owns each exit
         --dns-check        is DNS going through the tunnel, or still being
                            answered - and forged - by your line?
@@ -471,28 +477,74 @@ ask_fallback() {
 
 #-------------------------------------------------------------------- connect
 
+# The auth file is a cache of what .env says, and until now the pinner was the
+# only thing that ever wrote it. So changing a password in .env and connecting
+# again quietly kept using the old one, and the server's rejection was the only
+# hint - which points at the password rather than at the stale copy of it.
+# Comparing the two here costs nothing, and .env is the side you edited.
+#
+# Content, not timestamps: an auth file touched after the .env edit (a chmod, a
+# backup restored, a sync) would still be stale while looking newer.
+refresh_auth_file() {
+    local want dir verb=updated
+
+    # Half a pair is a typo, not a decision, and silently falling back to the
+    # cached file would hide it behind an auth failure later.
+    if [ -z "$AUTH_USER" ] || [ -z "$AUTH_PASS" ]; then
+        if [ -n "$AUTH_USER$AUTH_PASS" ]; then
+            head_ 'Credentials'
+            warn "only half the credentials are set in $ROOT/.env - both OVPN_USER and OVPN_PASS are needed"
+            [ -f "$AUTH_FILE" ] && info "carrying on with $AUTH_FILE as it stands."
+        fi
+        return 0
+    fi
+
+    # Both sides of this comparison lose their trailing newlines the same way,
+    # so a file that only differs by one is not rewritten every run.
+    want=$(printf '%s\n%s\n' "$AUTH_USER" "$AUTH_PASS")
+    [ -f "$AUTH_FILE" ] || verb=written
+    if [ "$verb" = updated ] && [ "$(cat "$AUTH_FILE" 2>/dev/null)" = "$want" ]; then
+        return 0
+    fi
+
+    dir=$(dirname -- "$AUTH_FILE")
+    mkdir -p -- "$dir" || die "cannot create $dir"
+    ( umask 077; printf '%s\n%s\n' "$AUTH_USER" "$AUTH_PASS" > "$AUTH_FILE" ) \
+        || die "cannot write $AUTH_FILE - fix the permissions or set OVPN_AUTH_FILE to somewhere writable"
+    chmod 600 -- "$AUTH_FILE" 2>/dev/null || true
+
+    head_ 'Credentials'
+    if [ "$verb" = written ]; then
+        ok "$AUTH_FILE written from .env (mode 600)"
+    else
+        ok "$AUTH_FILE no longer matched .env - updated from it (mode 600)"
+    fi
+    info "user: $AUTH_USER"
+}
+
 # openvpn takes credentials from the config (the pinner wrote them there). A
 # config still asking interactively cannot work under --daemon, so catch it
 # here rather than letting it fail somewhere less legible.
+#
+# Reports the miss with a status rather than dying: this runs inside a command
+# substitution, where an exit takes the subshell and leaves the caller going.
 auth_args() {
     local f=$1
     grep -qE '^[[:space:]]*auth-user-pass[[:space:]]*$' "$f" || return 0
-    if [ -f "$AUTH_FILE" ]; then
-        printf '%s\n%s\n' '--auth-user-pass' "$AUTH_FILE"
-        return 0
-    fi
-    die "$(basename -- "$f") asks for a username and password and no auth file exists.
-         Put OVPN_USER and OVPN_PASS in $ROOT/.env, run ./resolve-ovpn-remote.sh
-         again, and the pinned configs will carry them."
+    [ -f "$AUTH_FILE" ] || return 1
+    printf '%s\n%s\n' '--auth-user-pass' "$AUTH_FILE"
 }
 
 start_tunnel() {
-    local i=$1 mode=$2 file=${CFG_FILE[$1]} cmd=() ph pp arg
+    local i=$1 mode=$2 file=${CFG_FILE[$1]} cmd=() ph pp arg authargs
 
     cmd=(openvpn --config "$file" --daemon ovpn-pin
          --log "$LOGFILE" --writepid "$PIDFILE" --verb 3 --connect-retry-max 3)
 
-    while IFS= read -r arg; do [ -n "$arg" ] && cmd+=("$arg"); done < <(auth_args "$file")
+    authargs=$(auth_args "$file") || die "$(basename -- "$file") asks for a username and password and no auth file exists.
+         Put OVPN_USER and OVPN_PASS in $ROOT/.env and run this again - the auth
+         file is written from them, no need to re-pin."
+    while IFS= read -r arg; do [ -n "$arg" ] && cmd+=("$arg"); done <<<"$authargs"
 
     if [ "$mode" = proxy ]; then
         read -r ph pp <<<"$(split_proxy_url "$PROXY")"
@@ -855,7 +907,12 @@ save_successful() {
     # Copy before deleting, and never delete what is being copied: when the
     # folder being swept is this one, the source file is the previous run's
     # entry for this very config.
-    [ "$src" -ef "$dest" ] || cp -f -- "$src" "$dest"
+    #
+    # A copy that does not happen is reported by the exit status and nothing
+    # else. This function's stdout is the name the caller captures, so prose
+    # in there would come back as part of a filename - and saying nothing at
+    # all is how an empty landlord/ folder went unnoticed.
+    [ "$src" -ef "$dest" ] || cp -f -- "$src" "$dest" || return 1
 
     # Swept again, a config replaces its own old entry rather than sitting
     # beside it under a different time - or, in the landlord folder, under a
@@ -868,6 +925,35 @@ save_successful() {
     printf '%s' "$name"
 }
 
+# Of the files in this folder sharing a tag, keep the quickest and drop the
+# rest. The names carry zero-padded seconds at the front - 04.5s-... - which
+# was done so that a file manager sorts them honestly; it means the plain
+# alphabetical order here is already fastest-first, and no arithmetic and no
+# parsing of the name is needed to find the winner.
+keep_fastest() {
+    local dir=$1 tag=$2 f first=1
+    [ -d "$dir" ] || return 0
+    while IFS= read -r f; do
+        [ -e "$f" ] || continue
+        if [ "$first" -eq 1 ]; then first=0; continue; fi
+        rm -f -- "$f"
+    done < <(find "$dir" -maxdepth 1 -type f -name "*s-$tag-*" | sort)
+}
+
+# Take a config out of a folder that says something about it which has stopped
+# being true. A folder named after a site has to mean what it says, or it is
+# worse than not being there. Returns 0 if anything actually went.
+drop_from() {
+    local dir=$1 name=$2 base f gone=1
+    [ -d "$dir" ] || return 1
+    base=$(base_config_name "$name")
+    for f in "$dir"/*"-$base"; do
+        [ -e "$f" ] || continue
+        rm -f -- "$f" && gone=0
+    done
+    return $gone
+}
+
 # Re-testing the success folder is a re-test of things that used to work, so
 # one that no longer connects should not keep sitting in a folder that claims
 # otherwise. Only ever the copies - the original in the pinned folder is left
@@ -876,14 +962,19 @@ drop_successful() {
     local name=$1 why=$2 base d f gone=0
     [ "$RETESTING" -eq 1 ] || return 0
     base=$(base_config_name "$name")
-    for d in "$SUCCESS_DIR" "$SUCCESS_DIR/landlord"; do
+    # Every folder that says this config works, the per-site ones included: a
+    # config that no longer connects cannot be serving anybody's site either,
+    # and a folder left claiming otherwise is worse than one merely out of
+    # date - you would go to it precisely when you are in a hurry.
+    for d in "$SUCCESS_DIR" "$SUCCESS_DIR/landlord" "$SUCCESS_DIR/landlord/fastest" \
+             "$SITETEST_DIR"/*/; do
         [ -d "$d" ] || continue
-        for f in "$d"/*"-$base"; do
+        for f in "${d%/}"/*"-$base"; do
             [ -e "$f" ] || continue
             rm -f -- "$f" && gone=1
         done
     done
-    [ "$gone" -eq 1 ] && info "dropped from $(basename -- "$SUCCESS_DIR")/ - it $why"
+    [ "$gone" -eq 1 ] && info "dropped from the folders that said it works - it $why"
     return 0
 }
 
@@ -1004,7 +1095,14 @@ filter_by_landlord() {
         unset IFS
         [ "$hit" -eq 1 ] && keep+=("$i")
     done
-    info "${#keep[@]} config(s) are rented from those"
+    # Said plainly when it is not the final number. This line lands right
+    # after you pick, it is the biggest figure on the screen, and read on its
+    # own it looks like the whole lot is about to be connected.
+    if [ "$ONE_PER" -eq 1 ] || [ "$ONE_PER_LANDLORD" -eq 1 ]; then
+        info "${#keep[@]} config(s) are rented from those, before narrowing further"
+    else
+        info "${#keep[@]} config(s) are rented from those"
+    fi
     LORD_KEEP=("${keep[@]}")
 }
 
@@ -1036,11 +1134,38 @@ do_sweep() {
         [ -n "${idxs[0]:-}" ] || die 'no config is rented from any of those'
     fi
 
+    # One address per hosting company. Twenty-odd companies stand behind a
+    # thousand-odd addresses, and being blocked is mostly a property of the
+    # company rather than of the address - so this answers "whose addresses
+    # still work" in twenty tests where --one-per needs a hundred and forty.
+    # The coarsest survey there is, and the one to run first.
+    if [ "$ONE_PER_LANDLORD" -eq 1 ]; then
+        [ "$ONE_PER" -eq 1 ] && info '--one-per and --one-per-landlord together: the narrower one wins.'
+        # --landlord/--pick-landlord already paid for the lookup. On its own
+        # this has to ask for it.
+        if [ ${#LORD_OF[@]} -eq 0 ]; then
+            head_ 'Landlords'
+            load_landlords "${idxs[@]}"
+        fi
+        local lord untraced=0 kept=()
+        declare -A seen_lord_map=()
+        for i in "${idxs[@]}"; do
+            lord=${LORD_OF[$i]:-}
+            [ -n "$lord" ] || { untraced=$((untraced + 1)); continue; }
+            [ -n "${seen_lord_map[$lord]:-}" ] && continue
+            seen_lord_map[$lord]=1
+            kept+=("$i")
+        done
+        [ ${#kept[@]} -gt 0 ] || die 'not one of these addresses could be traced to a hosting company, so there is nothing to take one of. Sweep with --one-per instead.'
+        [ "$untraced" -gt 0 ] && warn "$untraced address(es) could not be traced to a company - left out"
+        idxs=("${kept[@]}")
+        info "${#idxs[@]} companies, one address each"
+
     # One address per location rather than all four of them. A hostname
     # usually resolves to several and you got a file for each; this answers
     # "which places work" in a fraction of the time, and the addresses of a
     # place worth having can be swept in full afterwards.
-    if [ "$ONE_PER" -eq 1 ]; then
+    elif [ "$ONE_PER" -eq 1 ]; then
         local seen_loc=() key kept=()
         declare -A seen_loc_map=()
         for i in "${idxs[@]}"; do
@@ -1067,8 +1192,9 @@ do_sweep() {
         do_stop 1
     fi
 
-    local results=() verdict mode cf_exit cf_good cf_bad cf_detail
-    local base t0 took kept exit_ip owner loc tag detail
+    local results=() verdict mode cf_exit cf_good cf_bad cf_detail cf_sites
+    local lord_note lord_tag fast pair site_host site_dir st
+    local base t0 took kept kept_path also exit_ip owner loc tag detail
     for i in "${idxs[@]}"; do
         printf '\n'
         # Everything downstream is keyed on the name without the time in
@@ -1112,10 +1238,20 @@ do_sweep() {
         # Timed to here rather than to the end of the measuring: this is what
         # you would wait through if you connected it by hand.
         took=$(elapsed_tenths "$t0")
-        kept=$(save_successful "${CFG_FILE[$i]}" "$took" "$SUCCESS_DIR" '')
-        ok "up in $(fmt_tenths "$took")s - kept as $kept"
+        # kept_path, not CFG_FILE[$i], is the copy of this config that is
+        # certain to be on disk from here on. Sweeping the success folder
+        # itself, the call below replaces this config's previous entry - and
+        # that entry is the very file CFG_FILE[$i] names, so afterwards the
+        # old path points at a deletion. Same bytes, different name.
+        if kept=$(save_successful "${CFG_FILE[$i]}" "$took" "$SUCCESS_DIR" ''); then
+            ok "up in $(fmt_tenths "$took")s - kept as $kept"
+            kept_path=$SUCCESS_DIR/$kept
+        else
+            warn "up in $(fmt_tenths "$took")s, but it could not be copied into $(basename -- "$SUCCESS_DIR")/"
+            kept_path=${CFG_FILE[$i]}
+        fi
 
-        IFS=$'\t' read -r verdict cf_exit cf_good cf_bad cf_detail \
+        IFS=$'\t' read -r verdict cf_exit cf_good cf_bad cf_detail cf_sites \
             < <(cf_exit_verdict "${sites[@]:-}")
         case $verdict in
             clean)  ok   "clean     exit ${cf_exit:-?}  ($cf_good served)" ;;
@@ -1136,12 +1272,55 @@ do_sweep() {
             OWNER_PROXY='' lookup_owners "$exit_ip"
             if owner=$(owner_of "$exit_ip"); then
                 info "rented from $owner${loc:+ in $loc}"
+
+                # Two views of the same company, and both are kept to one file
+                # apiece rather than to all of them. landlord/ answers "what is
+                # my quickest M247 in Germany" - the question when a whole
+                # company turns out to be blocked and you want the same country
+                # from somebody else's racks. landlord/fastest/ answers "what is
+                # my quickest M247 anywhere", which is the one to reach for when
+                # you do not care where it lands.
+                lord_note=''
                 tag="$(name_tag "$owner")-$(name_tag "${loc:-xx}" 6)"
-                kept=$(save_successful "${CFG_FILE[$i]}" "$took" "$SUCCESS_DIR/landlord" "$tag")
-                info "also kept as landlord/$kept"
+                if also=$(save_successful "$kept_path" "$took" "$SUCCESS_DIR/landlord" "$tag"); then
+                    keep_fastest "$SUCCESS_DIR/landlord" "$tag"
+                    [ -e "$SUCCESS_DIR/landlord/$also" ] && lord_note="landlord/$also"
+                fi
+                lord_tag=$(name_tag "$owner")
+                if fast=$(save_successful "$kept_path" "$took" "$SUCCESS_DIR/landlord/fastest" "$lord_tag"); then
+                    keep_fastest "$SUCCESS_DIR/landlord/fastest" "$lord_tag"
+                    [ -e "$SUCCESS_DIR/landlord/fastest/$fast" ] &&
+                        lord_note="${lord_note:+$lord_note, }landlord/fastest/$fast"
+                fi
+                if [ -n "$lord_note" ]; then info "also kept as $lord_note"
+                else info "a quicker $owner is already kept - not this one"
+                fi
             else
                 owner=''
             fi
+        fi
+
+        # A folder per site you named, holding the configs that actually served
+        # it. "Which of these gets me into chatgpt.com" is a different question
+        # from "which of these is clean", and reading it out of a detail string
+        # after the fact is not an answer.
+        if [ -n "${cf_sites:-}" ]; then
+            for pair in $cf_sites; do
+                site_host=${pair%%=*}
+                site_dir=$SITETEST_DIR/$(name_tag "$site_host")
+                if [ "${pair##*=}" = ok ]; then
+                    # Every config that serves it, not just the quickest: this
+                    # folder is a list of what works, and one entry would make
+                    # it a single point of failure dressed as a survey.
+                    if st=$(save_successful "$kept_path" "$took" "$site_dir" ''); then
+                        info "serves $site_host - kept in $(basename -- "$SITETEST_DIR")/$(name_tag "$site_host")/$st"
+                    else
+                        warn "serves $site_host but could not be copied into $site_dir"
+                    fi
+                elif drop_from "$site_dir" "$kept"; then
+                    info "no longer serves $site_host - dropped from that folder"
+                fi
+            done
         fi
 
         detail=$cf_detail
@@ -1321,10 +1500,12 @@ SITES=()
 LANDLORD=''
 PICK_LANDLORD=0
 ONE_PER=0
+ONE_PER_LANDLORD=0
 FIRST=0
 NO_OWNER=0
 RETEST=0
 CLI_SUCCESS=''
+CLI_SITETEST=''
 
 while [ $# -gt 0 ]; do
     case $1 in
@@ -1342,10 +1523,12 @@ while [ $# -gt 0 ]; do
         --landlord)        LANDLORD=${2:?--landlord needs a name or AS number}; shift 2 ;;
         --pick-landlord)   PICK_LANDLORD=1; shift ;;
         --one-per)         ONE_PER=1; shift ;;
+        --one-per-landlord) ONE_PER_LANDLORD=1; shift ;;
         --first)           FIRST=${2:?--first needs a number}; shift 2 ;;
         --no-owner)        NO_OWNER=1; shift ;;
         --retest)          RETEST=1; shift ;;
         --success-dir)     CLI_SUCCESS=${2:?--success-dir needs a path}; shift 2 ;;
+        --sitetest-dir)    CLI_SITETEST=${2:?--sitetest-dir needs a path}; shift 2 ;;
         --fallback)        CLI_FALLBACK=${2:?--fallback needs a mode}; shift 2 ;;
         --via)             CLI_VIA=${2:?--via needs a mode}; shift 2 ;;
         --via-proxy)       CLI_VIA=proxy; shift ;;
@@ -1375,7 +1558,10 @@ if [ "$(id -u)" -eq 0 ]; then SUDO=''; else SUDO='sudo'; fi
 load_env_file "$ROOT/.env"
 OUT_DIR=$(env_or OVPN_OUT_DIR "$ROOT/pinned")
 SUCCESS_DIR=${CLI_SUCCESS:-$(env_or OVPN_SUCCESS_DIR "$ROOT/success")}
+SITETEST_DIR=${CLI_SITETEST:-$(env_or OVPN_SITETEST_DIR "$ROOT/sitetest")}
 AUTH_FILE=$(env_or OVPN_AUTH_FILE "$ROOT/.ovpn-auth")
+AUTH_USER=$(env_or OVPN_USER '')
+AUTH_PASS=$(env_or OVPN_PASS '')
 PROXY=$(env_or OVPN_PROXY '')
 PROXY_OFF_CMD=$(env_or OVPN_PROXY_OFF_CMD '')
 PROXY_ON_CMD=$(env_or OVPN_PROXY_ON_CMD '')
@@ -1391,6 +1577,7 @@ RESOLVER=$(env_or OVPN_RESOLVER 'cloudflare')
 
 case $OUT_DIR in /*) ;; *) OUT_DIR=$ROOT/${OUT_DIR#./} ;; esac
 case $SUCCESS_DIR in /*) ;; *) SUCCESS_DIR=$ROOT/${SUCCESS_DIR#./} ;; esac
+case $SITETEST_DIR in /*) ;; *) SITETEST_DIR=$ROOT/${SITETEST_DIR#./} ;; esac
 case $AUTH_FILE in /*) ;; *) AUTH_FILE=$ROOT/${AUTH_FILE#./} ;; esac
 
 # --retest sweeps what worked last time rather than everything. It is the same
@@ -1427,6 +1614,10 @@ case $ACTION in
     unlock)   head_ 'Kill switch'; killswitch_off; printf '\n'; exit 0 ;;
     dnscheck) dns_check; exit 0 ;;
 esac
+
+# Past the read-only actions: everything below here can start a tunnel, and a
+# tunnel is exactly what a stale password breaks.
+refresh_auth_file
 
 if ! list_configs; then
     if [ "$RETESTING" -eq 1 ]; then

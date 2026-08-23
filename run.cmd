@@ -194,6 +194,15 @@ echo.
 set "swland="
 set /p "swland=  choose by landlord first? [y/N]: "
 
+echo.
+echo   And how many addresses out of each company? One apiece is the coarse,
+echo   fast answer - about twenty tests, ten minutes, and it tells you whose
+echo   addresses still work. One per location is the normal answer and takes
+echo   around seven times longer. Coarse first, then sweep the survivors.
+echo.
+set "swone="
+set /p "swone=  one address per company? [y/N]: "
+
 rem Plain sequential overrides rather than nested if/else - quotes inside a
 rem parenthesised block in batch are their own kind of afternoon.
 set "swargs="
@@ -205,8 +214,15 @@ if /i "%swname%"=="*" set "swargs="
 rem Re-testing success\ is already a short list of known-good configs, so an
 rem empty answer there means all of them rather than one per location.
 if "%swdir%"=="2" if not defined swname set "swargs="
+rem One address per company supersedes one per location. Sending both works -
+rem the sweep takes the narrower of the two - but it says so when you do, and
+rem from the menu that note would appear on every single run.
+if /i "%swone%"=="y" if not defined swname set "swargs="
 if defined swsites set "swargs=%swargs% -Site "%swsites%""
 if /i "%swland%"=="y" set "swargs=%swargs% -PickLandlord"
+rem One per company narrows whatever is left, including the "all" and name
+rem answers above - so it is added rather than folded into the block.
+if /i "%swone%"=="y" set "swargs=%swargs% -OnePerLandlord"
 if defined swdirarg set "swargs=%swargs% %swdirarg%"
 
 echo.
@@ -293,9 +309,14 @@ echo                        and sweep only the ones you pick. Numbers, so
 echo                        1,3 or 1-4 or 2,5-7
 echo     -Landlord a,b      the same without the list: -Landlord M247,CDN77
 echo     -OnePer            one address per location, not all four of them
+echo     -OnePerLandlord    one address per hosting company. About twenty
+echo                        tests instead of a hundred and forty - the one
+echo                        to run first
 echo     -Name X            only configs whose filename contains X
 echo     -First N           stop after N of them
-echo     -Site a,b          extra sites to test on each exit
+echo     -Site a,b          extra sites to test on each exit. Each one gets
+echo                        a folder under sitetest\ holding the configs
+echo                        that actually served it
 echo     -Pick              connect the best one when it is done and hold it
 echo     -Timeout N         seconds to wait for a handshake. Default 15
 echo     -NoOwner           skip the "rented from" lookup on each exit

@@ -736,11 +736,11 @@ site_hosts() {
 # inside a $( ), and a subshell cannot hand variables back - a lesson this
 # file has now learned twice.
 cf_exit_verdict() {
-    local sites=("$@") h exit_='' good=0 bad_=0 detail='' loc verdict
+    local sites=("$@") h exit_='' good=0 bad_=0 detail='' loc verdict per=''
 
     cf_probe 'https://www.cloudflare.com/cdn-cgi/trace'
     if [ -n "$CF_ERR" ]; then
-        printf 'unreachable\t\t0\t0\t%s' "$CF_ERR"
+        printf 'unreachable\t\t0\t0\t%s\t' "$CF_ERR"
         return 0
     fi
     exit_=$(sed -n 's/^ip=//p' "$CF_BODY" | head -n1)
@@ -752,6 +752,11 @@ cf_exit_verdict() {
     for h in "${sites[@]}"; do
         [ -z "$h" ] && continue
         cf_probe "https://$h/"
+        # Each site's own answer, kept apart from the summary. The counts say
+        # how many were served and the detail says which ones were not, but
+        # neither can be asked "did chatgpt.com work on this exit" - and that
+        # is the question a folder named after a site has to answer.
+        per="${per:+$per }$h=$CF_VERDICT"
         case $CF_VERDICT in
             ok)         good=$((good + 1)) ;;
             challenged) bad_=$((bad_ + 1)); detail="${detail:+$detail, }$h challenged" ;;
@@ -765,7 +770,10 @@ cf_exit_verdict() {
     else verdict=partly
     fi
     [ -n "$detail" ] || detail="$good served"
-    printf '%s\t%s\t%s\t%s\t%s' "$verdict" "$exit_" "$good" "$bad_" "$detail"
+    # Six fields, and the last one is per-site "host=verdict" pairs separated
+    # by spaces. Anything reading this with `read` has to name all six or the
+    # fifth will quietly swallow the sixth.
+    printf '%s\t%s\t%s\t%s\t%s\t%s' "$verdict" "$exit_" "$good" "$bad_" "$detail" "$per"
 }
 
 

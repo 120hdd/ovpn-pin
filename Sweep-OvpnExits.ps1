@@ -60,6 +60,25 @@
     of every location. Start here, then sweep one location's addresses in full
     with -Name once you know which location you want.
 
+.PARAMETER SiteTestDir
+    Where the per-site folders go. Defaults to sitetest\ beside this script.
+
+    Every host you pass to -Site gets a folder of its own in here, holding the
+    configs whose exit actually served it - not "was clean overall", but served
+    that one site. A config that stops serving it is taken back out on the next
+    sweep, so the folder keeps meaning what its name says.
+
+.PARAMETER OnePerLandlord
+    One file per hosting company - coarser than -OnePer and much faster. About
+    twenty companies stand behind a thousand-odd addresses, and being blocked
+    is mostly a property of the company rather than of the address, so this
+    answers "whose addresses still work" in twenty tests where -OnePer needs a
+    hundred and forty. The one to run first; narrow with -Landlord and sweep
+    the survivors properly afterwards.
+
+    Combines with -PickLandlord: choose the companies, then test one address
+    from each. Given together with -OnePer, this one wins.
+
 .PARAMETER First
     Stop after this many configs. Handy for seeing what a sweep looks like
     before committing an afternoon to one.
@@ -157,12 +176,14 @@ param(
     [string]   $Name,
     [string]   $PinnedDir,
     [string]   $SuccessDir,
+    [string]   $SiteTestDir,
     [string[]] $Site,
 
     [string[]] $Landlord,
     [switch]   $PickLandlord,
 
     [switch]   $OnePer,
+    [switch]   $OnePerLandlord,
     [int]      $First,
     [switch]   $Pick,
 
@@ -193,7 +214,14 @@ $root = Split-Path -Parent $PSCommandPath
 # The probes, the verdict vocabulary and the [ ok ] / [fail] writers all live
 # in the pinner already. Copying them here would mean two things to keep in
 # step, and they would drift.
+#
+# Dot-sourcing runs that script's param() block in this scope too, so every
+# name the two blocks share is reset to its default the moment this line runs.
+# $Site is one of them, and -Site had been quietly dying here: bound, wiped a
+# few lines later, and never passed to a single probe. Held across the call.
+$sweepSite = $Site
 . (Join-Path $root 'Resolve-OvpnRemote.ps1') -AsLibrary
+$Site = $sweepSite
 
 
 #--------------------------------------------------------------------- helpers
@@ -353,6 +381,41 @@ function Show-LandlordMenu {
 # file after it, and a prompt in the middle of an unattended sweep is a hang
 # with extra steps. So the credentials get settled once, before anything is
 # connected.
+# Same two keys the Linux side reads, so one .env serves both.
+function Read-EnvCredentials {
+    param([string] $Path)
+
+    if (-not (Test-Path $Path)) { return $null }
+    $u = $null; $p = $null
+    # UTF-8, not the ANSI code page: a password with a non-ASCII character
+    # read through the wrong one is a password that does not work, and the
+    # server's answer to that says nothing about why.
+    foreach ($line in [IO.File]::ReadAllLines($Path, [Text.Encoding]::UTF8)) {
+        if ($line -match '^\s*OVPN_USER\s*=\s*(.*)$') { $u = $Matches[1].Trim(" `t'`"") }
+        if ($line -match '^\s*OVPN_PASS\s*=\s*(.*)$') { $p = $Matches[1].Trim(" `t'`"") }
+    }
+    if ($u -and $p) { return @{ User = $u; Pass = $p } }
+    if ($u -or $p) {
+        Write-Warn "only half the credentials are set in $Path - both OVPN_USER and OVPN_PASS are needed"
+    }
+    $null
+}
+
+# .ovpn-auth is a cache of what .env says. It used to be consulted first and
+# never rechecked, so editing a password in .env and sweeping again went on
+# using the old one - and the server's rejection points at the password rather
+# than at the stale copy of it. .env is the side you edit, so .env wins.
+function Sync-CachedAuthFile {
+    param([string] $Path, [string] $User, [string] $Pass)
+
+    if (-not (Test-Path $Path)) { return }
+    $lines = @([IO.File]::ReadAllLines($Path, [Text.Encoding]::UTF8))
+    if ($lines.Count -ge 2 -and $lines[0] -eq $User -and $lines[1] -eq $Pass) { return }
+
+    [IO.File]::WriteAllText($Path, "$User`n$Pass`n", (New-Object Text.UTF8Encoding($false)))
+    Write-Info "$Path no longer matched .env - updated from it"
+}
+
 function Resolve-AuthFile {
     param([string] $Explicit, [string] $EnvPath, [ref] $Temporary)
 
@@ -362,28 +425,23 @@ function Resolve-AuthFile {
     }
 
     $existing = Join-Path $root '.ovpn-auth'
+    $envFile = if ($EnvPath) { $EnvPath } else { Join-Path $root '.env' }
+
+    $cred = Read-EnvCredentials $envFile
+    if ($cred) {
+        # Keep the cached copy honest too, so the Linux scripts and anything
+        # pointed straight at .ovpn-auth do not go on using the old password.
+        Sync-CachedAuthFile $existing $cred.User $cred.Pass
+        $f = New-AuthFile $cred.User $cred.Pass
+        $Temporary.Value = $true
+        Write-Info "credentials: from $envFile"
+        return $f
+    }
+
+    # No usable .env, so the cached file is the best there is.
     if (Test-Path $existing) {
         Write-Info "credentials: $existing"
         return $existing
-    }
-
-    # Same two keys the Linux side reads, so one .env serves both.
-    $envFile = if ($EnvPath) { $EnvPath } else { Join-Path $root '.env' }
-    if (Test-Path $envFile) {
-        $u = $null; $p = $null
-        # UTF-8, not the ANSI code page: a password with a non-ASCII character
-        # read through the wrong one is a password that does not work, and the
-        # server's answer to that says nothing about why.
-        foreach ($line in [IO.File]::ReadAllLines($envFile, [Text.Encoding]::UTF8)) {
-            if ($line -match '^\s*OVPN_USER\s*=\s*(.*)$') { $u = $Matches[1].Trim(" `t'`"") }
-            if ($line -match '^\s*OVPN_PASS\s*=\s*(.*)$') { $p = $Matches[1].Trim(" `t'`"") }
-        }
-        if ($u -and $p) {
-            $f = New-AuthFile $u $p
-            $Temporary.Value = $true
-            Write-Info "credentials: from $envFile"
-            return $f
-        }
     }
 
     Write-Host ''
@@ -615,16 +673,52 @@ function Save-Successful {
     $name
 }
 
+# Of the files in this folder sharing a tag, keep the quickest and drop the
+# rest. The names carry zero-padded seconds at the front - 04.5s-... - which
+# was done so that Explorer sorts them honestly; it means the plain
+# alphabetical order here is already fastest-first, and no arithmetic and no
+# parsing of the name is needed to find the winner.
+function Select-Fastest {
+    param([string] $Dir, [string] $Tag)
+    if (-not (Test-Path $Dir)) { return }
+    $mine = @(Get-ChildItem -LiteralPath $Dir -Filter "*s-$Tag-*" -File -ErrorAction SilentlyContinue |
+              Sort-Object Name)
+    if ($mine.Count -le 1) { return }
+    $mine | Select-Object -Skip 1 | Remove-Item -Force -ErrorAction SilentlyContinue
+}
+
+# Take a config out of a folder that says something about it which has stopped
+# being true. A folder named after a site has to mean what it says, or it is
+# worse than not being there. True if anything actually went.
+function Remove-FromDir {
+    param([string] $Dir, [string] $Name)
+    if (-not (Test-Path $Dir)) { return $false }
+    $base = Get-BaseConfigName $Name
+    $gone = @(Get-ChildItem -LiteralPath $Dir -Filter "*-$base" -File -ErrorAction SilentlyContinue)
+    if (-not $gone) { return $false }
+    $gone | Remove-Item -Force -ErrorAction SilentlyContinue
+    $true
+}
+
 # Re-sweeping the success folder is a re-test of things that used to work, so
 # one that no longer connects should not keep sitting in a folder that claims
 # otherwise. Only ever the copy - the original in pinned\ is untouched.
 function Remove-Successful {
-    param([IO.FileInfo] $Config, [string] $Dir)
+    param([IO.FileInfo] $Config, [string] $Dir, [string] $SiteDir)
     $base = Get-BaseConfigName $Config.Name
     $any = $false
-    # The labelled copy goes with it. Two folders saying different things
-    # about the same config is worse than either of them being out of date.
-    foreach ($d in @($Dir, (Join-Path $Dir 'landlord'))) {
+
+    # Every folder that says this config works, the per-site ones included: a
+    # config that no longer connects cannot be serving anybody's site either,
+    # and a folder left claiming otherwise is worse than one merely out of
+    # date - you would go to it precisely when you are in a hurry.
+    $dirs = @($Dir, (Join-Path $Dir 'landlord'), (Join-Path (Join-Path $Dir 'landlord') 'fastest'))
+    if ($SiteDir -and (Test-Path $SiteDir)) {
+        $dirs += @(Get-ChildItem -LiteralPath $SiteDir -Directory -ErrorAction SilentlyContinue |
+                   ForEach-Object { $_.FullName })
+    }
+
+    foreach ($d in $dirs) {
         if (-not (Test-Path $d)) { continue }
         $gone = @(Get-ChildItem -LiteralPath $d -Filter "*-$base" -File -ErrorAction SilentlyContinue)
         if ($gone) {
@@ -646,12 +740,13 @@ function Get-ExitVerdict {
     $trace = Get-CfTrace
     if ($trace.Probe.Error) {
         return [pscustomobject]@{ Verdict = 'unreachable'; Exit = ''; Loc = ''
-                                  Good = 0; Bad = 0; Detail = $trace.Probe.Error }
+                                  Good = 0; Bad = 0; Detail = $trace.Probe.Error
+                                  Sites = @() }
     }
 
     $egress = $trace.Fields['ip']
     $loc    = $trace.Fields['loc']
-    $good = 0; $bad = 0; $detail = @()
+    $good = 0; $bad = 0; $detail = @(); $per = @()
 
     if ($trace.Probe.Verdict -eq 'ok') { $good++ }
     else { $bad++; $detail += 'cloudflare.com itself' }
@@ -661,6 +756,11 @@ function Get-ExitVerdict {
         if ($h -notmatch '^[A-Za-z0-9._-]+$') { continue }
         $p = try { Invoke-CfProbe "https://$h/" 15000 }
              catch { [pscustomobject]@{ Verdict = 'unreachable'; Error = $_.Exception.Message } }
+        # Each site's own answer, kept apart from the summary below. The counts
+        # say how many were served and the detail says which were not, but
+        # neither can be asked "did chatgpt.com work on this exit" - and that is
+        # the question a folder named after a site has to answer.
+        $per += [pscustomobject]@{ Host = $h; Verdict = $p.Verdict }
         switch ($p.Verdict) {
             'ok'         { $good++ }
             'challenged' { $bad++; $detail += "$h challenged" }
@@ -680,6 +780,7 @@ function Get-ExitVerdict {
         Good    = $good
         Bad     = $bad
         Detail  = if ($detail) { $detail -join ', ' } else { "$good served" }
+        Sites   = $per
     }
 }
 
@@ -711,7 +812,20 @@ function Write-ExitRow {
 #------------------------------------------------------------------------- wsl
 
 function Invoke-WslSweep {
-    param([string] $Distro, [string] $Filter, [string[]] $Sites)
+    param(
+        [string]   $Distro,
+        [string]   $Filter,
+        [string[]] $Sites,
+        [string[]] $Landlord,
+        [switch]   $PickLandlord,
+        [switch]   $OnePer,
+        [switch]   $OnePerLandlord,
+        [switch]   $Pick,
+        [switch]   $NoOwner,
+        [int]      $First,
+        [int]      $Timeout,
+        [switch]   $Retest,
+        [string]   $SiteTestDir)
 
     Write-Head 'Sweeping from WSL'
 
@@ -751,9 +865,34 @@ function Invoke-WslSweep {
     Write-Info 'It will ask for your sudo password.'
     Write-Host ''
 
+    # Every switch that narrows the sweep has to be handed on. Only the name
+    # filter and the sites used to be, so -OnePer and -PickLandlord were
+    # accepted, printed in the plan, and then quietly dropped at the border -
+    # and what ran in there was the whole pinned folder. That is the difference
+    # between twenty minutes and the rest of the day, and nothing said so.
     $cmd = "cd '$lin' && bash ./ovpn-connect.sh --sweep"
-    if ($Filter) { $cmd += " '$Filter'" }
-    if ($Sites)  { $cmd += " --site '" + (($Sites -join ',') -replace "'", '') + "'" }
+    if ($Filter)       { $cmd += " '$Filter'" }
+    if ($Retest)       { $cmd += ' --retest' }
+    if ($OnePer)         { $cmd += ' --one-per' }
+    if ($OnePerLandlord) { $cmd += ' --one-per-landlord' }
+    if ($PickLandlord) { $cmd += ' --pick-landlord' }
+    if ($Landlord)     { $cmd += " --landlord '" + (($Landlord -join ',') -replace "'", '') + "'" }
+    if ($Pick)         { $cmd += ' --pick' }
+    if ($NoOwner)      { $cmd += ' --no-owner' }
+    if ($First -gt 0)  { $cmd += " --first $First" }
+    if ($Timeout -gt 0){ $cmd += " --timeout $Timeout" }
+    if ($Sites)        { $cmd += " --site '" + (($Sites -join ',') -replace "'", '') + "'" }
+    # Only when it is not the default: the Linux script works out its own
+    # sitetest/ beside itself, and a Windows path handed over as-is would be
+    # meaningless in there anyway.
+    if ($SiteTestDir -and (Split-Path -Leaf $SiteTestDir) -ne 'sitetest') {
+        Write-Warn "-SiteTestDir is not passed to the Linux script; it will use its own sitetest/"
+    }
+
+    # Shown rather than assumed: this is the one place where what you asked for
+    # and what runs are two different command lines.
+    Write-Info "running: ovpn-connect.sh --sweep$($cmd -replace '^.*--sweep', '')"
+    Write-Host ''
 
     & $wsl.Source -d $Distro -- bash -lc $cmd
     $LASTEXITCODE
@@ -767,8 +906,9 @@ try {
     Write-Host '  Sweep-OvpnExits' -ForegroundColor White
     Write-Host '  connects each pinned config in turn and judges its exit' -ForegroundColor DarkGray
 
-    if (-not $PinnedDir)  { $PinnedDir  = Join-Path $root 'pinned' }
-    if (-not $SuccessDir) { $SuccessDir = Join-Path $root 'success' }
+    if (-not $PinnedDir)   { $PinnedDir   = Join-Path $root 'pinned' }
+    if (-not $SuccessDir)  { $SuccessDir  = Join-Path $root 'success' }
+    if (-not $SiteTestDir) { $SiteTestDir = Join-Path $root 'sitetest' }
 
     # Sweeping the success folder is a re-test of what worked last time rather
     # than a survey of everything, and it behaves slightly differently: a
@@ -778,7 +918,19 @@ try {
     $retesting = ([IO.Path]::GetFullPath($PinnedDir).TrimEnd('\')) -eq
                  ([IO.Path]::GetFullPath($SuccessDir).TrimEnd('\'))
 
-    if ($Wsl) { exit (Invoke-WslSweep $WslDistro $Name $Site) }
+    if ($Wsl) {
+        # -Timeout only when you asked for it: the two scripts disagree about
+        # the default (15 here, 45 there) and forwarding ours unasked would
+        # quietly shorten every WSL sweep.
+        $t = if ($PSBoundParameters.ContainsKey('Timeout')) { $Timeout } else { 0 }
+        if ($Force) { Write-Warn '-Force has no counterpart in the Linux script and is not passed on.' }
+        exit (Invoke-WslSweep -Distro $WslDistro -Filter $Name -Sites $Site `
+                              -Landlord $Landlord -PickLandlord:$PickLandlord `
+                              -OnePer:$OnePer -OnePerLandlord:$OnePerLandlord `
+                              -Pick:$Pick -NoOwner:$NoOwner `
+                              -First $First -Timeout $t -Retest:$retesting `
+                              -SiteTestDir $SiteTestDir)
+    }
 
     if (-not (Test-Path $PinnedDir)) {
         Write-Head 'Nothing to sweep'
@@ -843,11 +995,47 @@ try {
                 foreach ($w in $wanted) { if ($hay -like "*$w*") { return $true } }
                 $false
             })
-            Write-Info "$($configs.Count) config(s) are rented from those"
+            # Said plainly when it is not the final number. This line lands
+            # right after you pick, it is the biggest figure on the screen,
+            # and read on its own it looks like the whole lot is about to be
+            # connected.
+            if ($OnePer -or $OnePerLandlord) {
+                Write-Info "$($configs.Count) config(s) are rented from those, before narrowing further"
+            } else {
+                Write-Info "$($configs.Count) config(s) are rented from those"
+            }
         }
     }
 
-    if ($OnePer) {
+    # One address per hosting company. Twenty-odd companies stand behind a
+    # thousand-odd addresses, and being blocked is mostly a property of the
+    # company rather than of the address - so this answers "whose addresses
+    # still work" in twenty tests where -OnePer needs a hundred and forty.
+    # The coarsest survey there is, and the one to run first.
+    if ($OnePerLandlord -and $configs) {
+        if ($OnePer) { Write-Info '-OnePer and -OnePerLandlord together: the narrower one wins.' }
+        # -Landlord/-PickLandlord already paid for the lookup. On its own this
+        # has to ask for it.
+        if (-not $ownerOf.Count) {
+            Write-Head 'Landlords'
+            Write-Info "looking up who $($configs.Count) addresses are rented from"
+            $ownerOf = Get-ConfigOwners $configs
+        }
+        $untraced = @($configs | Where-Object { -not $ownerOf[$_.Name] }).Count
+        $configs = @($configs | Where-Object { $ownerOf[$_.Name] } |
+                     Group-Object { Format-Owner $ownerOf[$_.Name] } |
+                     ForEach-Object { $_.Group | Select-Object -First 1 })
+        if (-not $configs) {
+            Write-Head 'Nothing to sweep'
+            Write-Info 'Not one of these addresses could be traced to a hosting company, so'
+            Write-Info 'there is nothing to take one of. Sweep with -OnePer instead.'
+            Write-Host ''
+            exit 1
+        }
+        if ($untraced) { Write-Warn "$untraced address(es) could not be traced to a company - left out" }
+        Write-Info "$($configs.Count) companies, one address each"
+    }
+    elseif ($OnePer) {
         # de-fra.prod.surfshark.com_tcp_146.70.160.237.ovpn -> de-fra...com_tcp
         $configs = @($configs | Group-Object { (Get-BaseConfigName $_.Name) -replace '_[0-9.]+\.ovpn$', '' } |
                      ForEach-Object { $_.Group | Select-Object -First 1 })
@@ -988,8 +1176,8 @@ try {
         # so those go straight to the connect.
         if ($r.Proto -match '^tcp' -and -not (Test-Port $r.Ip $r.Port)) {
             Write-Bad 'the address does not answer - skipped'
-            if ($retesting -and (Remove-Successful $cfg $SuccessDir)) {
-                Write-Info 'dropped from success\ - it does not answer any more'
+            if ($retesting -and (Remove-Successful $cfg $SuccessDir $SiteTestDir)) {
+                Write-Info 'dropped from the folders that said it works - it does not answer any more'
             }
             $results += [pscustomobject]@{ Name = $base; Path = $cfg.FullName; Verdict = 'unreachable'; Exit = '-'; Owner = ''; Seconds = 0; Detail = 'address does not answer' }
             Write-ExitRow $base $r.Ip 'unreachable' 'address does not answer'
@@ -1011,8 +1199,8 @@ try {
             if ($state -ne 'up') {
                 Write-Bad ("did not come up - $state [{0:n1}s]" -f ((Get-Date) - $t0).TotalSeconds)
                 Write-Info "log: $log"
-                if ($retesting -and (Remove-Successful $cfg $SuccessDir)) {
-                    Write-Info 'dropped from success\ - it does not connect any more'
+                if ($retesting -and (Remove-Successful $cfg $SuccessDir $SiteTestDir)) {
+                    Write-Info 'dropped from the folders that said it works - it does not connect any more'
                 }
                 $results += [pscustomobject]@{ Name = $base; Path = $cfg.FullName; Verdict = 'noconnect'; Exit = '-'; Owner = ''; Seconds = 0; Detail = $state }
                 Write-ExitRow $base $r.Ip 'noconnect' $state
@@ -1024,6 +1212,13 @@ try {
             $secs = ((Get-Date) - $t0).TotalSeconds
             $kept = Save-Successful $cfg $secs $SuccessDir
             Write-Ok ("up in {0:n1}s - kept as {1}" -f $secs, $kept)
+
+            # From here on, this - not $cfg - is the copy of this config that
+            # is certain to be on disk. Sweeping success\ itself, the call
+            # above has just replaced this config's previous entry, and that
+            # entry is the very file $cfg points at: $cfg.FullName is now a
+            # path to something deleted. Same bytes, still here.
+            $keptPath = Join-Path $SuccessDir $kept
 
             # The routes go in a moment before the handshake is announced, and
             # DNS a moment after; probing on the same breath measures the
@@ -1055,7 +1250,7 @@ try {
                     Write-Warn "the tunnel is up but $why - not judged"
                     if ($hop) { Write-Info "traffic still leaves over $($hop.Alias)" }
                 }
-                $results += [pscustomobject]@{ Name = $base; Path = $cfg.FullName; Verdict = 'noroute'; Exit = $v.Exit; Owner = ''; Seconds = $secs; Detail = $why }
+                $results += [pscustomobject]@{ Name = $base; Path = $keptPath; Verdict = 'noroute'; Exit = $v.Exit; Owner = ''; Seconds = $secs; Detail = $why }
                 Write-ExitRow $base $r.Ip 'noroute' $why
                 continue
             }
@@ -1079,26 +1274,62 @@ try {
                     $owner = Format-Owner $o
                     Write-Info "rented from $owner$(if ($o.City) { " in $($o.City)" })"
 
-                    # A second copy, in success\landlord, labelled with who
-                    # the exit belongs to and which country it came out in.
-                    # Same file, same timing, sorted differently on purpose:
-                    # this one answers "what have I got from M247, and where",
-                    # which is the question when a whole hosting company turns
-                    # out to be blocked and you need the same country from
-                    # somebody else's racks.
+                    # Two views of the same company, and each is kept down to
+                    # one file rather than all of them - the quickest, since
+                    # that is the only one of them you would ever dial.
+                    #
+                    # success\landlord answers "what is my quickest M247 in
+                    # Germany", which is the question when a whole hosting
+                    # company turns out to be blocked and you need the same
+                    # country from somebody else's racks. success\landlord\
+                    # fastest answers "what is my quickest M247 anywhere",
+                    # for when you do not care where it lands.
                     #
                     # The country is Cloudflare's idea of where the exit is,
                     # not the provider's label on the file - de-fra is where
                     # they say it is, DE is where it came out.
                     $loc = if ($v.Loc) { $v.Loc } else { 'xx' }
+                    $lordDir = Join-Path $SuccessDir 'landlord'
+                    $fastDir = Join-Path $lordDir 'fastest'
+                    $note = @()
+
                     $tag = '{0}-{1}' -f (Get-NameTag $owner), (Get-NameTag $loc 6)
-                    $also = Save-Successful $cfg $secs (Join-Path $SuccessDir 'landlord') $tag
-                    Write-Info "also kept as landlord\$also"
+                    $also = Save-Successful (Get-Item -LiteralPath $keptPath) $secs $lordDir $tag
+                    Select-Fastest $lordDir $tag
+                    if (Test-Path (Join-Path $lordDir $also)) { $note += "landlord\$also" }
+
+                    $lordTag = Get-NameTag $owner
+                    $fast = Save-Successful (Get-Item -LiteralPath $keptPath) $secs $fastDir $lordTag
+                    Select-Fastest $fastDir $lordTag
+                    if (Test-Path (Join-Path $fastDir $fast)) { $note += "landlord\fastest\$fast" }
+
+                    if ($note) { Write-Info "also kept as $($note -join ', ')" }
+                    else       { Write-Info "a quicker $owner is already kept - not this one" }
+                }
+            }
+
+            # A folder per site you named, holding the configs that actually
+            # served it. "Which of these gets me into chatgpt.com" is a
+            # different question from "which of these is clean", and reading
+            # it back out of a detail string after the fact is not an answer.
+            foreach ($s in $v.Sites) {
+                $siteDir = Join-Path $SiteTestDir (Get-NameTag $s.Host)
+                if ($s.Verdict -eq 'ok') {
+                    # Every config that serves it, not just the quickest: this
+                    # folder is a list of what works, and one entry would be a
+                    # single point of failure dressed up as a survey.
+                    $st = Save-Successful (Get-Item -LiteralPath $keptPath) $secs $siteDir ''
+                    Write-Info "serves $($s.Host) - kept in $(Split-Path -Leaf $SiteTestDir)\$(Get-NameTag $s.Host)\$st"
+                }
+                elseif (Remove-FromDir $siteDir $kept) {
+                    Write-Info "no longer serves $($s.Host) - dropped from that folder"
                 }
             }
 
             $detail = if ($owner) { "$($v.Detail) [$owner]" } else { $v.Detail }
-            $results += [pscustomobject]@{ Name = $base; Path = $cfg.FullName; Verdict = $v.Verdict; Exit = $where; Owner = $owner; Seconds = $secs; Detail = $v.Detail }
+            # $keptPath, not $cfg: -Pick connects this at the end, and on a
+            # re-sweep of success\ the file $cfg names has been superseded.
+            $results += [pscustomobject]@{ Name = $base; Path = $keptPath; Verdict = $v.Verdict; Exit = $where; Owner = $owner; Seconds = $secs; Detail = $v.Detail }
             Write-ExitRow $base $r.Ip $v.Verdict $detail
         }
         catch {
@@ -1171,9 +1402,10 @@ try {
             Write-Info 'That is one problem, not forty - and it is a good sign about'
             Write-Info 'everything else: the address, the route and the certificate all'
             Write-Info 'worked, or the server would never have got as far as refusing you.'
-            Write-Info 'Check the credentials in .env, or delete .ovpn-auth if it holds an'
-            Write-Info 'old pair. Some providers want a service username here rather than'
-            Write-Info 'the one you log into their website with.'
+            Write-Info 'Check the credentials in .env - it is read fresh every run, so a'
+            Write-Info 'stale .ovpn-auth is no longer the explanation. Some providers want'
+            Write-Info 'a service username here rather than the one you log into their'
+            Write-Info 'website with.'
         }
         elseif ($adapter -gt 0) {
             Write-Bad 'openvpn could not open a tunnel adapter.'
