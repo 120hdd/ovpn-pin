@@ -118,15 +118,27 @@ do_install() {
     printf '\n'
     ok "$link  ->  $SELF_PATH"
 
+    # Whether the name will be found is not the same question as whether it is
+    # on the PATH of the shell that ran the install. Debian and Ubuntu ship a
+    # ~/.profile that adds ~/.local/bin at login *if the folder exists* - and
+    # until a moment ago it did not, so the current shell can easily be the
+    # last one that will ever miss it. Saying "add this to your .bashrc" here
+    # would have you write a line that is already in .profile.
     case ":$PATH:" in
         *":$bindir:"*)
-            note "$bindir is on your PATH - open a new shell and type: ovpn" ;;
+            note "$bindir is on your PATH - type: ovpn" ;;
         *)
-            printf '\n'
-            warn "$bindir is not on your PATH, so the name will not be found yet."
-            note '       Add it, then open a new shell:'
-            printf '\n'
-            note "            echo 'export PATH=\"$bindir:\$PATH\"' >> ~/.bashrc"
+            if grep -qs "$(basename -- "$bindir")" "$HOME/.profile" 2>/dev/null &&
+               grep -qs 'local/bin' "$HOME/.profile" 2>/dev/null; then
+                note "$bindir is not on this shell's PATH, but ~/.profile adds it"
+                note 'at login - so open a new terminal and the name will be there.'
+            else
+                printf '\n'
+                warn "$bindir is not on your PATH, so the name will not be found yet."
+                note '       Add it, then open a new shell:'
+                printf '\n'
+                note "            echo 'export PATH=\"$bindir:\$PATH\"' >> ~/.bashrc"
+            fi
             ;;
     esac
     printf '\n'
