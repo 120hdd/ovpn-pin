@@ -53,40 +53,54 @@ done
 # It says no far more often than yes, because getting this wrong means acting
 # on a folder the user did not mean, and the failure would be silent - a sweep
 # of the wrong twenty configs looks exactly like a sweep of the right twenty.
-use_cwd() {
-    local here f
+#
+# Answers it without acting on it, so that `ovpn where` can ask the same
+# question `ovpn connect` does and get the same answer. Two copies of this
+# would drift, and the whole value of `where` is that it tells you what the
+# other commands are about to do.
+#
+# Prints the folder, or fails if $PWD is not one.
+cwd_folder() {
+    local f
 
     # Anything explicit outranks standing somewhere. If OVPN_OUT_DIR is
     # already set, or the command line names a folder itself, that is an
-    # answer and this function has no business overriding it.
-    [ -n "${OVPN_OUT_DIR:-}" ] && return 0
+    # answer and this has no business overriding it.
+    [ -n "${OVPN_OUT_DIR:-}" ] && return 1
     case " $* " in
-        *' --retest '*|*' --success-dir '*|*' --sitetest-dir '*) return 0 ;;
+        *' --retest '*|*' --success-dir '*|*' --sitetest-dir '*) return 1 ;;
     esac
 
-    here=$PWD
     # The repo root holds scripts, not configs. Running `ovpn connect` from
     # there means pinned/, which is what the script does by itself.
-    [ "$here" = "$ROOT" ] && return 0
+    [ "$PWD" = "$ROOT" ] && return 1
 
     # A folder with no .ovpn in it is not a config folder, and pretending it
     # is would turn `ovpn stop` typed in your home directory into an error
     # about there being no configs there.
-    for f in "$here"/*.ovpn; do
-        [ -e "$f" ] || return 0
+    for f in "$PWD"/*.ovpn; do
+        [ -e "$f" ] || return 1
         break
     done
 
-    # configs/ holds the downloaded originals - the ones that still point at
-    # a hostname. Connecting to those is precisely what this repo exists to
-    # avoid, so it is worth one line rather than a puzzling failure later.
-    if [ "$here" = "$ROOT/configs" ]; then
-        warn 'these are the downloaded originals - they still name a hostname,'
-        note '       which is the thing your resolver lies about. Pin them first:'
-        note '            ovpn pin'
-        printf '\n'
-    fi
+    printf '%s' "$PWD"
+}
 
+# configs/ holds the downloaded originals - the ones that still point at a
+# hostname. Connecting to those is precisely what this repo exists to avoid,
+# so it is worth saying rather than letting it fail puzzlingly later.
+warn_if_originals() {
+    [ "$1" = "$ROOT/configs" ] || return 0
+    warn 'these are the downloaded originals - they still name a hostname,'
+    note '       which is the thing your resolver lies about. Pin them first:'
+    note '            ovpn pin'
+    printf '\n'
+}
+
+use_cwd() {
+    local here
+    here=$(cwd_folder "$@") || return 0
+    warn_if_originals "$here"
     export OVPN_OUT_DIR=$here
     note "folder: $here  ($(count_configs "$here") configs)"
 }
@@ -224,18 +238,18 @@ do_where() {
     note "repo   : $ROOT"
     note "command: $SELF_PATH"
     note "here   : $PWD"
+    local here
     if [ -n "${OVPN_OUT_DIR:-}" ]; then
-        note "folder : $OVPN_OUT_DIR  (OVPN_OUT_DIR, already set in your shell)"
+        note "folder : $OVPN_OUT_DIR  ($(count_configs "$OVPN_OUT_DIR") configs, from OVPN_OUT_DIR in your shell)"
+        printf '\n'
+    elif here=$(cwd_folder); then
+        note "folder : $here  ($(count_configs "$here") configs, because you are standing in it)"
+        printf '\n'
+        warn_if_originals "$here"
     else
-        local f found=0
-        for f in "$PWD"/*.ovpn; do [ -e "$f" ] && found=1; break; done
-        if [ "$found" = 1 ] && [ "$PWD" != "$ROOT" ]; then
-            note "folder : $PWD  ($(count_configs "$PWD") configs, because you are standing in it)"
-        else
-            note "folder : $ROOT/pinned  ($(count_configs "$ROOT/pinned") configs, the default)"
-        fi
+        note "folder : $ROOT/pinned  ($(count_configs "$ROOT/pinned") configs, the default)"
+        printf '\n'
     fi
-    printf '\n'
 }
 
 # ----------------------------------------------------------------- dispatch
