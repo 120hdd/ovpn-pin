@@ -1,0 +1,25 @@
+# Line endings, decided here rather than left to whoever cloned it.
+#
+# A .sh stored with CRLF fails on Linux at the very first line - the shebang
+# becomes "/usr/bin/env bash\r", and what you get back is
+#
+#     bad interpreter: /usr/bin/env bash^M: No such file or directory
+#
+# which names neither the file's line endings nor anything you could act on.
+# Sourced files are worse: they run, and the trailing \r ends up inside string
+# comparisons, so the failures are silent and make no sense.
+#
+# These files are checked out on Windows, where git's autocrlf would otherwise
+# put CRLF into them and then commit it back.
+*.sh            text eol=lf
+*.ovpn          text eol=lf
+.env.example    text eol=lf
+.gitignore      text eol=lf
+.gitattributes  text eol=lf
+
+# These only ever run on Windows, where CRLF is what the tooling expects.
+*.cmd           text eol=crlf
+*.ps1           text eol=crlf
+
+# Prose, left to the platform.
+*.md            text

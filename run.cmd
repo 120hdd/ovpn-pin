@@ -195,13 +195,21 @@ set "swland="
 set /p "swland=  choose by landlord first? [y/N]: "
 
 echo.
-echo   And how many addresses out of each company? One apiece is the coarse,
-echo   fast answer - about twenty tests, ten minutes, and it tells you whose
-echo   addresses still work. One per location is the normal answer and takes
-echo   around seven times longer. Coarse first, then sweep the survivors.
+echo   And how many addresses out of each company?
+echo.
+echo     enter   one per location. The normal answer - about 140 tests.
+echo     c       one per company. About 20 tests, ten minutes, and it tells
+echo             you whose addresses still work. Start here.
+echo     cl      one per company per location. A company is spread over
+echo             dozens of places and they do not share a fate, so this asks
+echo             about each separately - 9 locations of HostRoyale, 9 tests.
+echo             The one to run once you know which companies are worth it.
+echo.
+echo   Whichever you pick, it takes the address that connected quickest last
+echo   time out of each group - it reads that off the names in success\.
 echo.
 set "swone="
-set /p "swone=  one address per company? [y/N]: "
+set /p "swone=  how many out of each company? (enter, c, or cl): "
 
 rem Plain sequential overrides rather than nested if/else - quotes inside a
 rem parenthesised block in batch are their own kind of afternoon.
@@ -214,15 +222,17 @@ if /i "%swname%"=="*" set "swargs="
 rem Re-testing success\ is already a short list of known-good configs, so an
 rem empty answer there means all of them rather than one per location.
 if "%swdir%"=="2" if not defined swname set "swargs="
-rem One address per company supersedes one per location. Sending both works -
-rem the sweep takes the narrower of the two - but it says so when you do, and
-rem from the menu that note would appear on every single run.
-if /i "%swone%"=="y" if not defined swname set "swargs="
+rem Either company answer supersedes one-per-location. Sending both works -
+rem the sweep picks one and says which - but from the menu that note would
+rem appear on every single run.
+if /i "%swone%"=="c"  if not defined swname set "swargs="
+if /i "%swone%"=="cl" if not defined swname set "swargs="
 if defined swsites set "swargs=%swargs% -Site "%swsites%""
 if /i "%swland%"=="y" set "swargs=%swargs% -PickLandlord"
-rem One per company narrows whatever is left, including the "all" and name
-rem answers above - so it is added rather than folded into the block.
-if /i "%swone%"=="y" set "swargs=%swargs% -OnePerLandlord"
+rem These narrow whatever is left, including the "all" and name answers
+rem above - so they are added rather than folded into the block.
+if /i "%swone%"=="c"  set "swargs=%swargs% -OnePerLandlord"
+if /i "%swone%"=="cl" set "swargs=%swargs% -OnePerLandlordLocation"
 if defined swdirarg set "swargs=%swargs% %swdirarg%"
 
 echo.
@@ -312,6 +322,10 @@ echo     -OnePer            one address per location, not all four of them
 echo     -OnePerLandlord    one address per hosting company. About twenty
 echo                        tests instead of a hundred and forty - the one
 echo                        to run first
+echo     -OnePerLandlordLocation
+echo                        one address per company per location. Nine
+echo                        locations of HostRoyale, nine tests - not all
+echo                        forty-nine files
 echo     -Name X            only configs whose filename contains X
 echo     -First N           stop after N of them
 echo     -Site a,b          extra sites to test on each exit. Each one gets

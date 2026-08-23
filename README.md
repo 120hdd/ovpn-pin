@@ -42,7 +42,9 @@ ovpn-pin/
   configs/                 <- put the .ovpn files you downloaded here
   pinned/                  <- the pinned copies come out here
   success/                 <- what connected, named by how long it took
-    landlord/              <- the same, labelled by hosting company and country
+    landlord/              <- the quickest per company, per country
+      fastest/             <- the quickest per company, anywhere
+  sitetest/                <- one folder per --site host, holding what served it
 ```
 
 The `configs` folder is created on first run if it isn't there.
@@ -72,9 +74,14 @@ on the machine is changed. It also passes arguments straight through, so
 **Linux**
 
 ```bash
-chmod +x run.sh resolve-ovpn-remote.sh ovpn-connect.sh
 ./run.sh
 ```
+
+If that says `Permission denied`, the executable bit did not survive however
+the files reached you — a zip has no such bit, and neither does a checkout
+made on Windows. `chmod +x *.sh` fixes it for good, and `bash run.sh` works in
+the meantime. The menu runs the other scripts through `bash` for the same
+reason, so only `run.sh` itself can be stopped by this.
 
 The same menu `run.cmd` gives on Windows, numbered the same way: pin, pin
 through a proxy, judge the exit you are on, sweep every location, who owns
@@ -518,6 +525,7 @@ writing to the same tables:
 
 ```bash
 ./ovpn-connect.sh --sweep --one-per-landlord   # one per company: ~21 tests
+./ovpn-connect.sh --sweep --one-per-landlord-location  # one per company per place
 ./ovpn-connect.sh --sweep --one-per            # one address per location
 ./ovpn-connect.sh --sweep --first 5            # stop after five
 ./ovpn-connect.sh --sweep --landlord M247,CDN77
@@ -709,18 +717,48 @@ The flags worth knowing, because a full sweep of a real download folder —
 `-OnePer` takes one file per location rather than all of the four-odd
 addresses each hostname resolved to. 791 files becomes 141 locations.
 
-`-OnePerLandlord` is coarser again: one address per hosting company, so
+`-OnePerLandlordLocation` sits between the two: one address per company
+*per location*. A location is only ever rented from one company, but a company
+is spread over dozens of locations and they do not share a fate — HostRoyale
+being fine in Paris says nothing about HostRoyale in Lisbon. So it asks about
+each separately: nine locations of HostRoyale, nine tests, whatever the
+forty-nine files underneath them say. This is the one to run *after* a
+`-OnePerLandlord` sweep has told you which companies are worth having.
+
+`-OnePerLandlord` is the coarsest: one address per hosting company, so
 1561 files becomes **21 tests**. Being blocked is mostly a property of the
 company rather than of the individual address, so this answers *whose
 addresses still work* in ten minutes. Run it first, then narrow with
 `-Landlord` and sweep the survivors properly. Given together with `-OnePer`
 it wins, and says so.
 
-The three are not the same question, and it is worth being clear which one
-you asked. One per **company** is ~21 tests; one per **location** is ~141;
-everything is ~1561. Choosing sixteen companies and asking for one per
-location still leaves you most of the 141 — the companies each cover dozens
-of locations. If you wanted sixteen tests, that is `-OnePerLandlord`.
+These are not the same question, and it is worth being clear which one you
+asked:
+
+| | groups by | tests |
+|---|---|---|
+| `-OnePerLandlord` | company | ~21 |
+| `-OnePer` | location | ~141 |
+| `-OnePerLandlordLocation` | company × location | ~150 |
+| — | nothing | ~1561 |
+
+Choosing sixteen companies and asking for one per *location* still leaves you
+most of the 141, because those companies cover dozens of locations between
+them. If you wanted sixteen tests, that is `-OnePerLandlord`.
+
+Given more than one of the three, the coarsest wins and the sweep says which
+it used.
+
+**Out of each group it takes the address that connected quickest the last time
+it was swept**, read back off the names in `success/` — those have been
+carrying the handshake time all along. With nothing on record yet it takes the
+first, as it always did, and only claims otherwise for the ones it really had
+a number for:
+
+```
+         51 company-and-location pairs, one address each
+         51 of them chosen as the quickest a previous sweep recorded
+```
 
 `-PickLandlord` is the bigger cut. It shows you who the addresses are rented
 from and sweeps only the companies you choose:
@@ -827,6 +865,7 @@ And for `ovpn-connect.sh`:
 | `--pick` | connect the best exit when the sweep is done. |
 | `--one-per` | one address per location rather than all of them. |
 | `--one-per-landlord` | one address per hosting company. ~21 tests, not ~141. Run this first. |
+| `--one-per-landlord-location` | one address per company per location. Nine locations of HostRoyale, nine tests. |
 | `--first N` | stop after N configs. |
 | `--landlord A,B` | only the configs rented from these hosting companies. |
 | `--pick-landlord` | list the companies behind them and pick by number. |

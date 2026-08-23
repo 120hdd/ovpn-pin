@@ -39,7 +39,16 @@ PRINT_ONLY=0
 run() {
     printf '\n%s  $ %s%s\n\n' "$C_DCYAN" "$*" "$C_OFF"
     [ "$PRINT_ONLY" -eq 1 ] && return 0
-    "$@"
+    # Our own scripts go through bash rather than relying on the executable
+    # bit. Git does record that bit, but a tree checked out on Windows has no
+    # such bit to record, and one unpacked from a zip never had one either -
+    # so it arrives missing, and "Permission denied" tells you nothing about
+    # which of those happened or how to undo it. The line printed above is
+    # still the one to type; this only changes how the menu runs it.
+    case $1 in
+        *.sh) bash "$@" ;;
+        *)    "$@" ;;
+    esac
     local rc=$?
     [ "$rc" -eq 0 ] || { printf '\n'; bad "that exited with code $rc"; }
     return 0
@@ -78,6 +87,9 @@ options() {
     --one-per          one address per location, not all of them
     --one-per-landlord one address per hosting company. About twenty tests
                        instead of a hundred and forty - run this first
+    --one-per-landlord-location
+                       one address per company per location. Nine locations
+                       of HostRoyale, nine tests - not all forty-nine files
     --site a,b         extra sites to test on each exit. Each one gets a
                        folder under sitetest/ with what actually served it
     --first N          stop after N of them
@@ -88,7 +100,6 @@ options() {
     --success-dir DIR  where the ones that connect are kept. Default success/
     --no-owner         skip the "rented from" lookup
     --pick             connect the best exit when the sweep is done
-    --site a,b         the sites to test on each exit
     --set-dns          point the tunnel at the DNS the server pushes
     --kill-switch      drop everything that is not the tunnel while it is up
     --dns-check        is DNS going through the tunnel, or still forged?
@@ -179,22 +190,31 @@ do_sweep() {
     [ "${lord,,}" = y ] && args+=(--pick-landlord)
 
     printf '\n'
-    info 'And how many addresses out of each company? One apiece is the coarse,'
-    info 'fast answer - about twenty tests, ten minutes, and it tells you whose'
-    info 'addresses still work. One per location is the normal answer and takes'
-    info 'around seven times longer. Coarse first, then sweep the survivors.'
+    printf '  And how many addresses out of each company?\n\n'
+    printf '    enter   one per location. The normal answer - about 140 tests.\n'
+    printf '    %sc%s       one per company. About 20 tests, ten minutes, and it\n' "$C_CYAN" "$C_OFF"
+    printf '            tells you whose addresses still work. Start here.\n'
+    printf '    %scl%s      one per company per location. A company is spread over\n' "$C_CYAN" "$C_OFF"
+    printf '            dozens of places and they do not share a fate, so this\n'
+    printf '            asks about each separately - 9 locations of HostRoyale,\n'
+    printf '            9 tests. Run it once you know which companies are worth it.\n\n'
+    info 'Whichever you pick, out of each group it takes the address that'
+    info 'connected quickest last time - read off the names in success/.'
     printf '\n'
-    ask 'one address per company? [y/N]:'
+    ask 'how many out of each company? (enter, c, or cl):'
     read -r percompany
-    # Narrows whatever is left, including the "all" and name answers above.
-    # It also supersedes one-per-location: sending both works, since the sweep
-    # takes the narrower of the two, but it says so when you do - and from the
-    # menu that note would appear on every single run.
-    if [ "${percompany,,}" = y ]; then
-        local a filtered=()
-        for a in "${args[@]}"; do [ "$a" = --one-per ] || filtered+=("$a"); done
-        args=("${filtered[@]}" --one-per-landlord)
-    fi
+
+    # These narrow whatever is left, including the "all" and name answers
+    # above. Either also supersedes one-per-location: sending both works,
+    # since the sweep picks one and says which, but from the menu that note
+    # would appear on every single run.
+    case ${percompany,,} in
+        c|cl)
+            local a filtered=() mode=--one-per-landlord
+            [ "${percompany,,}" = cl ] && mode=--one-per-landlord-location
+            for a in "${args[@]}"; do [ "$a" = --one-per ] || filtered+=("$a"); done
+            args=("${filtered[@]}" "$mode") ;;
+    esac
 
     run "$CON" --sweep "${args[@]}"
 }

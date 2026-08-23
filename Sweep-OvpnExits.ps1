@@ -79,6 +79,22 @@
     Combines with -PickLandlord: choose the companies, then test one address
     from each. Given together with -OnePer, this one wins.
 
+.PARAMETER OnePerLandlordLocation
+    One file per hosting company per location - the middle setting between
+    -OnePer and -OnePerLandlord, and the one to reach for once a sweep has
+    told you which companies are worth having.
+
+    A location is only ever rented from one company, but a company is spread
+    over dozens of locations and they do not share a fate: HostRoyale being
+    fine in Paris says nothing about HostRoyale in Lisbon. So this asks about
+    each of them separately - nine locations of HostRoyale, nine tests,
+    whatever the forty-nine files underneath them say.
+
+    Out of each group it takes the address that connected quickest the last
+    time it was swept, read from the names in success\. With nothing on
+    record yet it takes the first, as it always did. Given together with
+    -OnePer, this one wins; -OnePerLandlord wins over both.
+
 .PARAMETER First
     Stop after this many configs. Handy for seeing what a sweep looks like
     before committing an afternoon to one.
@@ -184,6 +200,7 @@ param(
 
     [switch]   $OnePer,
     [switch]   $OnePerLandlord,
+    [switch]   $OnePerLandlordLocation,
     [int]      $First,
     [switch]   $Pick,
 
@@ -673,6 +690,30 @@ function Save-Successful {
     $name
 }
 
+# The location a config's filename names - de-fra.prod.surfshark.com_tcp, with
+# any speed prefix and the address taken off. Several files share it, because a
+# hostname resolves to several addresses and each one got a file, and that is
+# exactly what makes it worth grouping by.
+function Get-LocationKey {
+    param([string] $Name)
+    (Get-BaseConfigName $Name) -replace '_[0-9.]+\.ovpn$', ''
+}
+
+# What each config's handshake took the last time it connected, read back out
+# of the names in success\. Nothing else has it: exits.tsv keeps the verdict
+# and the date but never the timing, which only ever gets written into the
+# filename. A config missing from here is unknown rather than slow, and the
+# caller has to keep those two apart.
+function Get-KnownTimes {
+    param([string] $Dir)
+    $out = @{}
+    if (-not (Test-Path $Dir)) { return $out }
+    foreach ($f in Get-ChildItem -LiteralPath $Dir -Filter *.ovpn -File -ErrorAction SilentlyContinue) {
+        if ($f.Name -match '^([0-9]{1,3}\.[0-9])s-(.+)$') { $out[$Matches[2]] = [double]$Matches[1] }
+    }
+    $out
+}
+
 # Of the files in this folder sharing a tag, keep the quickest and drop the
 # rest. The names carry zero-padded seconds at the front - 04.5s-... - which
 # was done so that Explorer sorts them honestly; it means the plain
@@ -820,6 +861,7 @@ function Invoke-WslSweep {
         [switch]   $PickLandlord,
         [switch]   $OnePer,
         [switch]   $OnePerLandlord,
+        [switch]   $OnePerLandlordLocation,
         [switch]   $Pick,
         [switch]   $NoOwner,
         [int]      $First,
@@ -875,6 +917,7 @@ function Invoke-WslSweep {
     if ($Retest)       { $cmd += ' --retest' }
     if ($OnePer)         { $cmd += ' --one-per' }
     if ($OnePerLandlord) { $cmd += ' --one-per-landlord' }
+    if ($OnePerLandlordLocation) { $cmd += ' --one-per-landlord-location' }
     if ($PickLandlord) { $cmd += ' --pick-landlord' }
     if ($Landlord)     { $cmd += " --landlord '" + (($Landlord -join ',') -replace "'", '') + "'" }
     if ($Pick)         { $cmd += ' --pick' }
@@ -927,6 +970,7 @@ try {
         exit (Invoke-WslSweep -Distro $WslDistro -Filter $Name -Sites $Site `
                               -Landlord $Landlord -PickLandlord:$PickLandlord `
                               -OnePer:$OnePer -OnePerLandlord:$OnePerLandlord `
+                              -OnePerLandlordLocation:$OnePerLandlordLocation `
                               -Pick:$Pick -NoOwner:$NoOwner `
                               -First $First -Timeout $t -Retest:$retesting `
                               -SiteTestDir $SiteTestDir)
@@ -999,7 +1043,7 @@ try {
             # right after you pick, it is the biggest figure on the screen,
             # and read on its own it looks like the whole lot is about to be
             # connected.
-            if ($OnePer -or $OnePerLandlord) {
+            if ($OnePer -or $OnePerLandlord -or $OnePerLandlordLocation) {
                 Write-Info "$($configs.Count) config(s) are rented from those, before narrowing further"
             } else {
                 Write-Info "$($configs.Count) config(s) are rented from those"
@@ -1007,39 +1051,90 @@ try {
         }
     }
 
-    # One address per hosting company. Twenty-odd companies stand behind a
-    # thousand-odd addresses, and being blocked is mostly a property of the
-    # company rather than of the address - so this answers "whose addresses
-    # still work" in twenty tests where -OnePer needs a hundred and forty.
-    # The coarsest survey there is, and the one to run first.
-    if ($OnePerLandlord -and $configs) {
-        if ($OnePer) { Write-Info '-OnePer and -OnePerLandlord together: the narrower one wins.' }
-        # -Landlord/-PickLandlord already paid for the lookup. On its own this
-        # has to ask for it.
-        if (-not $ownerOf.Count) {
+    # Narrowing to one address per group. Three shapes of group, one piece of
+    # machinery: only the key changes.
+    #
+    #   -OnePer                    the location            ~141 tests
+    #   -OnePerLandlordLocation    the company, per place  ~150 tests
+    #   -OnePerLandlord            the company             ~21 tests
+    #
+    # The middle one is what to reach for once a sweep has told you a company
+    # is worth having: a location is only ever rented from one company, but a
+    # company is spread over dozens of locations and they do not share a fate -
+    # HostRoyale being fine in Paris says nothing about HostRoyale in Lisbon.
+    # Nine locations, nine tests, whatever the forty-nine files under them say.
+    #
+    # And out of each group it takes the one that was quickest last time rather
+    # than whichever sorts first, since the names in success\ have been
+    # carrying that number all along.
+    $groupBy = if ($OnePerLandlord)         { 'lord' }
+               elseif ($OnePerLandlordLocation) { 'lordloc' }
+               elseif ($OnePer)             { 'loc' }
+               else                         { '' }
+
+    if ($groupBy -and $configs) {
+        if (@($OnePer, $OnePerLandlord, $OnePerLandlordLocation | Where-Object { $_ }).Count -gt 1) {
+            $used = switch ($groupBy) { 'lord' { '-OnePerLandlord' }
+                                        'lordloc' { '-OnePerLandlordLocation' }
+                                        default { '-OnePer' } }
+            Write-Info "more than one -OnePer... asked for; using $used"
+        }
+
+        # -Landlord/-PickLandlord already paid for the lookup. On their own the
+        # company modes have to ask for it.
+        if ($groupBy -ne 'loc' -and -not $ownerOf.Count) {
             Write-Head 'Landlords'
             Write-Info "looking up who $($configs.Count) addresses are rented from"
             $ownerOf = Get-ConfigOwners $configs
         }
-        $untraced = @($configs | Where-Object { -not $ownerOf[$_.Name] }).Count
-        $configs = @($configs | Where-Object { $ownerOf[$_.Name] } |
-                     Group-Object { Format-Owner $ownerOf[$_.Name] } |
-                     ForEach-Object { $_.Group | Select-Object -First 1 })
-        if (-not $configs) {
+        $known = Get-KnownTimes $SuccessDir
+
+        $picked = [ordered]@{}
+        $untraced = 0
+        foreach ($c in $configs) {
+            $key = $null
+            if ($groupBy -eq 'loc') { $key = Get-LocationKey $c.Name }
+            else {
+                $o = $ownerOf[$c.Name]
+                if ($o) {
+                    $key = if ($groupBy -eq 'lord') { Format-Owner $o }
+                           else { '{0}|{1}' -f (Format-Owner $o), (Get-LocationKey $c.Name) }
+                }
+            }
+            if (-not $key) { $untraced++; continue }
+
+            # Unknown sorts last. A config that has never connected should not
+            # displace one measured at four seconds just because there is
+            # nothing on record about it.
+            $base = Get-BaseConfigName $c.Name
+            $t = if ($known.ContainsKey($base)) { $known[$base] } else { [double]::MaxValue }
+            if (-not $picked.Contains($key))  { $picked[$key] = @{ Cfg = $c; T = $t } }
+            elseif ($t -lt $picked[$key].T)   { $picked[$key] = @{ Cfg = $c; T = $t } }
+        }
+
+        if (-not $picked.Count) {
             Write-Head 'Nothing to sweep'
             Write-Info 'Not one of these addresses could be traced to a hosting company, so'
             Write-Info 'there is nothing to take one of. Sweep with -OnePer instead.'
             Write-Host ''
             exit 1
         }
+        $fromRecord = @($picked.Values | Where-Object { $_.T -ne [double]::MaxValue }).Count
+        $configs = @($picked.Values | ForEach-Object { $_.Cfg })
+
         if ($untraced) { Write-Warn "$untraced address(es) could not be traced to a company - left out" }
-        Write-Info "$($configs.Count) companies, one address each"
+        $n = $configs.Count
+        $s_ = if ($n -eq 1) { '' } else { 's' }
+        switch ($groupBy) {
+            'lord'    { Write-Info "$n $(if ($n -eq 1) { 'company' } else { 'companies' }), one address each" }
+            'lordloc' { Write-Info "$n company-and-location pair$s_, one address each" }
+            default   { Write-Info "$n location$s_, one address each" }
+        }
+        if ($fromRecord) {
+            Write-Info "$fromRecord of them chosen as the quickest a previous sweep recorded"
+        }
     }
-    elseif ($OnePer) {
-        # de-fra.prod.surfshark.com_tcp_146.70.160.237.ovpn -> de-fra...com_tcp
-        $configs = @($configs | Group-Object { (Get-BaseConfigName $_.Name) -replace '_[0-9.]+\.ovpn$', '' } |
-                     ForEach-Object { $_.Group | Select-Object -First 1 })
-    }
+
     if ($First -gt 0) { $configs = @($configs | Select-Object -First $First) }
 
     if (-not $configs) {

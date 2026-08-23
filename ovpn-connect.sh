@@ -77,6 +77,11 @@ usage() {
         --one-per-landlord one address per hosting company. Coarser and much
                            faster than --one-per: about twenty tests, not a
                            hundred and forty. The one to run first
+        --one-per-landlord-location
+                           one address per company per location. A company is
+                           spread over dozens of places and they do not share
+                           a fate, so this asks about each of them separately:
+                           nine locations of HostRoyale, nine tests
         --first N          stop after N of them
         --landlord A,B     only the configs rented from these hosting
                            companies: --landlord M247,CDN77 or AS9009
@@ -925,6 +930,44 @@ save_successful() {
     printf '%s' "$name"
 }
 
+# A config filename split into the two things worth grouping by, without a
+# subshell for either. BASE_KEY is the name with any "04.5s-" taken off;
+# LOC_KEY is that with the address taken off too, which is what several files
+# of the same location share.
+#
+# Done in the shell rather than through base_config_name and sed because this
+# runs once per config: at fifteen hundred of them that is three thousand
+# processes, and the wait is long enough to look like a hang.
+LOC_KEY=''
+BASE_KEY=''
+split_config_name() {
+    local n=${1##*/}
+    [[ $n =~ ^[0-9]{1,3}(\.[0-9]+)?s-(.*)$ ]] && n=${BASH_REMATCH[2]}
+    BASE_KEY=$n
+    [[ $n =~ ^(.*)_[0-9.]+\.ovpn$ ]] && n=${BASH_REMATCH[1]}
+    LOC_KEY=$n
+}
+
+# What each config's handshake took the last time it connected, in tenths,
+# read back out of the names in the success folder. Nothing else has it:
+# exits.tsv keeps the verdict and the date but never the timing, which only
+# ever gets written into the filename.
+#
+# A config that is not in there is unknown rather than slow, and the callers
+# have to keep those two apart.
+declare -A KNOWN_TENTHS=()
+load_known_times() {
+    local f n
+    KNOWN_TENTHS=()
+    [ -d "$SUCCESS_DIR" ] || return 0
+    for f in "$SUCCESS_DIR"/*.ovpn; do
+        [ -e "$f" ] || continue
+        n=${f##*/}
+        [[ $n =~ ^([0-9]{1,3})\.([0-9])s-(.+)$ ]] || continue
+        KNOWN_TENTHS[${BASH_REMATCH[3]}]=$(( 10#${BASH_REMATCH[1]} * 10 + 10#${BASH_REMATCH[2]} ))
+    done
+}
+
 # Of the files in this folder sharing a tag, keep the quickest and drop the
 # rest. The names carry zero-padded seconds at the front - 04.5s-... - which
 # was done so that a file manager sorts them honestly; it means the plain
@@ -1134,47 +1177,89 @@ do_sweep() {
         [ -n "${idxs[0]:-}" ] || die 'no config is rented from any of those'
     fi
 
-    # One address per hosting company. Twenty-odd companies stand behind a
-    # thousand-odd addresses, and being blocked is mostly a property of the
-    # company rather than of the address - so this answers "whose addresses
-    # still work" in twenty tests where --one-per needs a hundred and forty.
-    # The coarsest survey there is, and the one to run first.
-    if [ "$ONE_PER_LANDLORD" -eq 1 ]; then
-        [ "$ONE_PER" -eq 1 ] && info '--one-per and --one-per-landlord together: the narrower one wins.'
-        # --landlord/--pick-landlord already paid for the lookup. On its own
-        # this has to ask for it.
-        if [ ${#LORD_OF[@]} -eq 0 ]; then
+    # Narrowing to one address per group. Three shapes of group, one piece of
+    # machinery: only the key changes.
+    #
+    #   --one-per                    the location            ~141 tests
+    #   --one-per-landlord-location  the company, per place  ~150 tests
+    #   --one-per-landlord           the company             ~21 tests
+    #
+    # The middle one is the one to reach for once a sweep has told you a
+    # company is worth having: a location is only ever rented from one
+    # company, but a company is spread over dozens of locations and they do
+    # not share a fate - HostRoyale being fine in Paris says nothing about
+    # HostRoyale in Lisbon. Nine locations, nine tests, whatever the
+    # forty-nine files underneath them say.
+    #
+    # And out of each group it takes the one that was quickest last time
+    # rather than whichever sorts first, since the names in success/ have been
+    # carrying that number all along.
+    local group_by=''
+    if   [ "$ONE_PER_LANDLORD" -eq 1 ];     then group_by=lord
+    elif [ "$ONE_PER_LANDLORD_LOC" -eq 1 ]; then group_by=lordloc
+    elif [ "$ONE_PER" -eq 1 ];              then group_by=loc
+    fi
+
+    if [ -n "$group_by" ]; then
+        if [ $((ONE_PER + ONE_PER_LANDLORD + ONE_PER_LANDLORD_LOC)) -gt 1 ]; then
+            info "more than one --one-per… asked for; using --$(
+                case $group_by in
+                    lord)    printf 'one-per-landlord' ;;
+                    lordloc) printf 'one-per-landlord-location' ;;
+                    *)       printf 'one-per' ;;
+                esac)"
+        fi
+
+        # --landlord/--pick-landlord already paid for the lookup. On their own
+        # the company modes have to ask for it.
+        if [ "$group_by" != loc ] && [ ${#LORD_OF[@]} -eq 0 ]; then
             head_ 'Landlords'
             load_landlords "${idxs[@]}"
         fi
-        local lord untraced=0 kept=()
-        declare -A seen_lord_map=()
+        load_known_times
+
+        local lord key t kept=() order=() untraced=0 known=0
+        declare -A pick_idx=() pick_t=()
         for i in "${idxs[@]}"; do
-            lord=${LORD_OF[$i]:-}
-            [ -n "$lord" ] || { untraced=$((untraced + 1)); continue; }
-            [ -n "${seen_lord_map[$lord]:-}" ] && continue
-            seen_lord_map[$lord]=1
-            kept+=("$i")
+            split_config_name "${CFG_NAME[$i]}"
+            if [ "$group_by" = loc ]; then
+                key=$LOC_KEY
+            else
+                lord=${LORD_OF[$i]:-}
+                [ -n "$lord" ] || { untraced=$((untraced + 1)); continue; }
+                if [ "$group_by" = lord ]; then key=$lord
+                else                            key="$lord|$LOC_KEY"
+                fi
+            fi
+
+            # Unknown sorts last. A config that has never connected should not
+            # displace one measured at four seconds just because there is
+            # nothing on record about it.
+            t=${KNOWN_TENTHS[$BASE_KEY]:-99999}
+            if [ -z "${pick_idx[$key]+set}" ]; then
+                order+=("$key"); pick_idx[$key]=$i; pick_t[$key]=$t
+            elif [ "$t" -lt "${pick_t[$key]}" ]; then
+                pick_idx[$key]=$i; pick_t[$key]=$t
+            fi
+        done
+
+        for key in "${order[@]}"; do
+            kept+=("${pick_idx[$key]}")
+            [ "${pick_t[$key]}" -lt 99999 ] && known=$((known + 1))
         done
         [ ${#kept[@]} -gt 0 ] || die 'not one of these addresses could be traced to a hosting company, so there is nothing to take one of. Sweep with --one-per instead.'
         [ "$untraced" -gt 0 ] && warn "$untraced address(es) could not be traced to a company - left out"
         idxs=("${kept[@]}")
-        info "${#idxs[@]} companies, one address each"
 
-    # One address per location rather than all four of them. A hostname
-    # usually resolves to several and you got a file for each; this answers
-    # "which places work" in a fraction of the time, and the addresses of a
-    # place worth having can be swept in full afterwards.
-    elif [ "$ONE_PER" -eq 1 ]; then
-        local seen_loc=() key kept=()
-        declare -A seen_loc_map=()
-        for i in "${idxs[@]}"; do
-            key=$(base_config_name "${CFG_NAME[$i]}" | sed -E 's/_[0-9.]+\.ovpn$//')
-            [ -n "${seen_loc_map[$key]:-}" ] && continue
-            seen_loc_map[$key]=1
-            kept+=("$i")
-        done
-        idxs=("${kept[@]}")
+        local n=${#idxs[@]} plural=s
+        [ "$n" -eq 1 ] && plural=''
+        case $group_by in
+            lord)    info "$n compan$([ "$n" -eq 1 ] && printf y || printf ies), one address each" ;;
+            lordloc) info "$n company-and-location pair$plural, one address each" ;;
+            loc)     info "$n location$plural, one address each" ;;
+        esac
+        [ "$known" -gt 0 ] &&
+            info "$known of them chosen as the quickest a previous sweep recorded"
     fi
 
     if [ "$FIRST" -gt 0 ] && [ ${#idxs[@]} -gt "$FIRST" ]; then
@@ -1501,6 +1586,7 @@ LANDLORD=''
 PICK_LANDLORD=0
 ONE_PER=0
 ONE_PER_LANDLORD=0
+ONE_PER_LANDLORD_LOC=0
 FIRST=0
 NO_OWNER=0
 RETEST=0
@@ -1524,6 +1610,7 @@ while [ $# -gt 0 ]; do
         --pick-landlord)   PICK_LANDLORD=1; shift ;;
         --one-per)         ONE_PER=1; shift ;;
         --one-per-landlord) ONE_PER_LANDLORD=1; shift ;;
+        --one-per-landlord-location) ONE_PER_LANDLORD_LOC=1; shift ;;
         --first)           FIRST=${2:?--first needs a number}; shift 2 ;;
         --no-owner)        NO_OWNER=1; shift ;;
         --retest)          RETEST=1; shift ;;
