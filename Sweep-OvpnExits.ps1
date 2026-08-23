@@ -978,9 +978,10 @@ try {
                  ([IO.Path]::GetFullPath($SuccessDir).TrimEnd('\'))
 
     if ($Wsl) {
-        # -Timeout only when you asked for it: the two scripts disagree about
-        # the default (15 here, 45 there) and forwarding ours unasked would
-        # quietly shorten every WSL sweep.
+        # -Timeout only when you asked for it. The two agree on 15 now, so
+        # forwarding it would change nothing - but they agree by having the
+        # same number written in two files, and sending ours would hide the
+        # day that stops being true.
         $t = if ($PSBoundParameters.ContainsKey('Timeout')) { $Timeout } else { 0 }
         if ($Force) { Write-Warn '-Force has no counterpart in the Linux script and is not passed on.' }
         exit (Invoke-WslSweep -Distro $WslDistro -Filter $Name -Sites $Site `

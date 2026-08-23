@@ -47,7 +47,15 @@ GSETTINGS_FILE=$STATE/proxy-mode
 # How long to wait for the handshake before calling it a failure, and how long
 # a single reachability probe may take. The probe is short on purpose: it runs
 # before anything else and a dead address should not cost twenty seconds.
-WAIT=45
+#
+# Fifteen, the same as the Windows half. It was 45 here, which meant the two
+# sides could reach opposite verdicts on the same file - a server that takes
+# half a minute to answer passed on Linux and was written off on Windows - and
+# a number that decides what counts as working should not depend on which
+# machine you happened to sweep from. It is also most of what a long sweep
+# costs: every dead address is paid for in full. --timeout raises it for one
+# run when you are chasing a server you know is slow.
+WAIT=15
 PROBE_TIMEOUT=8
 
 
