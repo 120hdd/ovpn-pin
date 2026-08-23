@@ -3,9 +3,18 @@ success/
 sitetest/
 
 # The credentials themselves, and the auth file written from them.
+#
+# .env.* as well as .env: the moment anyone edits this file they make a copy
+# first - .env.bak, .env.old, .env.2 - and that copy holds the same password
+# while matching none of the rules below. Ignoring the pattern is easier than
+# noticing the one time it gets staged. .env.example is exempted after it,
+# since it is the one such file that is meant to be committed and has no real
+# password in it.
 .env
+.env.*
 !.env.example
 .ovpn-auth
+.ovpn-auth.*
 
 # pid, log and what-is-connected, written while a tunnel is up.
 .state/
