@@ -1845,7 +1845,17 @@ info "openvpn started, waiting for the handshake (up to ${WAIT}s)..."
 wait_for_up
 case $? in
     0)  report_up "$SEL_IDX" "$MODE"
-        [ "$SUPERVISE" -eq 1 ] && supervise ;;
+        # The exit below is not decoration. `[ ... ] && supervise` was the last
+        # command in the file, so with --supervise off - which is every ordinary
+        # connect - the false test *became* the exit status, and a tunnel that
+        # came up perfectly reported code 1 to whatever ran us. run.sh printed
+        # "that exited with code 1" directly under "[ok] Up", which reads as
+        # the connect having failed after saying it worked.
+        #
+        # supervise never returns; it exits 0 on a signal and 1 when the tunnel
+        # dies. So this line is reached only when we were not asked to stay.
+        [ "$SUPERVISE" -eq 1 ] && supervise
+        exit 0 ;;
     1)  # A dead end. Take it back down rather than leave a daemon retrying
         # behind our back and a state file claiming a tunnel is up.
         do_stop 1
