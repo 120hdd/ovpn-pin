@@ -267,6 +267,45 @@ Some notes on what it does and doesn't touch:
 - Without a `.env`, nothing about auth is touched at all — the Linux script
   then behaves exactly like the Windows one.
 
+### Keeping those two files to yourself (Windows)
+
+`.env` and `.ovpn-auth` hold your password in clear. On Linux the scripts warn
+if either is readable by anyone else, and `chmod 600` fixes it.
+
+**On Windows `chmod` does nothing.** NTFS has no mode bits, and git-bash
+returns success without changing anything:
+
+```
+$ ls -l .env
+644  .env
+$ chmod 600 .env      # exits 0
+$ ls -l .env
+644  .env             # unchanged
+```
+
+What decides it there is the ACL, and a folder that grants read to a group
+passes it down to every file inside — so a repo you cloned into a shared or
+sandboxed folder hands your password to whoever that group is, silently. The
+sweeper now checks and prints the exact fix:
+
+```
+  [warn] C:\...\ovpn-pin\.env can be read by SOMEGROUP
+         That file holds your VPN password. chmod does nothing on NTFS -
+         it is an ACL, so it takes icacls:
+              icacls "C:\...\ovpn-pin\.env" /inheritance:d
+              icacls "C:\...\ovpn-pin\.env" /remove:g "SOMEGROUP"
+```
+
+The first line stops the file inheriting from the folder; the second takes away
+what it already inherited. Nothing else in the folder is affected, so a group
+that needs to read the repo still can — it just cannot read your password.
+`icacls <file> /inheritance:e` puts it back.
+
+SYSTEM, the local Administrators group and you are not reported. An
+administrator can take ownership of any file and rewrite its ACL, so listing
+them would be a warning you learn to scroll past — and a warning nobody reads
+protects nothing.
+
 ### Changing your password
 
 Edit `OVPN_USER` / `OVPN_PASS` in `.env` and connect as usual. `.ovpn-auth` is

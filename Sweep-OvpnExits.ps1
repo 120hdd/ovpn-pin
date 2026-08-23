@@ -418,6 +418,58 @@ function Read-EnvCredentials {
     $null
 }
 
+# The Linux half warns when .env is readable by anyone else - one stat call,
+# because the answer is three digits. Windows has no mode bits, so this asks
+# the question the mode bits were standing in for: is there anyone on this ACL,
+# other than me, who can read the contents of a file holding my VPN password.
+#
+# Worth having rather than assuming it is fine. On the machine this was written
+# on the answer was yes: a group had been granted Read on the repo folder with
+# the inherit flags set, so every file underneath - .env and .ovpn-auth
+# included - picked it up, and nothing ever said so. `chmod 600` is no help
+# either; on NTFS it returns success and changes nothing, which is worse than
+# failing.
+function Write-WarnIfReadable {
+    param([string] $Path)
+
+    if (-not (Test-Path $Path)) { return }
+    try { $acl = Get-Acl -Path $Path -ErrorAction Stop } catch { return }
+
+    # SYSTEM and the local Administrators group can read anything on the
+    # machine whatever the ACL says - an administrator can take ownership and
+    # rewrite it - so reporting them would be a warning you learn to scroll
+    # past, and a warning nobody reads protects nothing.
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $expected = @($me, 'NT AUTHORITY\SYSTEM', 'BUILTIN\Administrators',
+                  'CREATOR OWNER', 'OWNER RIGHTS')
+
+    # ReadData, not Read. Read is a composite that includes ReadPermissions,
+    # and being able to see who else has access is not being able to see the
+    # password - flagging it would be a false alarm on ordinary ACLs.
+    $readData = [int][Security.AccessControl.FileSystemRights]::ReadData
+
+    $others = @()
+    foreach ($ace in $acl.Access) {
+        if ($ace.AccessControlType -ne 'Allow') { continue }
+        $who = $ace.IdentityReference.Value
+        if ($expected -contains $who) { continue }
+        if (([int] $ace.FileSystemRights -band $readData) -eq 0) { continue }
+        if ($others -notcontains $who) { $others += $who }
+    }
+    if ($others.Count -eq 0) { return }
+
+    Write-Warn "$Path can be read by $($others -join ', ')"
+    Write-Info 'That file holds your VPN password. chmod does nothing on NTFS -'
+    Write-Info 'it is an ACL, so it takes icacls:'
+    Write-Info "     icacls `"$Path`" /inheritance:d"
+    foreach ($who in $others) {
+        Write-Info "     icacls `"$Path`" /remove:g `"$who`""
+    }
+    Write-Info 'The first line stops it inheriting from the folder; the rest'
+    Write-Info 'take away what it has already inherited. Nothing else in the'
+    Write-Info 'folder is affected.'
+}
+
 # .ovpn-auth is a cache of what .env says. It used to be consulted first and
 # never rechecked, so editing a password in .env and sweeping again went on
 # using the old one - and the server's rejection points at the password rather
@@ -443,6 +495,11 @@ function Resolve-AuthFile {
 
     $existing = Join-Path $root '.ovpn-auth'
     $envFile = if ($EnvPath) { $EnvPath } else { Join-Path $root '.env' }
+
+    # Both of these hold the password in clear, and both are checked - a
+    # locked-down .env beside a world-readable .ovpn-auth protects nothing.
+    Write-WarnIfReadable $envFile
+    Write-WarnIfReadable $existing
 
     $cred = Read-EnvCredentials $envFile
     if ($cred) {
