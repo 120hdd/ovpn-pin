@@ -1,0 +1,274 @@
+#!/usr/bin/env bash
+#
+# ovpn - one name for the three scripts in this repo, and one idea on top of
+# them: the folder you are standing in is the folder you meant.
+#
+#     cd ~/ovpn-pin/success
+#     ovpn connect uk
+#
+# connects to a config in success/, not in pinned/. Nothing else in the repo
+# works that way - ovpn-connect.sh reads one folder, decided by OVPN_OUT_DIR
+# and defaulting to pinned/ - and that is deliberate: a script that quietly
+# acts on wherever you happen to be is a bad script. A command you typed the
+# name of, standing in a folder full of .ovpn files, is a different case. So
+# the convenience lives here, in the wrapper, and the scripts stay literal.
+#
+# Install it with `./ovpn install`, which drops a symlink in ~/.local/bin.
+
+set -uo pipefail
+
+# Through the symlink, not from it. ~/.local/bin/ovpn is where this gets run
+# from; dirname of that is ~/.local/bin, which is not where ovpn-connect.sh
+# lives. readlink -f follows the link back to the repo.
+SELF_PATH=$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null)
+[ -n "$SELF_PATH" ] || SELF_PATH=${BASH_SOURCE[0]}
+ROOT=$(cd -- "$(dirname -- "$SELF_PATH")" && pwd)
+
+CON=$ROOT/ovpn-connect.sh
+PIN=$ROOT/resolve-ovpn-remote.sh
+MENU=$ROOT/run.sh
+
+if [ -t 1 ]; then
+    C_OFF=$'\033[0m'; C_CYAN=$'\033[36m'; C_GRAY=$'\033[90m'
+    C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
+else
+    C_OFF=''; C_CYAN=''; C_GRAY=''; C_RED=''; C_GREEN=''; C_YELLOW=''
+fi
+
+note() { printf '  %s%s%s\n' "$C_GRAY" "$*" "$C_OFF"; }
+ok()   { printf '  %s[ ok ]%s %s\n' "$C_GREEN" "$C_OFF" "$*"; }
+warn() { printf '  %s[warn]%s %s\n' "$C_YELLOW" "$C_OFF" "$*"; }
+die()  { printf '\n  %s[fail]%s %s\n\n' "$C_RED" "$C_OFF" "$*" >&2; exit 1; }
+
+for f in "$CON" "$PIN" "$MENU"; do
+    [ -f "$f" ] || die "$(basename -- "$f") is missing from $ROOT.
+         The symlink points at a copy of the repo that has moved or been
+         deleted. Re-run ./ovpn install from wherever the repo is now."
+done
+
+# --------------------------------------------------------------- the folder
+
+# Everything below decides one thing: whether to set OVPN_OUT_DIR to $PWD.
+#
+# It says no far more often than yes, because getting this wrong means acting
+# on a folder the user did not mean, and the failure would be silent - a sweep
+# of the wrong twenty configs looks exactly like a sweep of the right twenty.
+use_cwd() {
+    local here f
+
+    # Anything explicit outranks standing somewhere. If OVPN_OUT_DIR is
+    # already set, or the command line names a folder itself, that is an
+    # answer and this function has no business overriding it.
+    [ -n "${OVPN_OUT_DIR:-}" ] && return 0
+    case " $* " in
+        *' --retest '*|*' --success-dir '*|*' --sitetest-dir '*) return 0 ;;
+    esac
+
+    here=$PWD
+    # The repo root holds scripts, not configs. Running `ovpn connect` from
+    # there means pinned/, which is what the script does by itself.
+    [ "$here" = "$ROOT" ] && return 0
+
+    # A folder with no .ovpn in it is not a config folder, and pretending it
+    # is would turn `ovpn stop` typed in your home directory into an error
+    # about there being no configs there.
+    for f in "$here"/*.ovpn; do
+        [ -e "$f" ] || return 0
+        break
+    done
+
+    # configs/ holds the downloaded originals - the ones that still point at
+    # a hostname. Connecting to those is precisely what this repo exists to
+    # avoid, so it is worth one line rather than a puzzling failure later.
+    if [ "$here" = "$ROOT/configs" ]; then
+        warn 'these are the downloaded originals - they still name a hostname,'
+        note '       which is the thing your resolver lies about. Pin them first:'
+        note '            ovpn pin'
+        printf '\n'
+    fi
+
+    export OVPN_OUT_DIR=$here
+    note "folder: $here  ($(count_configs "$here") configs)"
+}
+
+count_configs() {
+    local d=$1 f n=0
+    for f in "$d"/*.ovpn; do [ -e "$f" ] && n=$((n + 1)); done
+    printf '%s' "$n"
+}
+
+# ------------------------------------------------------------------ install
+
+do_install() {
+    local bindir=${1:-$HOME/.local/bin} link
+
+    mkdir -p -- "$bindir" || die "cannot create $bindir"
+    link=$bindir/ovpn
+
+    if [ -e "$link" ] && [ ! -L "$link" ]; then
+        die "$link exists and is not a symlink. Move it out of the way first."
+    fi
+    ln -sfn -- "$SELF_PATH" "$link" || die "cannot write $link"
+
+    # The executable bit does not survive a zip, and a tree cloned on Windows
+    # never had one to record. Everything here is run through `bash` anyway,
+    # so this is only so that ./ovpn-connect.sh keeps working by hand.
+    chmod +x -- "$SELF_PATH" "$CON" "$PIN" "$MENU" 2>/dev/null || true
+
+    printf '\n'
+    ok "$link  ->  $SELF_PATH"
+
+    case ":$PATH:" in
+        *":$bindir:"*)
+            note "$bindir is on your PATH - open a new shell and type: ovpn" ;;
+        *)
+            printf '\n'
+            warn "$bindir is not on your PATH, so the name will not be found yet."
+            note '       Add it, then open a new shell:'
+            printf '\n'
+            note "            echo 'export PATH=\"$bindir:\$PATH\"' >> ~/.bashrc"
+            ;;
+    esac
+    printf '\n'
+    note 'Then, from anywhere:'
+    note '     ovpn                     the menu'
+    note '     ovpn connect uk-lon      connect, by part of a name'
+    note '     ovpn sweep --one-per     test one address per location'
+    note '     ovpn status              what is up'
+    note '     ovpn stop                put everything back'
+    printf '\n'
+    note 'And the reason it is worth having on the PATH:'
+    note '     cd success && ovpn connect uk'
+    note 'acts on success/, because that is where you were standing.'
+    printf '\n'
+}
+
+do_uninstall() {
+    local bindir=${1:-$HOME/.local/bin} link
+    link=$bindir/ovpn
+    printf '\n'
+    if [ -L "$link" ]; then
+        rm -f -- "$link" && ok "removed $link"
+    else
+        note "nothing to remove at $link"
+    fi
+    note 'The repo itself is untouched.'
+    printf '\n'
+}
+
+# --------------------------------------------------------------------- help
+
+usage() {
+    cat <<EOF
+
+  ${C_CYAN}ovpn${C_OFF} - pin, connect, and judge OpenVPN exits
+
+  ${C_GRAY}The folder you are in is the folder it acts on, if that folder has
+  .ovpn files in it. Otherwise: pinned/${C_OFF}
+
+  Connecting
+    ovpn                      the menu
+    ovpn connect [name]       a number, a filename, or part of one
+    ovpn switch <name>        stop what is up, then connect that
+    ovpn stop                 tunnel down, proxy back, kill switch off
+    ovpn status               what is up, and where traffic leaves from
+
+  Testing
+    ovpn sweep [name]         connect to each in turn and judge its exit
+    ovpn sweep --one-per      one address per location
+    ovpn sweep --one-per-landlord
+                              one per hosting company. Start here
+    ovpn sweep --one-per-landlord-location
+                              one per company per location
+    ovpn check                judge the exit you are on right now
+    ovpn dns-check            is DNS going through the tunnel?
+
+  Pinning
+    ovpn pin [args]           resolve the hostnames, write pinned/
+    ovpn sync                 re-resolve what is already pinned
+    ovpn who                  name the company each address is rented from
+
+  Housekeeping
+    ovpn install [dir]        symlink into ~/.local/bin (or dir)
+    ovpn uninstall [dir]      remove that symlink
+    ovpn where                which repo this name points at
+    ovpn help                 this
+    ovpn help connect         every flag ovpn-connect.sh takes
+    ovpn help pin             every flag resolve-ovpn-remote.sh takes
+
+  Anything not listed above is treated as a config name, so
+
+      ovpn uk-lon
+
+  is the same as \`ovpn connect uk-lon\`. Flags are passed straight through:
+
+      cd success && ovpn sweep --one-per --landlord M247 --site example.com
+
+EOF
+}
+
+do_where() {
+    printf '\n'
+    note "repo   : $ROOT"
+    note "command: $SELF_PATH"
+    note "here   : $PWD"
+    if [ -n "${OVPN_OUT_DIR:-}" ]; then
+        note "folder : $OVPN_OUT_DIR  (OVPN_OUT_DIR, already set in your shell)"
+    else
+        local f found=0
+        for f in "$PWD"/*.ovpn; do [ -e "$f" ] && found=1; break; done
+        if [ "$found" = 1 ] && [ "$PWD" != "$ROOT" ]; then
+            note "folder : $PWD  ($(count_configs "$PWD") configs, because you are standing in it)"
+        else
+            note "folder : $ROOT/pinned  ($(count_configs "$ROOT/pinned") configs, the default)"
+        fi
+    fi
+    printf '\n'
+}
+
+# ----------------------------------------------------------------- dispatch
+
+# Through `bash` rather than on the executable bit, for the same reason run.sh
+# does it: a tree that arrived by zip, or was cloned on Windows, has no such
+# bit, and "Permission denied" says nothing about which of those happened.
+con()  { use_cwd "$@"; exec bash "$CON" "$@"; }
+pin()  { exec bash "$PIN" "$@"; }
+
+cmd=${1:-}
+[ $# -gt 0 ] && shift
+
+case $cmd in
+    ''|menu)              exec bash "$MENU" "$@" ;;
+
+    connect|c)            con "$@" ;;
+    switch)               [ $# -gt 0 ] || die 'switch needs a config name: ovpn switch uk-lon'
+                          con --switch "$@" ;;
+    sweep|s)              con --sweep "$@" ;;
+    stop)                 con --stop "$@" ;;
+    status|st)            con --status "$@" ;;
+    dns-check|dnscheck)   con --dns-check "$@" ;;
+    unlock)               con --kill-switch-off "$@" ;;
+    service)              con --install-service "$@" ;;
+
+    pin|p)                pin "$@" ;;
+    sync)                 pin --sync "$@" ;;
+    who)                  pin --who "$@" ;;
+    check|cf)             pin --check-cloudflare "$@" ;;
+
+    install)              do_install "$@" ;;
+    uninstall)            do_uninstall "$@" ;;
+    where)                do_where ;;
+
+    version|-V|--version) exec bash "$CON" --version ;;
+    help|-h|--help)
+        case ${1:-} in
+            connect|sweep|stop|status|c|s) exec bash "$CON" --help ;;
+            pin|sync|who|check|p)          exec bash "$PIN" --help ;;
+            '')                            usage ;;
+            *) die "no help for '$1'. Try: ovpn help, ovpn help connect, ovpn help pin" ;;
+        esac ;;
+
+    # Not a subcommand. Either a flag, which belongs to ovpn-connect.sh, or a
+    # config name - `ovpn uk-lon` being the short way to say connect.
+    *)                    con "$cmd" "$@" ;;
+esac

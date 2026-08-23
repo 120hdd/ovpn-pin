@@ -35,6 +35,7 @@ ovpn-pin/
   Sweep-OvpnExits.ps1      <- Windows: judge every exit in turn
   run.cmd                  <- Windows: double-click this
   run.sh                   <- Linux: the same menu
+  ovpn                     <- Linux: one command for all of it. ./ovpn install
   resolve-ovpn-remote.sh   <- Linux: pin the configs
   ovpn-connect.sh          <- Linux: connect, and drop the proxy
   ovpn-lib.sh              <- what the two Linux scripts share
@@ -119,6 +120,69 @@ OpenVPN client and connect, or on Linux:
 ```bash
 sudo openvpn --config pinned/de-fra_tcp_146.70.160.237.ovpn
 ```
+
+## One command, from anywhere (Linux)
+
+```bash
+./ovpn install
+```
+
+That drops a symlink at `~/.local/bin/ovpn` and tells you whether that folder
+is on your `PATH`. Nothing is copied and nothing outside that one file is
+touched; `./ovpn uninstall` removes it again. Pass a folder to install
+somewhere else — `./ovpn install /usr/local/bin`, with `sudo`.
+
+Then, from any directory:
+
+| | |
+|---|---|
+| `ovpn` | the menu |
+| `ovpn connect uk-lon` | a number, a filename, or part of one |
+| `ovpn uk-lon` | the same thing — an unrecognised word is a config name |
+| `ovpn switch uk-lon` | stop what is up, then connect that |
+| `ovpn stop` / `ovpn status` | |
+| `ovpn sweep --one-per-landlord` | flags pass straight through |
+| `ovpn pin` / `ovpn sync` / `ovpn who` | the pinner |
+| `ovpn check` | judge the exit you are on right now |
+| `ovpn where` | which repo this name points at, and which folder it would use |
+
+### The folder you are standing in
+
+This is the part worth having it for:
+
+```bash
+cd ~/ovpn-pin/success
+ovpn connect uk
+```
+
+connects to something in `success/`, not in `pinned/`. Same in
+`sitetest/www-scamspotter-org/`, or any other folder with `.ovpn` files in it.
+It says which folder it picked, on one line, before anything else happens:
+
+```
+  folder: /home/you/ovpn-pin/success  (533 configs)
+```
+
+`ovpn-connect.sh` itself does not work this way and is not meant to: it reads
+one folder, named by `OVPN_OUT_DIR` and defaulting to `pinned/`. A script that
+quietly acts on wherever you happen to be is a script you cannot put in a cron
+job. So the convenience lives in the `ovpn` wrapper, which is the thing you
+type by hand, and the scripts underneath stay literal.
+
+It declines more often than it accepts, which is the point:
+
+- `OVPN_OUT_DIR` already set, or `--retest` / `--success-dir` / `--sitetest-dir`
+  on the command line — you already said which folder, so it stays out of it
+- the repo root — that holds scripts, not configs
+- any folder with no `.ovpn` in it, so `ovpn stop` in your home directory is
+  not an error about there being no configs there
+- `configs/` it will use, but warns first: those are the downloaded originals
+  that still name a hostname, which is the thing this repo exists to work around
+
+One consequence worth knowing: standing in `success/` and running `ovpn sweep`
+is the same as `--retest`, so anything that has stopped connecting is **dropped
+from that folder**. The sweep says so before it starts. Standing in a `sitetest/`
+folder is not — nothing is deleted there.
 
 ## Stop the client asking for a password (Linux)
 

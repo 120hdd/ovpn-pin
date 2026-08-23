@@ -13,6 +13,12 @@
 # put CRLF into them and then commit it back.
 *.sh            text eol=lf
 *.ovpn          text eol=lf
+
+# The dispatcher has no extension - it is meant to be typed, not sourced - so
+# it matches none of the rules above and needs naming outright. Leading slash
+# so this is the file at the root and not some future folder of that name.
+/ovpn           text eol=lf
+
 .env.example    text eol=lf
 .gitignore      text eol=lf
 .gitattributes  text eol=lf
