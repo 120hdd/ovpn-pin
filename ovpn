@@ -113,6 +113,60 @@ count_configs() {
 
 # ------------------------------------------------------------------ install
 
+# Debian and Ubuntu ship a ~/.profile that adds ~/.local/bin to the PATH *if
+# the folder exists*. Two things about that are easy to get wrong, and the
+# first version of this got both:
+#
+#   - the test runs at login. If the folder did not exist then - and until
+#     `ovpn install` ran, it did not - the line does nothing, and no amount of
+#     opening new terminals re-runs it. It takes a logout.
+#   - ~/.profile is for login shells. A new terminal window is an interactive
+#     non-login shell: it reads ~/.bashrc and never looks at ~/.profile at all.
+#
+# So "your ~/.profile already handles it" is true and useless. The rc file is
+# what a new terminal actually reads, so that is where the line goes.
+add_to_path() {
+    local bindir=$1 rc line
+    line="export PATH=\"$bindir:\$PATH\""
+
+    case ${SHELL##*/} in
+        zsh)  rc=$HOME/.zshrc ;;
+        bash) rc=$HOME/.bashrc ;;
+        *)    rc='' ;;
+    esac
+
+    if [ -z "$rc" ]; then
+        printf '\n'
+        warn "$bindir is not on your PATH."
+        note "       Your shell is ${SHELL##*/}, so add this wherever it keeps its PATH:"
+        note "            $line"
+        return 0
+    fi
+
+    if [ -f "$rc" ] && grep -qsF "$bindir" "$rc"; then
+        note "$rc already adds $bindir"
+        note 'so a new terminal will find it. This one will not - for that:'
+        note "     $line"
+        return 0
+    fi
+
+    { printf '\n# added by ovpn install\n%s\n' "$line" >> "$rc"; } 2>/dev/null || {
+        printf '\n'
+        warn "could not write $rc. Add this line to it yourself:"
+        note "            $line"
+        return 0
+    }
+
+    printf '\n'
+    ok "added $bindir to your PATH in $rc"
+    note 'Every new terminal will find it. This one already started, so for'
+    note 'the shell you are in now:'
+    printf '\n'
+    note "     $line"
+    printf '\n'
+    note "Undo by deleting that line from $rc."
+}
+
 do_install() {
     local bindir=${1:-$HOME/.local/bin} link
 
@@ -132,28 +186,9 @@ do_install() {
     printf '\n'
     ok "$link  ->  $SELF_PATH"
 
-    # Whether the name will be found is not the same question as whether it is
-    # on the PATH of the shell that ran the install. Debian and Ubuntu ship a
-    # ~/.profile that adds ~/.local/bin at login *if the folder exists* - and
-    # until a moment ago it did not, so the current shell can easily be the
-    # last one that will ever miss it. Saying "add this to your .bashrc" here
-    # would have you write a line that is already in .profile.
     case ":$PATH:" in
-        *":$bindir:"*)
-            note "$bindir is on your PATH - type: ovpn" ;;
-        *)
-            if grep -qs "$(basename -- "$bindir")" "$HOME/.profile" 2>/dev/null &&
-               grep -qs 'local/bin' "$HOME/.profile" 2>/dev/null; then
-                note "$bindir is not on this shell's PATH, but ~/.profile adds it"
-                note 'at login - so open a new terminal and the name will be there.'
-            else
-                printf '\n'
-                warn "$bindir is not on your PATH, so the name will not be found yet."
-                note '       Add it, then open a new shell:'
-                printf '\n'
-                note "            echo 'export PATH=\"$bindir:\$PATH\"' >> ~/.bashrc"
-            fi
-            ;;
+        *":$bindir:"*) note "$bindir is on your PATH - type: ovpn" ;;
+        *)             add_to_path "$bindir" ;;
     esac
     printf '\n'
     note 'Then, from anywhere:'
