@@ -79,6 +79,31 @@ if paths.WORKER_FLAG in sys.argv:
     raise SystemExit(0)
 
 
+def _diagnostics_to_file(name):
+    """A --noconsole build has no stdout at all, so a diagnostic that prints
+    is a diagnostic nobody can read. Everything goes to a file as well, and
+    the path is the answer to "send me the output"."""
+    os.makedirs(paths.STATE_DIR, exist_ok=True)
+    path = os.path.join(paths.STATE_DIR, name)
+    stream = open(path, 'w', encoding='utf-8', buffering=1)
+    if sys.stdout is None:
+        sys.stdout = sys.stderr = stream
+        return stream, path
+
+    class Tee:
+        def write(self, t):
+            real.write(t)
+            stream.write(t)
+
+        def flush(self):
+            real.flush()
+            stream.flush()
+
+    real = sys.stdout
+    sys.stdout = Tee()
+    return stream, path
+
+
 def _tray_importable():
     try:
         import pystray                                        # noqa: F401
@@ -121,7 +146,72 @@ def run_selftest():
 
 
 if '--selftest' in sys.argv:
+    _diagnostics_to_file('selftest.txt')
     run_selftest()
+    raise SystemExit(0)
+
+
+def run_probe_test():
+    """Try to reach a handful of exits and print exactly why each failed.
+
+    Written because the built app could not connect while the same code run
+    from the repo connected in three seconds, and the difference was
+    invisible from outside: no log, no worker, nothing to read. A frozen app
+    fails in ways source never does - a missing certificate store being the
+    classic - and the only way to see it is to make the frozen binary say so
+    itself.
+    """
+    import time
+    import engine
+    import winproxy
+    px = engine.px
+
+    e = engine.Engine(winproxy.SystemProxy(paths.SAVED_PROXY))
+    print(f'servers folder : {e.folder}')
+    print(f'servers        : {len(e.servers())}')
+
+    try:
+        import ssl
+        ctx = ssl.create_default_context()
+        stats = ctx.cert_store_stats()
+        print(f'CA certificates: {stats}')
+        if not stats.get('x509_ca'):
+            print('  !! no CA certificates loaded - every TLS handshake will fail')
+    except Exception as exc:
+        print(f'CA certificates: FAILED {exc!r}')
+
+    user, password = e.credentials()
+    pool = sorted(e.servers(), key=lambda s: (s.seconds is None, s.seconds or 0))
+    seen, tries = set(), []
+    for s in pool:
+        key = f'{s.country}-{s.city}'
+        if key in seen:
+            continue
+        seen.add(key)
+        tries.append(s)
+        if len(tries) >= 8:
+            break
+
+    print()
+    for s in tries:
+        ip, host = px.read_config(s.path)
+        t0 = time.monotonic()
+        try:
+            took = px.can_connect(px.Exit(ip, 443, host, user, password), 8)
+            print(f'  OK    {host:38} {took:.2f}s')
+        except Exception as exc:
+            print(f'  FAIL  {host:38} {time.monotonic()-t0:.2f}s  '
+                  f'{type(exc).__name__}: {exc}')
+    print()
+
+
+if '--probe-test' in sys.argv:
+    _stream, _path = _diagnostics_to_file('probe-test.txt')
+    try:
+        run_probe_test()
+    except Exception:
+        traceback.print_exc(file=sys.stdout)
+    print(f'(written to {_path})')
     raise SystemExit(0)
 
 
@@ -171,11 +261,15 @@ class Api:
         # recursing into a Window reaches .NET types and throws, which kills
         # the whole bridge and leaves a page that loads and can call nothing.
         self._sysproxy = winproxy.SystemProxy(paths.SAVED_PROXY)
-        self._engine = Engine(self._sysproxy)
+        self._settings_early = load_settings()
+        self._engine = Engine(
+            self._sysproxy,
+            folder=self._settings_early.get('folder') or None,
+            set_system_proxy=self._settings_early.get('systemProxy', True))
         self._window = None
         self._tray = None
         self._busy = False
-        self._settings = load_settings()
+        self._settings = self._settings_early
         self._since = None
 
     # -- talking to the page ----------------------------------------------
@@ -195,17 +289,100 @@ class Api:
 
     # -- what the page asks for -------------------------------------------
 
+    def _describe(self):
+        return {'countries': self._engine.catalogue(),
+                'serverCount': len(self._engine.servers()),
+                'folder': self._engine.folder,
+                'systemProxy': self._engine.set_system_proxy,
+                'picked': self._settings.get('picked', 'auto'),
+                'about': (f'{APP_NAME}  -  port {self._engine.PORT}'
+                          f'\n{paths.APP_DIR}')}
+
+    def info(self):
+        """Everything the settings sheet needs, re-read rather than cached -
+        the folder can change while the window is open."""
+        return self._describe()
+
     def boot(self):
         recovered = False
         if self._sysproxy.stashed() and not self._engine.running():
             recovered = self._sysproxy.restore()
         status = self._engine.status()
         self._retray('on' if status.get('state') == 'on' else 'off')
-        return {'status': status,
-                'countries': self._engine.catalogue(),
-                'picked': self._settings.get('picked', 'auto'),
-                'recovered': recovered,
-                'hasCredentials': self._has_credentials()}
+        out = self._describe()
+        out.update({'status': status, 'recovered': recovered,
+                    'hasCredentials': self._has_credentials()})
+        return out
+
+    def whoami(self):
+        """The address you have before anything is changed.
+
+        In a thread: it is a network round trip, and on a filtered line it
+        can take the full timeout to fail. Nothing on screen waits for it.
+        """
+        def work():
+            try:
+                self._emit('RealIp', self._engine.current_ip())
+            except Exception:
+                self._emit('RealIp', {})
+        threading.Thread(target=work, daemon=True).start()
+        return {'ok': True}
+
+    def setSystemProxy(self, on):
+        """Whether connecting should move the whole machine or just serve.
+
+        Changing it while connected takes effect immediately, in the
+        direction asked for - the alternative is a switch that lies until the
+        next connect.
+        """
+        on = bool(on)
+        self._engine.set_system_proxy = on
+        self._settings['systemProxy'] = on
+        save_settings(self._settings)
+        if self._engine.running():
+            if on:
+                self._sysproxy.engage('127.0.0.1', self._engine.PORT)
+            else:
+                self._sysproxy.restore()
+        return {'ok': True, 'systemProxy': on}
+
+    def chooseFolder(self):
+        """A real Windows folder picker, not a text box to paste a path into."""
+        try:
+            picked = self._window.create_file_dialog(
+                webview.FOLDER_DIALOG, directory=self._engine.folder)
+        except Exception as e:
+            return {'ok': False, 'error': f'Could not open the folder picker: {e}'}
+        if not picked:
+            return {'ok': False}
+        folder = picked[0] if isinstance(picked, (list, tuple)) else picked
+        try:
+            count = len([f for f in os.listdir(folder) if f.endswith('.ovpn')])
+        except OSError as e:
+            return {'ok': False, 'error': f'Cannot read that folder: {e}'}
+        if not count:
+            return {'ok': False,
+                    'error': 'No .ovpn files in that folder, so it was not used.'}
+        self._engine.folder = folder
+        self._settings['folder'] = folder
+        save_settings(self._settings)
+        return {'ok': True, 'folder': folder, 'count': count}
+
+    def resetFolder(self):
+        self._engine.folder = paths.servers_dir()
+        self._settings.pop('folder', None)
+        save_settings(self._settings)
+        return {'ok': True, 'folder': self._engine.folder}
+
+    def copy(self, text):
+        """A fallback for the clipboard API, which needs a secure context and
+        does not always get one from file://."""
+        try:
+            self._window.evaluate_js(
+                'navigator.clipboard.writeText(%s)' % json.dumps(str(text)))
+        except Exception:
+            pass
+        return {'ok': True}
 
     def _has_credentials(self):
         try:
@@ -235,6 +412,10 @@ class Api:
                 self._since = time.time()
                 self._retray('on')
                 self._emit('Connected', result)
+                # The independent check runs after the window already says
+                # connected, because it is a round trip to somebody else's
+                # server and the connection does not depend on it.
+                self._confirm()
             except Exception as e:
                 kind = str(e).split(':')[0] if str(e) else e.__class__.__name__
                 try:
@@ -248,6 +429,25 @@ class Api:
 
         threading.Thread(target=work, daemon=True).start()
         return {'ok': True}
+
+    def _confirm(self):
+        """Ask Cloudflare, through the proxy, what address it sees.
+
+        This is the only evidence the user has that the app did what it
+        claims, so a failure here is reported as unconfirmed rather than
+        hidden - but it never turns a working connection into a failed one.
+        """
+        def work():
+            info = self._engine.exit_info
+            if not info:
+                return
+            try:
+                info['seen_as'] = self._engine.verify()
+            except Exception as e:
+                info['unconfirmed'] = str(e)[:120]
+            if self._engine.exit_info is info:
+                self._emit('Connected', self._engine.status())
+        threading.Thread(target=work, daemon=True).start()
 
     def cancel(self):
         self._engine.cancelled.set()

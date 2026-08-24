@@ -6,15 +6,9 @@
    way. A number invented here, or left on screen after it stopped being true,
    is the one unforgivable bug.
 
-   The last version had a different unforgivable bug — a panel that was
-   supposed to be hidden covered the window and ate every click, because a CSS
-   display rule quietly beat the hidden attribute. Everything that can be a
-   real platform element now is one: the picker is a <dialog>, so its
-   visibility is the browser's business rather than a stylesheet's.
-
-   Fuse is loaded as a plain script rather than a module: pywebview serves
-   local files over file://, where ES module imports are blocked outright,
-   and the failure mode is a page that loads and does nothing. */
+   Fuse is a plain script rather than a module: pywebview serves local files
+   over file://, where ES module imports are blocked outright, and the failure
+   mode is a page that loads and does nothing at all. */
 
 const $ = (id) => document.getElementById(id);
 
@@ -22,26 +16,33 @@ const state = {
   countries: [],
   picked: 'auto',
   mode: 'off',          // off | busy | on | fail
-  lastIp: null,
+  realIp: null,
   fuse: null,
   cursor: 0,
+  systemProxy: true,
 };
+
+const flagUrl = (code) => `url("flags/${code}.svg")`;
 
 /* ------------------------------------------------------------- rendering */
 
-function setExit(ip, place, live) {
-  const el = $('exitIp');
-  el.textContent = ip || '—';
-  el.classList.toggle('was', !live && !!ip);
-  $('exitPlace').textContent = place;
-  $('exit').dataset.state = live ? 'on' : 'off';
-  $('exitCap').textContent = live
-    ? 'Your traffic exits from'
-    : (ip ? 'Last exited from' : 'Your traffic exits from');
+function setIp(el, value, fresh) {
+  if (el.textContent === value) return;
+  el.textContent = value;
+  if (fresh) {
+    el.classList.remove('fresh');
+    void el.offsetWidth;
+    el.classList.add('fresh');
+  }
 }
 
 function setStatus(word, kind, where, host) {
   const s = $('status');
+  if (s.textContent !== word) {
+    s.classList.remove('fresh');
+    void s.offsetWidth;
+    s.classList.add('fresh');
+  }
   s.textContent = word;
   s.dataset.state = kind;
   $('statusWhere').innerHTML = where || '&nbsp;';
@@ -54,38 +55,37 @@ function setHint(text, bad) {
   el.classList.toggle('is-bad', !!bad);
 }
 
+function nameOf(code) {
+  const c = state.countries.find((x) => x.code === (code || '').toLowerCase());
+  return c ? c.name : (code || '').toUpperCase();
+}
+
 function render() {
   const act = $('act');
   act.dataset.mode = state.mode === 'fail' ? 'off' : state.mode;
   $('card').dataset.busy = String(state.mode === 'busy');
+  $('swap').dataset.state = state.mode === 'fail' ? 'off' : state.mode;
   $('pick').disabled = state.mode === 'busy';
-  $('more').hidden = !(state.mode === 'on');
+  $('more').hidden = state.mode !== 'on';
   if (state.mode !== 'on') {
     $('details').hidden = true;
     $('more').setAttribute('aria-expanded', 'false');
   }
+
   const c = state.countries.find((x) => x.code === state.picked);
   $('pickLabel').textContent = state.picked === 'auto'
     ? 'Fastest available' : (c ? c.name : state.picked);
+  $('pickFlag').style.backgroundImage = c ? flagUrl(c.code) : '';
 }
 
 /* --------------------------------------------------------------- picker */
 
 function openPicker() {
-  const dlg = $('picker');
   $('search').value = '';
   state.cursor = 0;
   drawList('');
-  dlg.showModal();
+  $('picker').showModal();
   setTimeout(() => $('search').focus(), 30);
-}
-
-function closePicker() { $('picker').close(); }
-
-function matches(query) {
-  const q = (query || '').trim();
-  if (!q) return state.countries;
-  return state.fuse.search(q).map((r) => r.item);
 }
 
 function drawList(query) {
@@ -103,13 +103,13 @@ function drawList(query) {
     name.append('Fastest available');
     const sub = document.createElement('span');
     sub.className = 'row__sub';
-    sub.textContent = 'Whichever server answers first, right now';
+    sub.textContent = 'Races every location and takes the first to answer';
     name.append(sub);
     auto.append(name);
     list.append(auto);
   }
 
-  const found = matches(q);
+  const found = q ? state.fuse.search(q).map((r) => r.item) : state.countries;
   if (!found.length) {
     const e = document.createElement('p');
     e.className = 'empty';
@@ -123,12 +123,16 @@ function drawList(query) {
     row.type = 'button';
     row.className = 'row' + (state.picked === c.code ? ' is-picked' : '');
     row.dataset.code = c.code;
+    row.style.setProperty('--flag', flagUrl(c.code));
     const name = document.createElement('span');
     name.className = 'row__name';
     name.textContent = c.name;
     const meta = document.createElement('span');
     meta.className = 'row__meta';
-    meta.textContent = c.best != null ? `${c.best.toFixed(1)}s` : '';
+    // How many addresses a country has is what decides whether picking it
+    // will work, so that is the number shown rather than a speed nobody can
+    // act on.
+    meta.textContent = String(c.count);
     row.append(name, meta);
     list.append(row);
   }
@@ -147,7 +151,7 @@ function markCursor() {
 
 function choose(code) {
   state.picked = code;
-  closePicker();
+  $('picker').close();
   render();
   window.pywebview.api.remember(code);
 }
@@ -162,49 +166,53 @@ const STAGES = {
 };
 
 window.onProgress = (p) => {
-  const stage = STAGES[p.phase] || 'Working';
-  let detail = '';
-  if (p.phase === 'probing' && p.total) {
-    detail = `${p.asked || 0} of ${p.total} asked`;
-  }
-  setStatus('CONNECTING', 'busy', stage, detail);
+  const detail = (p.phase === 'probing' && p.total)
+    ? `${p.asked || 0} of ${p.total} asked` : '';
+  setStatus('CONNECTING', 'busy', STAGES[p.phase] || 'Working', detail);
 };
 
 window.onConnected = (status) => {
   state.mode = 'on';
   const e = status.exit || {};
   const seen = e.seen_as || {};
-  const ip = seen.ip || e.ip;
-  state.lastIp = ip;
 
+  // Until the independent check answers there is no verified exit address,
+  // and e.ip is the PROXY's address, not the one websites see - they differ.
+  // Showing it here would put a number under "Seen as" that nothing has
+  // checked, which is the one thing this readout must never do.
+  const confirmed = seen.ip || null;
   const measured = (seen.country || '').toLowerCase();
   const claimed = (e.country || '').toLowerCase();
-  const mName = (state.countries.find((x) => x.code === measured) || {}).name;
-  const cName = (state.countries.find((x) => x.code === claimed) || {}).name;
-  const place = mName || cName || '—';
+  const place = measured ? nameOf(measured) : nameOf(claimed);
 
-  setExit(ip, place, true);
-  setStatus('CONNECTED', 'on', place + (e.cityName ? `, ${e.cityName}` : ''),
-            e.host || '');
+  setIp($('exitIp'), confirmed || (e.unconfirmed ? 'unconfirmed' : 'checking…'),
+        !!confirmed);
+  $('exitPlace').textContent = measured ? place : `${place} (checking)`;
+  setStatus('CONNECTED', 'on', place, e.host || '');
   $('detIn').textContent = `${e.ip || '—'}:443`;
-  $('detOut').textContent = ip || '—';
+  $('detOut').textContent = confirmed || '—';
+  $('detVia').textContent = e.host || '—';
 
-  // The label and the measurement disagree often enough to be worth saying.
   setHint(measured && claimed && measured !== claimed
-    ? `This server is sold as ${cName || claimed.toUpperCase()}, but its traffic really comes out in ${place}. What websites see is the second one.`
+    ? `Sold as ${nameOf(claimed)}, but its traffic really comes out in ${place}. What websites see is the second one.`
     : (e.unconfirmed
         ? 'Connected, but the independent check did not answer. If pages load, it is fine.'
-        : 'Everything on this PC now goes through this connection.'));
+        : (state.systemProxy
+            ? 'Everything on this PC now goes through this connection.'
+            : 'Serving on 127.0.0.1:8899. Windows was left alone, so point what you want at it.')));
   render();
 };
 
 window.onFailed = (err) => {
   state.mode = 'fail';
-  setExit(state.lastIp, 'Not connected', false);
+  setIp($('exitIp'), '—', false);
+  $('exitPlace').textContent = 'not connected';
   setStatus('NOT CONNECTED', 'fail', 'Could not connect', '');
   const say = {
-    'all-refused': 'No server accepted the connection just now. That is normal — wait a minute and try again.',
-    'no-servers': 'No servers for that country. Pick another, or use Fastest available.',
+    'all-refused': state.picked === 'auto'
+      ? 'No server accepted just now. That happens — wait a moment and try again.'
+      : `No ${nameOf(state.picked)} server accepted just now. Try again, or use Fastest available.`,
+    'no-servers': 'No servers in that folder for that country.',
     'no-credentials': 'The username and password file is missing, so there is nothing to sign in with.',
     'cancelled': 'Cancelled.',
     'did-not-start': 'The connection opened but did not come up. Try once more.',
@@ -215,7 +223,8 @@ window.onFailed = (err) => {
 
 window.onDisconnected = (info) => {
   state.mode = 'off';
-  setExit(state.lastIp, 'Not connected', false);
+  setIp($('exitIp'), '—', false);
+  $('exitPlace').textContent = 'not connected';
   setStatus('DISCONNECTED', 'off', '', '');
   setHint(info && info.minutes
     ? `Windows is back to normal. Routed for ${info.minutes} minute${info.minutes === 1 ? '' : 's'}.`
@@ -223,15 +232,23 @@ window.onDisconnected = (info) => {
   render();
 };
 
+window.onRealIp = (info) => {
+  state.realIp = info && info.ip;
+  setIp($('realIp'), (info && info.ip) || 'unknown', true);
+  $('realPlace').textContent = (info && info.country)
+    ? nameOf(info.country) : 'could not check';
+};
+
 /* -------------------------------------------------------------- actions */
 
 async function onAct() {
   if (state.mode === 'busy') {
+    setStatus('CANCELLING', 'off', 'Stopping', '');
     await window.pywebview.api.cancel();
     return;
   }
   if (state.mode === 'on') {
-    setStatus('DISCONNECTING', 'busy', 'Putting Windows back', '');
+    setStatus('DISCONNECTING', 'off', 'Putting Windows back', '');
     const r = await window.pywebview.api.disconnect();
     window.onDisconnected(r && r.session);
     return;
@@ -244,24 +261,58 @@ async function onAct() {
   if (!r.ok) { state.mode = 'off'; render(); }
 }
 
+async function copyIp(el) {
+  const text = (el.textContent || '').trim();
+  if (!text || text === '—' || text === '…' || text === 'unknown') return;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (err) {
+    await window.pywebview.api.copy(text);
+  }
+  el.classList.add('copied');
+  setTimeout(() => el.classList.remove('copied'), 700);
+}
+
+/* ---------------------------------------------------------------- prefs */
+
+function paintPrefs(info) {
+  $('sysProxy').setAttribute('aria-checked', String(state.systemProxy));
+  $('folderPath').textContent = info.folder || '—';
+  $('folderCount').textContent =
+    `${info.serverCount || 0} servers · ${state.countries.length} countries`;
+  $('aboutPaths').textContent = info.about || '';
+}
+
+async function refreshPrefs() {
+  const info = await window.pywebview.api.info();
+  state.countries = info.countries || state.countries;
+  state.fuse = new Fuse(state.countries, {
+    keys: ['name', 'code', 'alias'], threshold: 0.4, ignoreLocation: true,
+  });
+  paintPrefs(info);
+  render();
+  return info;
+}
+
 /* ---------------------------------------------------------------- start */
 
 async function boot() {
   const info = await window.pywebview.api.boot();
   state.countries = info.countries || [];
   state.picked = info.picked || 'auto';
+  state.systemProxy = info.systemProxy !== false;
   state.fuse = new Fuse(state.countries, {
     keys: ['name', 'code', 'alias'], threshold: 0.4, ignoreLocation: true,
   });
+  paintPrefs(info);
 
   if (!info.hasCredentials) {
     setStatus('NOT SET UP', 'fail', 'Missing sign-in details', '');
-    setHint('The file with the username and password is not next to the app, so it cannot connect.', true);
+    setHint('The username and password file is not next to the app, so it cannot connect.', true);
     $('act').disabled = true;
-    $('pick').disabled = true;
+    render();
     return;
   }
-
   if (info.recovered) {
     setHint('The app did not close properly last time. Windows proxy settings have been put back.');
   }
@@ -271,21 +322,23 @@ async function boot() {
     window.onConnected(s);
   } else {
     state.mode = 'off';
-    setExit(null, 'Not connected', false);
     setStatus('DISCONNECTED', 'off', '', '');
-    if (!info.recovered) {
-      setHint(`${state.countries.length} countries ready.`);
-    }
+    if (!info.recovered) setHint(`${state.countries.length} countries ready.`);
     render();
   }
+  // Asked for once the window is already usable: it is a network round trip
+  // and nothing on screen depends on it arriving.
+  window.pywebview.api.whoami();
 }
 
 /* --------------------------------------------------------------- wiring */
 
 $('act').addEventListener('click', onAct);
 $('pick').addEventListener('click', openPicker);
-$('pickerClose').addEventListener('click', closePicker);
+$('pickerClose').addEventListener('click', () => $('picker').close());
 $('search').addEventListener('input', (e) => { state.cursor = 0; drawList(e.target.value); });
+$('realIp').addEventListener('click', (e) => copyIp(e.currentTarget));
+$('exitIp').addEventListener('click', (e) => copyIp(e.currentTarget));
 
 $('more').addEventListener('click', () => {
   const open = $('details').hidden;
@@ -312,16 +365,46 @@ $('picker').addEventListener('keydown', (e) => {
   }
 });
 
+$('settings').addEventListener('click', async () => {
+  await refreshPrefs();
+  $('prefs').showModal();
+});
+$('prefsClose').addEventListener('click', () => $('prefs').close());
+
+$('sysProxy').addEventListener('click', async () => {
+  state.systemProxy = !state.systemProxy;
+  $('sysProxy').setAttribute('aria-checked', String(state.systemProxy));
+  await window.pywebview.api.setSystemProxy(state.systemProxy);
+});
+
+$('chooseFolder').addEventListener('click', async () => {
+  const r = await window.pywebview.api.chooseFolder();
+  if (r && r.ok) {
+    await refreshPrefs();
+    setHint(`Now reading servers from ${r.folder}`);
+  } else if (r && r.error) {
+    setHint(r.error, true);
+  }
+});
+
+$('resetFolder').addEventListener('click', async () => {
+  await window.pywebview.api.resetFolder();
+  await refreshPrefs();
+  setHint('Back to the servers that came with the app.');
+});
+
 window.addEventListener('pywebviewready', boot);
 if (window.pywebview && window.pywebview.api) boot();
 
 /* Read by the automated check, which asserts on real hit-testing rather than
-   on handlers existing — the previous suite called .click() directly, which
-   bypasses hit-testing entirely and so happily passed on a window where
-   every control was covered. */
+   on handlers existing - an earlier suite called .click() directly, which
+   bypasses hit-testing and so passed happily on a window where every control
+   was covered by an invisible panel. */
 window.__probe = () => ({
   countries: state.countries.length,
   mode: state.mode,
   picked: state.picked,
   pickerOpen: $('picker').open,
+  prefsOpen: $('prefs').open,
+  systemProxy: state.systemProxy,
 });

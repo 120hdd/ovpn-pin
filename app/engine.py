@@ -64,10 +64,15 @@ class Engine:
 
     PORT = 8899
 
-    def __init__(self, sysproxy, folder=None, auth_file=None):
+    def __init__(self, sysproxy, folder=None, auth_file=None,
+                 set_system_proxy=True):
         self.sysproxy = sysproxy
         self.folder = folder or paths.servers_dir()
         self.auth_file = auth_file or paths.AUTH_FILE
+        # Off, this serves the proxy and leaves Windows alone - for someone
+        # who would rather point one browser at 127.0.0.1:8899 by hand than
+        # have every program on the machine moved at once.
+        self.set_system_proxy = set_system_proxy
         self.child = None
         self.exit_info = None
         self.lock = threading.Lock()
@@ -132,37 +137,69 @@ class Engine:
 
     # -- choosing one ------------------------------------------------------
 
-    def find_exit(self, country, progress, want=2, width=16, timeout=8):
-        """Ask a lot of exits at once and take the quickest that says yes.
+    def candidates(self, country):
+        """The addresses worth asking, in the order worth asking them.
 
-        Which exits will take the credentials is not a property of the exit -
-        it moves through the day, and about one in twenty is willing at any
-        moment. So this is a race rather than a lookup, and the honest thing
-        to show while it runs is how many have been asked, not a percentage
-        of anything.
+        The rule differs by what was asked for, and getting this wrong made
+        the app unusable once already.
+
+        For a named country, EVERY address it has is a candidate. Roughly one
+        exit in twenty will take the credentials at any moment, so trying one
+        address per city meant picking Switzerland - twelve servers, one city
+        - staked the whole connection on a single coin flip, and picking
+        Albania staked twenty-one servers' worth of chances on one. Across
+        the whole set only 91 of 533 addresses were ever tried.
+
+        For "fastest available" the dedupe is right: one per city already
+        gives ninety-odd independent chances, and asking all 533 at once
+        measures how hard you are hammering the provider rather than which
+        exit is quick.
         """
-        user, password = self.credentials()
         pool = [s for s in self.servers()
                 if country in (None, 'auto') or s.country == country]
-        if not pool:
-            raise RuntimeError('no-servers')
+        pool.sort(key=lambda s: (s.seconds is None, s.seconds or 0))
+        if country in (None, 'auto'):
+            seen, out = set(), []
+            for s in pool:
+                key = f'{s.country}-{s.city}'
+                if key not in seen:
+                    seen.add(key)
+                    out.append(s)
+            return out[:140]
+        return pool[:80]
 
-        # One address per exit host, quickest recorded first. Trying four
-        # addresses of the same refusing server is four times nothing.
-        seen, ordered = set(), []
-        for s in sorted(pool, key=lambda s: (s.seconds is None, s.seconds or 0)):
-            key = f'{s.country}-{s.city}'
-            if key in seen:
-                continue
-            seen.add(key)
-            ordered.append(s)
-        ordered = ordered[:140]
+    def find_exit(self, country, progress, width=8, timeout=6):
+        """Race the candidates and take the first that says yes.
+
+        First rather than best. An earlier version waited for two so it could
+        pick the quicker, and paid the difference between them on every
+        connect - which is not worth a second of somebody's time.
+
+        Width 8 rather than something impressive. Measured on this line,
+        racing wider makes it slower, because the handshakes compete for the
+        same upstream:
+
+            width  6   0.86s  1.02s  1.14s
+            width 10   1.11s  1.16s  1.02s
+            width 16   1.39s  1.38s  1.36s
+            width 24   1.89s  2.25s  2.14s
+
+        Eight also stages itself: the pool keeps feeding candidates in, so a
+        bad moment when only one exit in twenty is accepting still works
+        through the list, just over a few more rounds.
+        """
+        user, password = self.credentials()
+        ordered = self.candidates(country)
+        if not ordered:
+            raise RuntimeError('no-servers')
 
         self.cancelled.clear()
         winners, asked, done = [], len(ordered), 0
         progress({'phase': 'probing', 'asked': 0, 'total': asked})
 
         def probe(s):
+            if self.cancelled.is_set():
+                raise OSError('cancelled')
             ip, host = px.read_config(s.path)
             if not host:
                 raise OSError('not pinned')
@@ -170,27 +207,33 @@ class Engine:
                 px.Exit(ip, 443, host, user, password), timeout)
             return took, s, ip, host
 
-        with cf.ThreadPoolExecutor(max_workers=width) as ex:
-            futures = {ex.submit(probe, s): s for s in ordered}
+        ex = cf.ThreadPoolExecutor(max_workers=width)
+        try:
+            futures = [ex.submit(probe, s) for s in ordered]
             for fut in cf.as_completed(futures):
                 done += 1
                 if done % 4 == 0 or done == asked:
                     progress({'phase': 'probing', 'asked': done,
-                              'total': asked, 'found': len(winners)})
+                              'total': asked})
                 try:
                     winners.append(fut.result())
                 except Exception:
                     pass
-                if len(winners) >= want or self.cancelled.is_set():
-                    for f in futures:
-                        f.cancel()
+                if winners or self.cancelled.is_set():
                     break
+        finally:
+            # wait=False, or Cancel takes as long as the slowest probe still
+            # in flight - up to the full timeout, with the window frozen on
+            # "connecting" the entire time. The threads are daemons and the
+            # cancelled flag stops them doing anything further.
+            for f in futures:
+                f.cancel()
+            ex.shutdown(wait=False, cancel_futures=True)
 
         if self.cancelled.is_set():
             raise RuntimeError('cancelled')
         if not winners:
             raise RuntimeError('all-refused')
-        winners.sort(key=lambda w: w[0])
         return winners[0]
 
     # -- holding it --------------------------------------------------------
@@ -241,22 +284,19 @@ class Engine:
             self._wait_listening(child, out_path)
             self.child = child
 
-            progress({'phase': 'routing'})
-            self.sysproxy.engage('127.0.0.1', self.PORT)
+            if self.set_system_proxy:
+                progress({'phase': 'routing'})
+                self.sysproxy.engage('127.0.0.1', self.PORT)
 
             self.exit_info = {'ip': ip, 'host': host, 'country': server.country,
                               'city': server.city, 'answered': round(took, 2),
                               'pid': child.pid, 'since': time.time()}
-            # A confirmation that fails is not a connection that failed. The
-            # proxy is up and the machine is pointed at it; all that is
-            # missing is the independent second opinion. Tearing the whole
-            # thing down here would throw away a working connection because
-            # one website was in a mood.
-            progress({'phase': 'verifying'})
-            try:
-                self.exit_info['seen_as'] = self.verify()
-            except Exception as e:
-                self.exit_info['unconfirmed'] = str(e)[:120]
+            # Deliberately NOT verified here. The connection is live the
+            # moment the machine is pointed at a listening proxy; asking a
+            # website to confirm it is a second network round trip, and
+            # holding the word "connected" back for it made every connect a
+            # second slower than it had to be. The caller confirms
+            # afterwards and fills the address in when it arrives.
             return self.status()
 
     def disconnect(self, quiet=False):
@@ -308,6 +348,24 @@ class Engine:
                 'country': (seen.get('loc') or '').lower(),
                 'colo': seen.get('colo')}
 
+    def current_ip(self, timeout=8):
+        """The address you present right now, asked without the proxy.
+
+        Deliberately not through any opener that might inherit the system
+        proxy setting - if this went through our own proxy it would report
+        the exit and quietly claim nothing had changed.
+        """
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}))
+        req = urllib.request.Request(
+            'https://www.cloudflare.com/cdn-cgi/trace',
+            headers={'User-Agent': px.UA_BROWSER})
+        with opener.open(req, timeout=timeout) as r:
+            body = r.read(4096).decode('utf-8', 'replace')
+        seen = dict(line.split('=', 1) for line in body.splitlines()
+                    if '=' in line)
+        return {'ip': seen.get('ip'), 'country': (seen.get('loc') or '').lower()}
+
     # -- what state are we in ---------------------------------------------
 
     def running(self):
@@ -318,7 +376,7 @@ class Engine:
         rec = self.running()
         engaged = self.sysproxy.engaged_for(self.PORT)
         state = 'off'
-        if rec and engaged:
+        if rec and (engaged or not self.set_system_proxy):
             state = 'on'
         elif rec or engaged:
             # One without the other is not a working connection, and saying
@@ -326,7 +384,8 @@ class Engine:
             # page loads.
             state = 'broken'
         out = {'state': state, 'port': self.PORT,
-               'folder': os.path.basename(self.folder),
+               'folder': self.folder,
+               'systemProxy': self.set_system_proxy,
                'owed_restore': bool(self.sysproxy.stashed())}
         if rec:
             out['exit'] = {'ip': rec['ip'], 'host': rec['name'],
