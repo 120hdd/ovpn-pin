@@ -324,8 +324,8 @@ class Api:
     def _look_up_self(self):
         """The address you have when nothing of ours is in the way.
 
-        Only meaningful while disconnected: routed, this would come back
-        with the exit's address and claim it as yours.
+        Only meaningful while disconnected: routed, this comes back with the
+        exit's address and would claim it as yours.
         """
         if self._engine.running():
             return
@@ -333,23 +333,21 @@ class Api:
             info = self._engine.current_ip()
         except Exception:
             info = {}
-        if info.get('ip') != self._real_ip:
+        if info.get('ip') != self._real_ip or self._real_ip is None:
             self._real_ip = info.get('ip')
-            self._emit('RealIp', info)
-        elif self._real_ip is None:
             self._emit('RealIp', info)
 
     def _watch_self(self):
-        """Keep the address honest while it is not ours to change.
+        """Keep that address honest while it is not ours to change.
 
-        It was fetched once at startup, so unplugging another VPN left the
-        window showing an address that had stopped being true - and on this
-        machine that is the normal case, since the whole point is watching
+        It used to be fetched once at startup, so unplugging another VPN left
+        the window showing an address that had stopped being true - and on
+        this machine that is the normal case, the whole point being to watch
         one address become another.
 
-        Only polled while disconnected, and only every fifteen seconds:
-        connected there is nothing to learn, and a tighter loop would be a
-        request to somebody else's server every few seconds forever.
+        Only while disconnected, and only every fifteen seconds: connected
+        there is nothing to learn, and a tighter loop would be a request to
+        somebody else's server every few seconds forever.
         """
         while not self._stop.wait(15):
             if self._engine.running():
@@ -495,7 +493,7 @@ class Api:
             return {'ok': False, 'error': str(e)}
         self._retray('off')
         # Straight away rather than on the next tick: the address just
-        # changed back and the window is showing the exit's.
+        # changed back and the window is still showing the exit's.
         threading.Thread(target=self._look_up_self, daemon=True).start()
         return {'ok': True, 'session': {'minutes': minutes}}
 
@@ -614,10 +612,10 @@ def main():
         APP_NAME,
         os.path.join(paths.UI_DIR, 'index.html'),
         js_api=api,
-        width=settings.get('w', 880),
-        height=settings.get('h', 540),
+        width=settings.get('w', 400),
+        height=settings.get('h', 660),
         x=settings.get('x'), y=settings.get('y'),
-        min_size=(640, 420),
+        min_size=(380, 560),
         background_color='#111113',
         resizable=True,
         text_select=False,
