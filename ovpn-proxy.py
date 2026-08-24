@@ -925,7 +925,22 @@ def do_status():
         field('pid', st['pid'])
         field('since', st['since'])
         print()
-    if len(live) == 1:
+    # Asked for even when there are records, now that strays() reports only
+    # what no record accounts for. It used to be consulted only when there
+    # were none at all, so a forgotten copy sat there holding a port while
+    # `status` listed the others and never mentioned it - which is the pair
+    # of answers this was supposed to have put an end to.
+    loose = strays()
+    if loose:
+        warn(f'and {len(loose)} copy running that no record accounts for'
+             if len(loose) == 1 else
+             f'and {len(loose)} copies running that no record accounts for')
+        for pid, cmd in loose:
+            note(f'    pid {pid}  {cmd[:90]}')
+        note('Started by an older copy, or by a shell since closed.')
+        note('    ovpn proxy stop --all   ends those too')
+        print()
+    if len(live) == 1 and not loose:
         note('ovpn proxy stop   ends it')
     else:
         note('ovpn proxy stop --port N   ends that one')
@@ -996,6 +1011,10 @@ def do_stop(port=None, every=False):
         print()
         return 0 if stopped else 1
 
+    # Read before anything is killed. Afterwards the ones just stopped would
+    # be mid-death and briefly indistinguishable from a stray.
+    loose = strays() if (every and port is None) else []
+
     # One that will not die is not a reason to leave the others running, so
     # this reports and carries on rather than stopping at the first failure.
     stopped = 0
@@ -1010,6 +1029,18 @@ def do_stop(port=None, every=False):
         clear_state(st['port'])
         stopped += 1
         ok(f'stopped - {st["name"]} on port {st["port"]} (pid {st["pid"]})')
+
+    # --all has to mean all, or a forgotten copy survives the one command
+    # whose whole promise is that nothing is left behind.
+    for pid, cmd in loose:
+        try:
+            kill(pid)
+        except Exception as e:
+            warn(f'could not stop pid {pid}', str(e))
+            continue
+        stopped += 1
+        ok(f'stopped pid {pid} - no record of it   {cmd[:56]}')
+
     print()
     return 0 if stopped else 1
 
