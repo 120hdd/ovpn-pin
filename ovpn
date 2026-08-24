@@ -27,9 +27,12 @@ ROOT=$(cd -- "$(dirname -- "$SELF_PATH")" && pwd)
 CON=$ROOT/ovpn-connect.sh
 PIN=$ROOT/resolve-ovpn-remote.sh
 MENU=$ROOT/run.sh
+PRX=$ROOT/ovpn-proxy.py
 
 if [ -t 1 ]; then
-    C_OFF=$'\033[0m'; C_CYAN=$'\033[36m'; C_GRAY=$'\033[90m'
+    # 37m rather than 90m for the asides. "Bright black" on a black terminal
+    # is very nearly nothing, and the asides are where the explanations are.
+    C_OFF=$'\033[0m'; C_CYAN=$'\033[36m'; C_GRAY=$'\033[37m'
     C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
 else
     C_OFF=''; C_CYAN=''; C_GRAY=''; C_RED=''; C_GREEN=''; C_YELLOW=''
@@ -258,6 +261,80 @@ usage() {
         your traffic is actually leaving from. That last part is the one your
         own machine cannot tell you.
 
+  ${C_CYAN}When the tunnel connects but crawls${C_OFF}
+
+    ovpn proxy
+        What is running, and through which exit. Starts nothing.
+
+    ovpn proxy connect [name]
+        Serve a browser proxy through an exit. With no name it asks around
+        140 of them which will take the credentials and takes the quickest
+        that will - which is the way to use it, because a good many refuse at
+        any one time and there is no telling which from the config. Naming
+        one still works when you want a particular country; it asks before it
+        listens rather than coming up healthy and answering 502 to
+        everything.
+
+    ovpn proxy stop
+        Ends it, and says which one it ended.
+
+        The same exits also run an HTTPS proxy on 443, and a line that
+        throttles OpenVPN usually has no opinion about that - it cannot tell
+        it apart from any other HTTPS connection. Measured on one such line:
+        0.3 Mbit through the tunnel, 99 through the proxy. Same server, same
+        exit address, same credentials.
+
+        Serves a plain proxy on 127.0.0.1:8888 for the browser to point at.
+        No certificate to approve and no password prompt, because it hides
+        neither from you - it hides them from the browser:
+
+          --port N        listen somewhere else than 8888
+          --host NAME     the name the certificate must serve. Read out of
+                          the config's pin comment when you do not say
+          --bind ADDR     which address to leave from. Needed only when a
+                          tunnel owns the default route, or this goes out
+                          through the very thing it exists to avoid
+
+        Carries HTTP and HTTPS, which is what a browser asks of a proxy.
+        Nothing else on the machine goes through it. Ctrl-C ends it, and
+        there is nothing to put back - it changes no routes, no DNS and no
+        system setting while it runs.
+
+        Two things stay off the wire so it survives the path: the address,
+        which is read out of the pinned config rather than looked up again,
+        and the name, which is never sent as SNI. A handshake that says
+        *.prod.surfshark.com in the clear gets killed on the way out. The
+        certificate is checked by hand instead, so the name is proved
+        without being announced.
+
+    ovpn proxy sweep
+        Ask every exit in the folder what it serves, over that same 443, and
+        rank them by how quickly it answered. Nothing is connected and no
+        route moves, so they go at once rather than one every half minute.
+
+        Forty at a time unless --first says otherwise, and that cap is the
+        point rather than a shortcut: sweep several hundred and the refusals
+        stop being about the exits. The same 17 configs come back 16/17
+        rested and 3/17 after a long run.
+
+          --site a.com,b.com   also ask each exit for those. An exit has to
+                               serve all of them to be kept
+          --one-per            one address per exit rather than all of them
+          --first N            stop after N
+          --jobs N             how many at once (12)
+          --connect-only       stop at the proxy, fetch nothing. Fast, and
+                               says only that an exit will talk to you
+
+        What served lands in proxy-ok/, named so that sorting the folder by
+        name sorts it by how quick the exit was - the same convention success/
+        uses. Every result including the failures goes to
+        .state/proxy-exits.tsv.
+
+        It does not write to success/ and does not read it. That folder means
+        "the tunnel came up here", which is a different question with a
+        different answer - on a throttled line, one that came up is not one
+        you can use.
+
   ${C_CYAN}Finding out which exits are any good${C_OFF}
 
     ovpn sweep [name]
@@ -317,6 +394,7 @@ usage() {
     ovpn help folders      the folder rules, and which ones get written to
     ovpn help connect      every flag ovpn-connect.sh takes
     ovpn help pin          every flag resolve-ovpn-remote.sh takes
+    ovpn help proxy        every flag ovpn-proxy.py takes
 
   Flags are passed straight through, so anything in those two lists works here:
 
@@ -411,6 +489,48 @@ do_where() {
 con()  { use_cwd "$@"; exec bash "$CON" "$@"; }
 pin()  { exec bash "$PIN" "$@"; }
 
+# Whichever of these is python 3. On Windows the name is `python`, on most
+# Linux boxes `python3`, and on some both exist with only one of them being
+# version 3 - so ask each rather than trusting the name.
+find_python() {
+    local p
+    for p in python3 python; do
+        command -v "$p" >/dev/null 2>&1 || continue
+        "$p" -c 'import sys; raise SystemExit(0 if sys.version_info[0] == 3 else 1)' \
+            >/dev/null 2>&1 && { printf '%s' "$p"; return 0; }
+    done
+    return 1
+}
+
+# The one command here that needs python, because it is the one that has to
+# hold a socket open in both directions for a browser and check a certificate
+# by hand along the way. Neither bash nor curl will do that.
+prx() {
+    local py
+    [ -f "$PRX" ] || die "ovpn-proxy.py is missing from $ROOT.
+         It ships with the repo - this copy is older than the command."
+    py=$(find_python) || die 'ovpn proxy needs python 3, and neither python3
+         nor python on your PATH is it. Nothing else in this repo needs it,
+         so the rest still works.'
+
+    # Bare `ovpn proxy` says what is running rather than starting something -
+    # the same courtesy `ovpn status` extends. Anything else is passed through
+    # untouched, so the verb stays at the front where ovpn-proxy.py looks for
+    # it, and a mistyped one gets named there rather than here.
+    [ $# -eq 0 ] && set -- status
+    case ${1:-} in -h|--help|help) exec "$(find_python)" "$PRX" help ;; esac
+
+    use_cwd "$@"
+    # Appended rather than prepended, and only when they did not say - both so
+    # that a --dir they typed wins, and so that nothing lands in front of the
+    # verb.
+    case " $* " in
+        *' --dir '*) ;;
+        *) set -- "$@" --dir "${OVPN_OUT_DIR:-$ROOT/pinned}" ;;
+    esac
+    exec "$py" "$PRX" "$@"
+}
+
 cmd=${1:-}
 [ $# -gt 0 ] && shift
 
@@ -424,6 +544,7 @@ case $cmd in
     stop)                 con --stop "$@" ;;
     status|st)            con --status "$@" ;;
     dns-check|dnscheck)   con --dns-check "$@" ;;
+    proxy|px)             prx "$@" ;;
     unlock)               con --kill-switch-off "$@" ;;
     service)              con --install-service "$@" ;;
 
@@ -442,12 +563,14 @@ case $cmd in
             folders|folder|where)          help_folders ;;
             connect|sweep|stop|status|switch|dns-check|c|s) exec bash "$CON" --help ;;
             pin|sync|who|check|p)          exec bash "$PIN" --help ;;
+            proxy|px)                      prx help ;;
             '')                            usage ;;
             *) die "no help for '$1'. Try one of:
          ovpn help            every command, and what it does
          ovpn help folders    which folder it acts on, and what gets written
          ovpn help connect    every flag ovpn-connect.sh takes
-         ovpn help pin        every flag resolve-ovpn-remote.sh takes" ;;
+         ovpn help pin        every flag resolve-ovpn-remote.sh takes
+         ovpn help proxy      every flag ovpn-proxy.py takes" ;;
         esac ;;
 
     # Not a subcommand. Either a flag, which belongs to ovpn-connect.sh, or a

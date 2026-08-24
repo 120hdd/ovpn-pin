@@ -14,6 +14,10 @@
 *.sh            text eol=lf
 *.ovpn          text eol=lf
 
+# Same shebang problem as a .sh, and this one is run on both platforms from
+# the same working copy, so it cannot be left to whichever checked it out.
+*.py            text eol=lf
+
 # The dispatcher has no extension - it is meant to be typed, not sourced - so
 # it matches none of the rules above and needs naming outright. Leading slash
 # so this is the file at the root and not some future folder of that name.

@@ -142,6 +142,8 @@ Then, from any directory:
 | `ovpn switch uk-lon` | stop what is up, then connect that |
 | `ovpn stop` / `ovpn status` | |
 | `ovpn sweep --one-per-landlord` | flags pass straight through |
+| `ovpn proxy` | serve a browser proxy through a live exit, when the tunnel is throttled |
+| `ovpn proxy-sweep --connect-only` | which exits will take the proxy right now |
 | `ovpn pin` / `ovpn sync` / `ovpn who` | the pinner |
 | `ovpn check` | judge the exit you are on right now |
 | `ovpn where` | which repo this name points at, and which folder it would use |
@@ -487,6 +489,267 @@ until the tunnel dies, so `Restart=always` brings it back. The unit runs as
 root, which has no desktop session, so it cannot switch your GNOME proxy
 setting off — set `OVPN_PROXY_OFF_CMD` in `.env` if that matters on an
 unattended machine.
+
+## When the tunnel connects but crawls
+
+A tunnel that comes up, stays up, reports a clean exit — and then takes seven
+seconds to start a page. Nothing in the diagnostics looks wrong, because
+nothing is: pinging the exit over the physical link while the tunnel is
+saturated comes back 0% loss at a steady 110 ms, and `openvpn` sits at 0.0%
+CPU the whole time. There is no queue, no loss and no work being done. The
+bytes are simply not arriving.
+
+What that pattern means is that the line has recognised OpenVPN and is
+suppressing it. Not the address — the protocol. The same exits also answer
+HTTPS on 443, and there the same line has no opinion at all:
+
+```
+                                   through the tunnel      through 443
+  40 MB                            never finished          2.4 s
+  effective rate                   0.3 Mbit                130 Mbit
+  time to first byte               1.4 - 7.1 s             0.6 s
+```
+
+Same server, same exit address, same credentials. Nothing about the exit is
+faster; it is the same machine. Only one of the two is recognisable.
+
+```bash
+ovpn proxy uk-man            # or any part of a pinned config's name
+ovpn proxy uk-man --port 8080
+```
+
+```
+  config      uk-man.prod.surfshark.com_tcp_103.214.44.42.ovpn
+  listening   http://127.0.0.1:8888
+  exit        103.214.44.42:443
+  certificate must serve uk-man.prod.surfshark.com, and the name is not sent
+
+  In the browser, set BOTH the HTTP and the HTTPS proxy to
+      127.0.0.1   port 8888
+```
+
+It carries HTTP and HTTPS, which is what a browser asks of a proxy. Nothing
+else on the machine goes through it, and neither does anything that is not
+HTTP — it is not a tunnel and does not pretend to be one. In exchange it needs
+no root, changes no routes, no DNS and no system setting, and leaves nothing
+to put back when you stop it.
+
+### Not every exit runs one
+
+Most of them do not, and there is no way to tell from the config which do —
+so ask them all:
+
+```bash
+ovpn proxy-sweep --one-per --site www.scamspotter.org
+```
+
+```
+  141 configs from /home/you/ovpn-pin/pinned
+  also asking each exit for: www.scamspotter.org
+  12 at a time - nothing is connected, so they do not queue behind each other
+
+  [ ok ]    4/141   0.89s  be-bru.prod.surfshark.com_tcp_146.70.123.173  146.70.123.174 BE
+  [part]    5/141   1.06s  bg-sof.prod.surfshark.com_tcp_37.19.203.78    37.19.203.79 BG  refused by www.scamspotter.org
+  [fail]    6/141          us-sea.prod.surfshark.com_tcp_138.199.12.52   no proxy for this account
+  ...
+
+  13 of 141 served everything asked of them
+```
+
+That run took 25 seconds — the whole of `--one-per` in about the time one
+tunnel takes to come up, because nothing is being connected and no route
+moves. Of those 141 exits, 27 ran a proxy that took the credentials, 112
+answered `407`, and 13 of the 27 also served the site.
+
+`407` there is not a wrong password and not a rate limit. Two things decide
+it, and the second one is easy to mistake for the first.
+
+**How much you have been asking.** This is the big one, and it makes a large
+sweep worse than useless — it produces a confident wrong answer. The same 17
+configs, the same command, minutes apart:
+
+```
+  after a rest, --jobs 2     16 of 17
+  after a rest, --jobs 8     16 of 17, three runs back to back
+  after a 528-config sweep    3 of 17
+  five minutes later          5 of 17, eight runs, identically
+  later again                16 of 17
+```
+
+Nothing about those exits changed. Concurrency is not it — 2 and 8 behave the
+same, and three consecutive 17-config runs at 8 never degrade. Volume is:
+somewhere between fifty-odd requests and two hundred, the refusals stop being
+about the exits. What exactly Surfshark limits is not something this repo has
+established — the obvious models do not survive their own tests, and the
+passes in a long sweep are spread evenly through it rather than stopping
+after some count, which rules out the simplest reading.
+
+What follows from it is simple enough anyway: **ask about forty at a time**,
+which is what `proxy-sweep` now does unless told otherwise. Pointed at 528
+configs it answered 27; pointed at the first 40 of the same folder, minutes
+later, it answered 32.
+
+Things ruled out along the way, each tested rather than assumed: credential
+format (`Proxy-Authenticate: Basic` from both camps, and the same string that
+fails one server succeeds on another in the same second), and any second door
+— ports 1080, 3128, 8080, 8443 and 1443 do not speak proxy.
+
+**Where you are asking from.** This one cost an evening. The same three
+servers, in the same hour:
+
+```
+  from a machine leaving over the plain line          10/10
+  from a machine already leaving via another VPN       0/20
+```
+
+`cz-prg`, `nl-ams` and `uk-man` all refused twenty times out of twenty from
+the second machine and accepted ten out of ten from the first. If your own
+traffic already leaves through some other tunnel or proxy, you are asking
+from an address Surfshark's proxies mostly turn away, and the results tell
+you about that address rather than about the exits. Check what you are
+leaving from before believing a sweep:
+
+```bash
+curl -s https://www.cloudflare.com/cdn-cgi/trace | grep -E '^(ip|loc)='
+```
+
+### A third answer: filtered here
+
+Some addresses complete the TCP handshake at the normal round trip and then
+never answer the TLS one. That is neither of the two above, and it is worth
+saying so in its own words:
+
+```
+  [fail]   39/40   01.0s-de-ber...152.89.163.229   filtered here - TCP answers, TLS gets nothing back
+```
+
+The server is not down. Reached *through* another exit's proxy, the same
+address completes TLS immediately, three times out of three — so something
+between this line and it takes the SYN, answers it, and then swallows the
+payload.
+
+It is not the DNS-correlation mechanism some Iranian ISPs use either, which
+would be keyed on the name. `de-ber.prod.surfshark.com` is poisoned to
+`10.10.34.35` by the ISP resolver, and two of its addresses behave
+differently: `152.89.163.229` is swallowed, `86.38.98.71` works perfectly.
+Same name, same poison, opposite outcomes — so the filter is on the address.
+
+Which makes it the one failure here worth acting on rather than retrying:
+re-pin that exit and take a different address for it. `ovpn sync` will find
+one.
+
+There is no other door either. Port 80 looks like a second proxy — it answers
+`CONNECT` with `502` and serves absolute-URI `GET`s quite happily — but that
+is this line, not Surfshark: the same request to `203.0.113.9`, a reserved
+address that routes nowhere, returns the same `200` from the same Cloudflare
+colo. Everything on port 80 is being intercepted before it leaves.
+
+The practical consequence is that most exits will not have you, so let it
+find one rather than naming one:
+
+```bash
+ovpn proxy            # no name - asks ~140 exits and takes the quickest
+                      # one that will have it
+```
+
+```
+  asking 140 exits which of them will take the credentials right now...
+  de-fra.prod.surfshark.com_tcp_138.199.19.157.ovpn  answered in 0.45s
+```
+
+Naming one still works when you need a particular country, and it now asks
+before it listens rather than coming up healthy and answering `502` to every
+request — a fault that otherwise sends you hunting through browser settings
+for something that is at the other end.
+
+The set is stable enough to keep, though. `sitetest/www-scamspotter-org` — 17
+exits that served that site through the tunnel — answered **17 of 17**, twice,
+including once immediately after a 528-config sweep. Whatever makes a server
+willing to proxy is the same thing that made it serve a picky site cleanly.
+
+What served lands in `proxy-ok/`, named so that sorting the folder by name
+sorts it by how quick the exit was, the same convention `success/` uses.
+Every result including the failures goes to `.state/proxy-exits.tsv`:
+
+```
+config                                             verdict  ttfb   exit                www.scamspotter.org
+be-bru.prod.surfshark.com_tcp_146.70.123.173.ovpn  ok       0.890  146.70.123.174 BE   ok
+bg-sof.prod.surfshark.com_tcp_37.19.203.78.ovpn    ok       1.062  37.19.203.79 BG     challenged
+us-sea.prod.surfshark.com_tcp_138.199.12.52.ovpn   no proxy for this account
+```
+
+It does not write to `success/` and does not read it. That folder means "the
+tunnel came up here", which is a different question with a different answer —
+on a throttled line, an exit the tunnel reached is not one you can use.
+
+And the two answers overlap far less than you would guess — pointed at
+`success/`, 533 configs every one of which came up as a tunnel, asked only
+whether a proxy answers at all:
+
+```bash
+ovpn proxy-sweep --dir success --connect-only
+```
+
+```
+    504   no proxy for this account
+     26   ok
+      3   TLS failed
+```
+
+Twenty-six of 528. Which is almost entirely an artefact of having asked 528
+of them — see below. Asked forty at a time, the same folder returns **32 of
+40**.
+
+`--connect-only` stops at the proxy's `200` and fetches nothing, which makes
+it fast — 533 exits in 63 seconds — and narrow: it says an exit will talk to
+you, not what it will serve. So it copies nothing, and writes to
+`.state/proxy-connect.tsv` rather than the file the full sweep writes. Use it
+to find the handful worth asking properly.
+
+### The name is proved, but never announced
+
+Two things have to stay off the wire for this to survive the same line that
+ate the tunnel.
+
+The **address** is the one already pinned into the config. It is read back out
+of the file rather than looked up again, so this inherits the property the
+rest of the repo exists for: no resolver gets to answer for where the exit is.
+
+The **name** is not sent as SNI. A TLS handshake that says
+`*.prod.surfshark.com` in the clear is killed on its way out — which is worth
+knowing on its own, because it is the same inspection that makes the tunnel
+unusable, one layer up. Connecting by address with no SNI goes through
+untouched.
+
+Dropping SNI would normally cost you authentication, so the certificate is
+checked by hand instead: the chain still has to verify against the system CAs,
+and the presented certificate still has to say it serves the name the config
+was pinned from. Fail either and the connection is dropped rather than
+downgraded. What is given up is announcing the name, not proving it.
+
+### Not the other proxy in this README
+
+`ovpn proxy` **serves** one, for your browser to reach the web through. The
+proxy discussed under [Connect, and get the proxy out of the
+way](#connect-and-get-the-proxy-out-of-the-way-linux) is the opposite
+direction: a local proxy you already run, which `ovpn connect` may have to
+dial *through* to reach a blocked OpenVPN server, and switches off afterwards.
+One is a way out; the other is a way in. They do not interact — `ovpn proxy`
+brings up no tunnel and touches no system proxy setting.
+
+### On Windows
+
+Same file, same command:
+
+```
+python ovpn-proxy.py uk-man
+```
+
+`ovpn proxy` is the Linux dispatcher's name for it; on Windows call the script
+directly. It is the one thing in this repo that needs Python 3 — everything
+else runs without it — because it has to hold a socket open both ways for a
+browser and check a certificate along the way, which neither `curl` nor
+PowerShell's stack will do on their own terms.
 
 ## Re-syncing when the addresses move
 
