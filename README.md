@@ -752,14 +752,59 @@ terminal or a chat client wants one that does not move underneath it — a
 download that dies halfway because you switched countries is a download you
 start again.
 
-For a terminal, that is the whole of the setup:
+For a terminal there is `px`, which does that exporting for you:
 
 ```
-export http_proxy=http://127.0.0.1:8899
-export https_proxy=$http_proxy
+px            send this shell through the proxy that is running
+px 8899       through the one on that port
+px off        stop
+px status     what this shell is set to, and whether it still works
 ```
 
-`curl`, `git`, `npm`, `pip` and `apt` all read those. Anything speaking TCP on
+```
+$ px
+  Terminal
+  [ ok ] http://127.0.0.1:8899
+  exit        130.195.218.205   se-sto.prod.surfshark.com
+
+$ curl -s https://ipinfo.io/country
+SE
+```
+
+`px` is a shell function rather than a command, and has to be: it changes the
+shell you typed it in, and nothing run as a child can do that to its parent.
+`ovpn install` adds the line that defines it — or add it by hand:
+
+```
+. /path/to/ovpn-pin/ovpn-shell.sh
+```
+
+With more than one proxy up it asks which port. Name one once in the same rc
+file and it stops asking:
+
+```
+export OVPN_PROXY_PORT=8899
+```
+
+`px status` is worth knowing about, because it names a failure that otherwise
+says nothing useful. The variables outlive the proxy: stop the proxy without
+running `px off` and every request from that shell fails at once, with nothing
+to suggest why.
+
+```
+$ px status
+  Terminal
+  [warn] set to http://127.0.0.1:8899, but nothing of ours is listening there
+         Every request from this shell will fail until that is one or
+         the other. The proxy was probably stopped after it was set.
+```
+
+Underneath, `px` calls `ovpn proxy env`, which *prints* the exports rather
+than applying them — same reason. Its stdout is shell and nothing else, and
+every word meant for a person goes to stderr, because a sentence in among the
+exports would be `eval`-ed as a command.
+
+`curl`, `git`, `npm`, `pip` and `wget` all read what it sets. Anything speaking TCP on
 443 travels the same way, because HTTPS goes through as `CONNECT` and
 `CONNECT` carries whatever the two ends put inside it — a chat client pointed
 at the same address and port works without knowing it is a proxy at all. What
