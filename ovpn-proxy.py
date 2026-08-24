@@ -816,7 +816,12 @@ def alive(pid):
 
 
 def strays():
-    """Any other copy of this script running, whatever started it.
+    """Any copy of this script running that no record accounts for.
+
+    Recorded ones are left out deliberately: they are not strays, they are
+    the proxies `status` already lists by port. Including them made the
+    "cannot listen" message name a proxy that was serving a different port
+    perfectly well, under a sentence saying these were unrecorded.
 
     The state file only knows about proxies this version started. One left
     over from an older copy, or from a shell that was closed, holds its port
@@ -848,6 +853,7 @@ def strays():
     # to stop a working proxy to free a port it was never holding. Any other
     # parent is a shell, which does not match is_ours anyway.
     me, parent = os.getpid(), os.getppid()
+    known = {r['pid'] for r in read_states()}
     found = []
     if os.name == 'nt':
         try:
@@ -861,7 +867,9 @@ def strays():
             for line in out.stdout.splitlines():
                 pid, _, cmd = line.partition('\t')
                 cmd = cmd.strip()
-                if not (pid.strip().isdigit() and int(pid) not in (me, parent)):
+                if not (pid.strip().isdigit()
+                        and int(pid) not in known
+                        and int(pid) not in (me, parent)):
                     continue
                 # Windows hands back one string; splitting on spaces is
                 # crude but the pieces we test never contain any.
@@ -873,7 +881,8 @@ def strays():
 
     try:
         for entry in os.listdir('/proc'):
-            if not entry.isdigit() or int(entry) in (me, parent):
+            if (not entry.isdigit() or int(entry) in (me, parent)
+                    or int(entry) in known):
                 continue
             try:
                 with open(f'/proc/{entry}/cmdline', 'rb') as f:
@@ -1324,10 +1333,11 @@ def serve(listen_host, listen_port, exit_, quiet):
                 f'gives this one somewhere else to sit.')
         held = '\n'.join(f'    pid {pid}  {cmd[:80]}' for pid, cmd in strays())
         die(f'cannot listen on {listen_host}:{listen_port}', f'{e}\n' +
-            ('Nothing of ours is recorded on that port. These copies are\n'
-             f'running unrecorded, so it may be one of them:\n{held}\n'
-             if held else 'No copy of this is running at all, so whatever '
-                          'holds that port is\nsomething else entirely.\n') +
+            ('Nothing of ours is recorded on that port. These are running\n'
+             f'with no record at all, so it may be one of them:\n{held}\n'
+             if held else 'Every proxy of ours is accounted for and none has '
+                          'that port, so\nwhatever holds it is something '
+                          'else.\n') +
             'ovpn proxy stop  ends ours, or --port picks a different one.')
     srv.listen(128)
 
