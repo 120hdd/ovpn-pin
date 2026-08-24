@@ -1,78 +1,112 @@
 <!doctype html>
-<html lang="fa" dir="rtl">
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>اتصال</title>
+<title>Relay</title>
 <link rel="stylesheet" href="app.css">
+<script>
+  // First thing on the page. A script error used to leave a window that
+  // looked fine and did nothing, with no way to find out why - so errors are
+  // collected before anything else can throw, and the automated check reads
+  // them back.
+  window.__errs = [];
+  window.addEventListener('error', (e) => window.__errs.push(
+    (e.message || 'error') + ' @ ' + (e.filename || '?') + ':' + (e.lineno || 0)));
+  window.addEventListener('unhandledrejection', (e) => window.__errs.push(
+    'unhandled rejection: ' + (e.reason && e.reason.message || e.reason)));
+</script>
 </head>
 <body>
 
 <!--
-  The window is one sentence: where does your internet come out?
+  Structure taken from Mullvad's desktop client, which is the only one in its
+  category designed for a small fixed window: an ambient area on top carrying
+  the one fact that matters, and every control in a single card anchored to
+  the bottom. Nothing is centred, because centring is what made the last
+  attempt read as a web page.
 
-  So the country name is the interface. It is the largest thing on screen by
-  a wide margin, it is the only thing that changes, and both states use the
-  same slot - off shows where you actually are, on shows where you appear to
-  be. The change between them is the whole product, and putting both in one
-  place is what makes it legible at a glance from across a desk.
+  The picker is a real <dialog>. That is not a style choice - the previous
+  version used a div with the hidden attribute and a CSS display rule that
+  silently overrode it, so an invisible panel covered the window and ate
+  every click. showModal() puts the dialog in the browser's top layer, which
+  cannot be defeated by a stylesheet, and brings a focus trap and
+  Escape-to-close with it.
 -->
 
-<header class="chrome pywebview-drag-region">
-  <div class="chrome__buttons">
-    <button class="chip" id="min" aria-label="کوچک کردن"><span></span></button>
-    <button class="chip chip--close" id="quit" aria-label="بستن"><span></span></button>
-  </div>
-  <div class="chrome__mark">اتصال</div>
-</header>
+<main class="app">
 
-<main class="stage">
+  <!-- The ambient two-thirds: where your traffic comes out, and nothing else. -->
+  <section class="exit" id="exit" data-state="off">
+    <p class="exit__cap" id="exitCap">Your traffic exits from</p>
+    <p class="exit__ip mono" id="exitIp">—</p>
+    <p class="exit__place" id="exitPlace">Not connected</p>
+  </section>
 
-  <section class="where" id="where">
-    <p class="where__label" id="whereLabel">اینترنت شما از اینجا بیرون می‌رود</p>
+  <!-- Everything you can touch lives in one card. -->
+  <section class="card" id="card">
 
-    <div class="where__slot">
-      <h1 class="where__place" id="place" data-state="idle">…</h1>
+    <button class="card__more" id="more" type="button" hidden
+            aria-label="Connection details" aria-expanded="false">
+      <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+        <path d="M2.5 4.5 L6 8 L9.5 4.5" fill="none" stroke="currentColor"
+              stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+
+    <p class="status" id="status" role="status" data-state="off">DISCONNECTED</p>
+    <p class="status__where" id="statusWhere">&nbsp;</p>
+    <p class="status__host mono" id="statusHost">&nbsp;</p>
+
+    <div class="details" id="details" hidden>
+      <p class="details__head">Connection details</p>
+      <dl class="details__grid">
+        <dt>In</dt><dd class="mono" id="detIn">—</dd>
+        <dt>Out</dt><dd class="mono" id="detOut">—</dd>
+      </dl>
     </div>
 
-    <div class="wire" id="wire" aria-hidden="true"><i></i></div>
+    <div class="stack">
+      <button class="btn btn--quiet" id="pick" type="button">
+        <span class="btn__label" id="pickLabel">Fastest available</span>
+        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" class="btn__chev">
+          <path d="M4.5 2.5 L8 6 L4.5 9.5" fill="none" stroke="currentColor"
+                stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
 
-    <dl class="facts" id="facts">
-      <div class="facts__row"><dt>نشانی</dt><dd class="mono" id="factIp">—</dd></div>
-      <div class="facts__row"><dt>شهر</dt><dd class="mono" id="factCity">—</dd></div>
-      <div class="facts__row"><dt>پاسخ</dt><dd class="mono" id="factMs">—</dd></div>
-    </dl>
+      <button class="btn btn--go" id="act" type="button" data-mode="off">
+        <span class="btn__track">
+          <span class="btn__word" data-for="off">Connect</span>
+          <span class="btn__word" data-for="busy">Cancel</span>
+          <span class="btn__word" data-for="on">Disconnect</span>
+        </span>
+      </button>
+    </div>
 
-    <p class="note" id="note"></p>
+    <!-- Full-bleed along the card's bottom edge while connecting, the way a
+         browser shows page load. Not a spinner: a spinner says "wait", this
+         says "something is still happening". -->
+    <div class="progress" id="progress" aria-hidden="true"></div>
   </section>
 
-  <section class="controls">
-    <button class="pick" id="pick" type="button">
-      <span class="pick__key">کشور</span>
-      <span class="pick__value" id="pickValue">خودکار</span>
-      <span class="pick__caret" aria-hidden="true"></span>
-    </button>
-
-    <button class="act" id="act" type="button" data-mode="off">
-      <span class="act__label" id="actLabel">اتصال</span>
-      <span class="act__meter" id="actMeter" aria-hidden="true"></span>
-    </button>
-  </section>
+  <p class="hint" id="hint"></p>
 </main>
 
-<!-- The picker is a sheet rather than a dropdown: seventy-five countries is
-     a list you read, and a list you read deserves the whole window. -->
-<div class="sheet" id="sheet" hidden>
-  <div class="sheet__top">
-    <input class="sheet__search" id="search" type="text" placeholder="جست‌وجوی کشور"
-           autocomplete="off" spellcheck="false">
-    <button class="sheet__close" id="sheetClose" type="button">بستن</button>
-  </div>
-  <div class="sheet__list" id="list"></div>
-</div>
+<dialog class="picker" id="picker">
+  <header class="picker__top">
+    <input class="picker__search" id="search" type="text" placeholder="Search countries"
+           autocomplete="off" spellcheck="false" aria-label="Search countries">
+    <button class="picker__close" id="pickerClose" type="button" aria-label="Close">
+      <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
+        <path d="M3 3 L11 11 M11 3 L3 11" fill="none" stroke="currentColor"
+              stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+    </button>
+  </header>
+  <div class="picker__list" id="list"></div>
+</dialog>
 
-<div class="toast" id="toast" hidden></div>
-
+<script src="fuse.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

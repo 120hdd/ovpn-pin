@@ -1,263 +1,269 @@
 /* The page holds no truth of its own.
 
-   Every fact on screen came from the engine, and the only thing this file
-   decides is how to say it. That matters more than usual here: the whole
-   product is a claim about where your traffic comes out, made to someone
-   who cannot check it any other way. A number this file invented, or kept
-   showing after it stopped being true, is the one unforgivable bug.
+   Every fact on screen came from the backend, and this file only decides how
+   to say it. That matters more than usual: the whole product is a claim about
+   where your traffic comes out, made to someone who cannot check it any other
+   way. A number invented here, or left on screen after it stopped being true,
+   is the one unforgivable bug.
 
-   So: no optimistic updates, no cached "probably still connected". Every
-   state on screen is one the backend just confirmed. */
+   The last version had a different unforgivable bug — a panel that was
+   supposed to be hidden covered the window and ate every click, because a CSS
+   display rule quietly beat the hidden attribute. Everything that can be a
+   real platform element now is one: the picker is a <dialog>, so its
+   visibility is the browser's business rather than a stylesheet's.
+
+   Fuse is loaded as a plain script rather than a module: pywebview serves
+   local files over file://, where ES module imports are blocked outright,
+   and the failure mode is a page that loads and does nothing. */
 
 const $ = (id) => document.getElementById(id);
-
-const FA_DIGITS = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
-
-/* Persian numerals for anything the app is saying, Latin for anything the
-   network reported. Done here rather than with the font's ss20 feature so
-   it can never accidentally reach an address. */
-const fa = (n) => String(n).replace(/\d/g, (d) => FA_DIGITS[+d]);
 
 const state = {
   countries: [],
   picked: 'auto',
-  mode: 'off',        // off | busy | on | broken
-  ready: false,
+  mode: 'off',          // off | busy | on | fail
+  lastIp: null,
+  fuse: null,
+  cursor: 0,
 };
 
 /* ------------------------------------------------------------- rendering */
 
-let lastPlace = null;
-
-function setPlace(text, kind) {
-  const el = $('place');
-  el.dataset.state = kind;
-  if (text === lastPlace) return;
-  lastPlace = text;
-  el.textContent = text;
-  el.classList.remove('is-changing');
-  void el.offsetWidth;            // restart the animation
-  el.classList.add('is-changing');
+function setExit(ip, place, live) {
+  const el = $('exitIp');
+  el.textContent = ip || '—';
+  el.classList.toggle('was', !live && !!ip);
+  $('exitPlace').textContent = place;
+  $('exit').dataset.state = live ? 'on' : 'off';
+  $('exitCap').textContent = live
+    ? 'Your traffic exits from'
+    : (ip ? 'Last exited from' : 'Your traffic exits from');
 }
 
-function setFacts({ ip, city, ms }) {
-  $('factIp').textContent = ip || '—';
-  $('factCity').textContent = city || '—';
-  $('factMs').textContent = ms || '—';
+function setStatus(word, kind, where, host) {
+  const s = $('status');
+  s.textContent = word;
+  s.dataset.state = kind;
+  $('statusWhere').innerHTML = where || '&nbsp;';
+  $('statusHost').innerHTML = host || '&nbsp;';
 }
 
-function setNote(text, bad) {
-  const el = $('note');
+function setHint(text, bad) {
+  const el = $('hint');
   el.textContent = text || '';
   el.classList.toggle('is-bad', !!bad);
 }
 
-function setMarquee(text) {
-  const host = $('where');
-  let m = document.querySelector('.marquee');
-  if (!text) { if (m) m.remove(); return; }
-  if (!m) {
-    m = document.createElement('div');
-    m.className = 'marquee';
-    m.innerHTML = '<span></span>';
-    host.appendChild(m);
-  }
-  // Doubled, so the loop has something to scroll into.
-  const unit = `${text}   ·   `;
-  m.querySelector('span').textContent = unit.repeat(8);
-}
-
 function render() {
   const act = $('act');
-  const wire = $('wire');
-
-  if (state.mode === 'busy') {
-    act.dataset.mode = 'busy';
-    $('actLabel').textContent = 'در حال اتصال';
-    $('pick').disabled = true;
-    wire.classList.remove('is-live', 'is-bad');
-  } else if (state.mode === 'on') {
-    act.dataset.mode = 'on';
-    $('actLabel').textContent = 'قطع اتصال';
-    $('pick').disabled = false;
-    wire.classList.add('is-live');
-    wire.classList.remove('is-bad');
-  } else {
-    act.dataset.mode = 'off';
-    $('actLabel').textContent = 'اتصال';
-    $('pick').disabled = false;
-    wire.classList.remove('is-live', 'is-bad');
+  act.dataset.mode = state.mode === 'fail' ? 'off' : state.mode;
+  $('card').dataset.busy = String(state.mode === 'busy');
+  $('pick').disabled = state.mode === 'busy';
+  $('more').hidden = !(state.mode === 'on');
+  if (state.mode !== 'on') {
+    $('details').hidden = true;
+    $('more').setAttribute('aria-expanded', 'false');
   }
-
   const c = state.countries.find((x) => x.code === state.picked);
-  $('pickValue').textContent = state.picked === 'auto' ? 'خودکار' : (c ? c.name : state.picked);
+  $('pickLabel').textContent = state.picked === 'auto'
+    ? 'Fastest available' : (c ? c.name : state.picked);
 }
 
-/* ------------------------------------------------------------- the sheet */
+/* --------------------------------------------------------------- picker */
 
-function openSheet() {
-  $('sheet').hidden = false;
+function openPicker() {
+  const dlg = $('picker');
   $('search').value = '';
+  state.cursor = 0;
   drawList('');
-  setTimeout(() => $('search').focus(), 40);
+  dlg.showModal();
+  setTimeout(() => $('search').focus(), 30);
 }
 
-function closeSheet() { $('sheet').hidden = true; }
+function closePicker() { $('picker').close(); }
+
+function matches(query) {
+  const q = (query || '').trim();
+  if (!q) return state.countries;
+  return state.fuse.search(q).map((r) => r.item);
+}
 
 function drawList(query) {
   const list = $('list');
   const q = (query || '').trim();
-  list.innerHTML = '';
+  list.replaceChildren();
 
   if (!q) {
     const auto = document.createElement('button');
+    auto.type = 'button';
     auto.className = 'row row--auto' + (state.picked === 'auto' ? ' is-picked' : '');
-    auto.innerHTML =
-      '<span class="row__name">خودکار'
-      + '<div class="row__sub">سریع‌ترین سروری که همان لحظه جواب بدهد</div></span>';
-    auto.onclick = () => { state.picked = 'auto'; closeSheet(); render(); };
-    list.appendChild(auto);
+    auto.dataset.code = 'auto';
+    const name = document.createElement('span');
+    name.className = 'row__name';
+    name.append('Fastest available');
+    const sub = document.createElement('span');
+    sub.className = 'row__sub';
+    sub.textContent = 'Whichever server answers first, right now';
+    name.append(sub);
+    auto.append(name);
+    list.append(auto);
   }
 
-  const matches = state.countries.filter(
-    (c) => !q || c.name.includes(q) || c.code.includes(q.toLowerCase()));
-
-  if (!matches.length) {
-    const e = document.createElement('div');
+  const found = matches(q);
+  if (!found.length) {
+    const e = document.createElement('p');
     e.className = 'empty';
-    e.textContent = 'کشوری با این نام پیدا نشد.';
-    list.appendChild(e);
+    e.textContent = `No country matches “${q}”.`;
+    list.append(e);
     return;
   }
 
-  for (const c of matches) {
+  for (const c of found) {
     const row = document.createElement('button');
+    row.type = 'button';
     row.className = 'row' + (state.picked === c.code ? ' is-picked' : '');
-    const time = c.best != null ? `${c.best.toFixed(1)}s` : '';
-    row.innerHTML =
-      `<span class="row__name">${c.name}</span>`
-      + `<span class="row__code">${c.code.toUpperCase()}</span>`
-      + `<span class="row__time">${time}</span>`;
-    row.onclick = () => { state.picked = c.code; closeSheet(); render(); };
-    list.appendChild(row);
+    row.dataset.code = c.code;
+    const name = document.createElement('span');
+    name.className = 'row__name';
+    name.textContent = c.name;
+    const meta = document.createElement('span');
+    meta.className = 'row__meta';
+    meta.textContent = c.best != null ? `${c.best.toFixed(1)}s` : '';
+    row.append(name, meta);
+    list.append(row);
   }
+  markCursor();
 }
 
-/* ------------------------------------------- what the backend tells us */
+function rows() { return Array.from($('list').querySelectorAll('.row')); }
+
+function markCursor() {
+  const all = rows();
+  if (!all.length) return;
+  state.cursor = Math.max(0, Math.min(state.cursor, all.length - 1));
+  all.forEach((r, i) => r.classList.toggle('is-cursor', i === state.cursor));
+  all[state.cursor].scrollIntoView({ block: 'nearest' });
+}
+
+function choose(code) {
+  state.picked = code;
+  closePicker();
+  render();
+  window.pywebview.api.remember(code);
+}
+
+/* --------------------------------------------------- events from the app */
+
+const STAGES = {
+  probing: 'Looking for a server',
+  starting: 'Opening the connection',
+  routing: 'Pointing Windows at it',
+  verifying: 'Checking it really works',
+};
 
 window.onProgress = (p) => {
-  if (p.phase === 'probing') {
-    setPlace('…', 'busy');
-    const asked = fa(p.asked || 0), total = fa(p.total || 0);
-    setNote(`از ${total} سرور، ${asked} تا پرسیده شد.\nهر بار فقط تعدادی از آن‌ها جواب می‌دهند، پس این کمی طول می‌کشد.`);
-  } else if (p.phase === 'starting') {
-    setNote('سروری پیدا شد. در حال برقراری اتصال…');
-  } else if (p.phase === 'routing') {
-    setNote('در حال تنظیم ویندوز روی این اتصال…');
-  } else if (p.phase === 'verifying') {
-    setNote('در حال بررسی اینکه واقعاً کار می‌کند…');
+  const stage = STAGES[p.phase] || 'Working';
+  let detail = '';
+  if (p.phase === 'probing' && p.total) {
+    detail = `${p.asked || 0} of ${p.total} asked`;
   }
+  setStatus('CONNECTING', 'busy', stage, detail);
 };
 
 window.onConnected = (status) => {
   state.mode = 'on';
   const e = status.exit || {};
   const seen = e.seen_as || {};
-  const code = (seen.country || e.country || '').toLowerCase();
-  const c = state.countries.find((x) => x.code === code);
-  setPlace(c ? c.name : (code || '').toUpperCase() || 'ناشناخته', 'on');
-  setFacts({
-    ip: seen.ip || e.ip,
-    city: (seen.colo || e.city || '').toUpperCase(),
-    ms: e.answered != null ? `${e.answered.toFixed(2)}s` : '—',
-  });
-  $('whereLabel').textContent = 'اینترنت شما از اینجا بیرون می‌رود';
-  // Three different things to say, and the difference between them matters
-  // more here than anywhere else in the app.
-  //
-  // The middle case is the interesting one. A server labelled mk-skp really
-  // came out in Croatia, and one labelled eg-cai came out in France — the
-  // provider sells locations it does not physically have. The big word is
-  // always the measured country, never the label, because the label is
-  // marketing and the measurement is what a website will actually see. But
-  // silently showing a country nobody picked looks like a bug, so it gets a
-  // sentence.
-  const claimed = (e.country || '').toLowerCase();
-  const measured = (seen.country || '').toLowerCase();
-  const claimedName = (state.countries.find((x) => x.code === claimed) || {}).name;
+  const ip = seen.ip || e.ip;
+  state.lastIp = ip;
 
-  if (e.unconfirmed) {
-    setNote('اتصال برقرار است، ولی تأیید مستقلش این بار جواب نداد.\nاگر سایت‌ها باز می‌شوند، مشکلی نیست.');
-  } else if (measured && claimed && measured !== claimed) {
-    setNote(`این سرور با نام ${claimedName || claimed.toUpperCase()} فروخته می‌شود، ولی ترافیک واقعاً از اینجا بیرون می‌رود.\nآنچه سایت‌ها می‌بینند همین است.`);
-  } else {
-    setNote('همه‌ی برنامه‌ها روی این ویندوز از این مسیر می‌روند.\nبرای برگشتن به حالت عادی، «قطع اتصال» را بزنید.');
-  }
-  setMarquee(`${e.host || ''}  ·  ${seen.ip || e.ip || ''}`);
+  const measured = (seen.country || '').toLowerCase();
+  const claimed = (e.country || '').toLowerCase();
+  const mName = (state.countries.find((x) => x.code === measured) || {}).name;
+  const cName = (state.countries.find((x) => x.code === claimed) || {}).name;
+  const place = mName || cName || '—';
+
+  setExit(ip, place, true);
+  setStatus('CONNECTED', 'on', place + (e.cityName ? `, ${e.cityName}` : ''),
+            e.host || '');
+  $('detIn').textContent = `${e.ip || '—'}:443`;
+  $('detOut').textContent = ip || '—';
+
+  // The label and the measurement disagree often enough to be worth saying.
+  setHint(measured && claimed && measured !== claimed
+    ? `This server is sold as ${cName || claimed.toUpperCase()}, but its traffic really comes out in ${place}. What websites see is the second one.`
+    : (e.unconfirmed
+        ? 'Connected, but the independent check did not answer. If pages load, it is fine.'
+        : 'Everything on this PC now goes through this connection.'));
   render();
 };
 
 window.onFailed = (err) => {
-  state.mode = 'off';
-  setPlace('نشد', 'off');
-  setFacts({});
-  setMarquee(null);
-  $('wire').classList.add('is-bad');
-
-  const messages = {
-    'all-refused': 'هیچ‌کدام از سرورها همین حالا جواب ندادند.\nاین عادی است — یکی دو دقیقه صبر کنید و دوباره بزنید.',
-    'no-servers': 'برای این کشور سروری موجود نیست.\nکشور دیگری انتخاب کنید یا روی «خودکار» بگذارید.',
-    'no-credentials': 'نام کاربری و رمز پیدا نشد.\nفایل .ovpn-auth کنار برنامه باید باشد.',
-    'cancelled': 'لغو شد.',
-    'did-not-start': 'اتصال برقرار شد ولی بالا نیامد.\nیک بار دیگر امتحان کنید.',
+  state.mode = 'fail';
+  setExit(state.lastIp, 'Not connected', false);
+  setStatus('NOT CONNECTED', 'fail', 'Could not connect', '');
+  const say = {
+    'all-refused': 'No server accepted the connection just now. That is normal — wait a minute and try again.',
+    'no-servers': 'No servers for that country. Pick another, or use Fastest available.',
+    'no-credentials': 'The username and password file is missing, so there is nothing to sign in with.',
+    'cancelled': 'Cancelled.',
+    'did-not-start': 'The connection opened but did not come up. Try once more.',
   };
-  setNote(messages[err.kind] || 'اتصال برقرار نشد.\nیک بار دیگر امتحان کنید.', true);
+  setHint(say[err.kind] || 'Could not connect. Try once more.', err.kind !== 'cancelled');
   render();
 };
 
-/* ------------------------------------------------------------- actions */
+window.onDisconnected = (info) => {
+  state.mode = 'off';
+  setExit(state.lastIp, 'Not connected', false);
+  setStatus('DISCONNECTED', 'off', '', '');
+  setHint(info && info.minutes
+    ? `Windows is back to normal. Routed for ${info.minutes} minute${info.minutes === 1 ? '' : 's'}.`
+    : 'Windows is back to normal.');
+  render();
+};
+
+/* -------------------------------------------------------------- actions */
 
 async function onAct() {
-  if (state.mode === 'busy') { await window.pywebview.api.cancel(); return; }
-
-  if (state.mode === 'on') {
-    setNote('در حال قطع کردن و برگرداندن تنظیمات ویندوز…');
-    const r = await window.pywebview.api.disconnect();
-    state.mode = 'off';
-    setPlace('مستقیم', 'off');
-    setFacts({});
-    setMarquee(null);
-    $('whereLabel').textContent = 'اینترنت شما از خط خودتان می‌رود';
-    setNote('تنظیمات ویندوز به حالت قبل برگشت.');
-    render();
+  if (state.mode === 'busy') {
+    await window.pywebview.api.cancel();
     return;
   }
-
+  if (state.mode === 'on') {
+    setStatus('DISCONNECTING', 'busy', 'Putting Windows back', '');
+    const r = await window.pywebview.api.disconnect();
+    window.onDisconnected(r && r.session);
+    return;
+  }
   state.mode = 'busy';
   render();
-  setNote('در حال گشتن دنبال سرور…');
+  setStatus('CONNECTING', 'busy', 'Looking for a server', '');
+  setHint('');
   const r = await window.pywebview.api.connect(state.picked);
   if (!r.ok) { state.mode = 'off'; render(); }
 }
 
-/* --------------------------------------------------------------- start */
+/* ---------------------------------------------------------------- start */
 
 async function boot() {
   const info = await window.pywebview.api.boot();
   state.countries = info.countries || [];
+  state.picked = info.picked || 'auto';
+  state.fuse = new Fuse(state.countries, {
+    keys: ['name', 'code', 'alias'], threshold: 0.4, ignoreLocation: true,
+  });
 
   if (!info.hasCredentials) {
-    setPlace('—', 'idle');
-    setNote('فایل نام کاربری و رمز پیدا نشد. بدون آن نمی‌شود وصل شد.', true);
+    setStatus('NOT SET UP', 'fail', 'Missing sign-in details', '');
+    setHint('The file with the username and password is not next to the app, so it cannot connect.', true);
     $('act').disabled = true;
+    $('pick').disabled = true;
     return;
   }
 
   if (info.recovered) {
-    const t = $('toast');
-    t.hidden = false;
-    t.textContent = 'دفعه‌ی قبل برنامه درست بسته نشده بود. تنظیمات ویندوز به حالت عادی برگشت.';
-    setTimeout(() => { t.hidden = true; }, 7000);
+    setHint('The app did not close properly last time. Windows proxy settings have been put back.');
   }
 
   const s = info.status || {};
@@ -265,26 +271,57 @@ async function boot() {
     window.onConnected(s);
   } else {
     state.mode = 'off';
-    setPlace('مستقیم', 'off');
-    $('whereLabel').textContent = 'اینترنت شما از خط خودتان می‌رود';
-    setNote(`${fa(state.countries.length)} کشور آماده است.\nیکی را انتخاب کنید یا همان «خودکار» را بزنید.`);
+    setExit(null, 'Not connected', false);
+    setStatus('DISCONNECTED', 'off', '', '');
+    if (!info.recovered) {
+      setHint(`${state.countries.length} countries ready.`);
+    }
     render();
   }
-  state.ready = true;
 }
 
-$('act').onclick = onAct;
-$('pick').onclick = openSheet;
-$('sheetClose').onclick = closeSheet;
-$('search').oninput = (e) => drawList(e.target.value);
-$('min').onclick = () => window.pywebview.api.minimise();
-$('quit').onclick = () => window.pywebview.api.close();
-document.onkeydown = (e) => {
-  if (e.key === 'Escape' && !$('sheet').hidden) closeSheet();
-};
+/* --------------------------------------------------------------- wiring */
+
+$('act').addEventListener('click', onAct);
+$('pick').addEventListener('click', openPicker);
+$('pickerClose').addEventListener('click', closePicker);
+$('search').addEventListener('input', (e) => { state.cursor = 0; drawList(e.target.value); });
+
+$('more').addEventListener('click', () => {
+  const open = $('details').hidden;
+  $('details').hidden = !open;
+  $('more').setAttribute('aria-expanded', String(open));
+});
+
+// One listener on the list rather than one per row, so a re-render cannot
+// leave a stale handler behind.
+$('list').addEventListener('click', (e) => {
+  const row = e.target.closest('.row');
+  if (row) choose(row.dataset.code);
+});
+
+$('picker').addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    state.cursor += e.key === 'ArrowDown' ? 1 : -1;
+    markCursor();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const r = rows()[state.cursor];
+    if (r) choose(r.dataset.code);
+  }
+});
 
 window.addEventListener('pywebviewready', boot);
 if (window.pywebview && window.pywebview.api) boot();
 
-/* A hook the automated check uses to read state without guessing. */
-window.__dbg = () => state.countries.length;
+/* Read by the automated check, which asserts on real hit-testing rather than
+   on handlers existing — the previous suite called .click() directly, which
+   bypasses hit-testing entirely and so happily passed on a window where
+   every control was covered. */
+window.__probe = () => ({
+  countries: state.countries.length,
+  mode: state.mode,
+  picked: state.picked,
+  pickerOpen: $('picker').open,
+});

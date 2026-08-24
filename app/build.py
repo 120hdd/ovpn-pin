@@ -1,4 +1,4 @@
-"""Build اتصال into a folder that is ready to run.
+"""Build Relay into a folder that is ready to run.
 
     python app/build.py
 
@@ -10,7 +10,7 @@ out produced a real mistake:
   else is not a build, it is homework.
 
   It deletes the working folder afterwards. PyInstaller leaves an
-  intermediate Ettesal.exe in there which looks exactly like the real one,
+  intermediate Relay.exe in there which looks exactly like the real one,
   has no _internal beside it, and fails instantly when double-clicked. Two
   identical-looking exes where one is broken is a trap; the fix is to have
   one exe.
@@ -44,7 +44,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 DIST = os.path.join(ROOT, 'dist')
 WORK = os.path.join(ROOT, 'build')
-NAME = 'Ettesal'
+NAME = 'Relay'
 
 # Where the .ovpn files come from, in the order the app itself looks.
 SERVER_SOURCES = ('servers', 'success', 'pinned')
@@ -99,8 +99,9 @@ def main():
         '--distpath', DIST,
         '--workpath', WORK,
         '--specpath', WORK,
-        # The page, its stylesheet, its script, the two typefaces, the licences.
+        # The page, its stylesheet, its script and the vendored search.
         '--add-data', f'{os.path.join(HERE, "ui")}{sep}ui',
+        '--add-data', f'{os.path.join(HERE, "assets")}{sep}assets',
         # The proxy is a sibling of app/ in the repo and a child of the bundle
         # once frozen; paths.py knows the difference.
         '--add-data', f'{os.path.join(ROOT, "ovpn-proxy.py")}{sep}.',
@@ -108,10 +109,16 @@ def main():
         '--hidden-import', 'engine',
         '--hidden-import', 'countries',
         '--hidden-import', 'paths',
+        # pystray is imported inside a function so a machine without it still
+        # runs. PyInstaller only follows imports it can see statically, so
+        # without these the tray silently does not exist in the built app -
+        # which is exactly how the first build shipped.
+        '--hidden-import', 'pystray',
+        '--hidden-import', 'pystray._win32',
         os.path.join(HERE, 'main.py'),
     ]
 
-    icon = os.path.join(HERE, 'ui', 'app.ico')
+    icon = os.path.join(HERE, 'assets', 'app.ico')
     if os.path.isfile(icon):
         args[-1:-1] = ['--icon', icon]
 
@@ -145,13 +152,13 @@ def main():
 
     # -- remove the decoy --------------------------------------------------
 
-    # PyInstaller leaves its own Ettesal.exe in the working folder. It looks
+    # PyInstaller leaves its own Relay.exe in the working folder. It looks
     # identical and does not work, having no _internal beside it. Better that
     # it does not exist.
     shutil.rmtree(WORK, ignore_errors=True)
 
     link = make_shortcut(exe, os.path.join(os.path.expanduser('~'), 'Desktop'),
-                         'Ettesal')
+                         NAME)
 
     print()
     print('done.')
@@ -159,7 +166,7 @@ def main():
     if link:
         print(f'   shortcut  {link}')
     print()
-    print('   check it   Ettesal.exe --selftest')
+    print(f'   check it   {NAME}.exe --selftest')
 
 
 if __name__ == '__main__':

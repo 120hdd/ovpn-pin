@@ -37,6 +37,8 @@ else:
     PROXY_PY = os.path.join(DATA_DIR, 'ovpn-proxy.py')
 
 UI_DIR = os.path.join(RES_DIR, 'ui')
+ICON = os.path.join(RES_DIR, 'assets', 'app.ico')
+ICON_PNG = os.path.join(RES_DIR, 'assets', 'app.png')
 STATE_DIR = os.path.join(DATA_DIR, '.state')
 AUTH_FILE = os.path.join(DATA_DIR, '.ovpn-auth')
 SAVED_PROXY = os.path.join(STATE_DIR, 'system-proxy-before.json')

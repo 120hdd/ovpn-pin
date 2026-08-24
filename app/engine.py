@@ -25,7 +25,7 @@ import time
 import urllib.request
 
 import paths
-from countries import country_name
+from countries import aliases, city_name, country_name
 
 HERE = paths.APP_DIR
 ROOT = paths.DATA_DIR
@@ -111,6 +111,7 @@ class Engine:
         for code, c in by_country.items():
             out.append({'code': code,
                         'name': country_name(code),
+                        'alias': aliases(code),
                         'cities': len(c['cities']),
                         'count': c['count'],
                         'best': c['best']})

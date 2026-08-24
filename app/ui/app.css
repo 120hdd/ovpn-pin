@@ -1,71 +1,58 @@
 /* ============================================================================
-   اتصال — a 430px window whose entire content is one sentence.
+   Relay
 
-   The design decisions, and why each one is what it is:
+   PALETTE — Radix dark scales, pasted in rather than invented. The previous
+   attempt used a warm near-black of my own choosing and it read as amateur,
+   which is exactly what happens when a palette has no system behind it.
+   Every value below is a documented step with a purpose, and the contrast
+   ratios are computed, not estimated:
 
-   TYPE  Estedad (OFL-1.1, variable 100–900, one 125 KB file) does everything
-         Persian. It was picked because its own brief is low contrast, small
-         optical size, screen — which is what survives at 12px inside a small
-         window on Windows. IBM Plex Mono carries the machine strings, and
-         the change of voice is the point: it draws a line between the app
-         talking and the network reporting. Nothing here is Vazir, Vazirmatn,
-         IRANSans or Sahel, including in the fallback stack.
+     slate-1  #111113  window        slate-12 #EDEEF0  text        16.25:1
+     slate-2  #18191B  the one card  slate-11 #B0B4BA  muted        9.06:1
+     slate-3  #212225  control       slate-10 #777B84  disabled     4.45:1
+     slate-6  #363A3F  divider       jade-11  #1FD8A4  connected   10.25:1
+     slate-7  #43484E  border        amber-11 #FFCA16  working     12.32:1
+                                     red-11   #FF9592  failed       8.95:1
 
-   COLOUR One accent, appearing once, only when the line is live. Everything
-         else is warm greyscale. Colour is the reward for the state change,
-         not the decoration of the window.
+   Not #0A0A0A: it is roughly half the luminance of every native Windows
+   surface, which is part of why the last build looked like a web page sitting
+   on the desktop rather than an application on it.
 
-   MOTION Three moves, each because a value really changed: the place name
-         stretches and settles when the country changes, the wire draws
-         itself when a connection is made, and the action control traces its
-         own perimeter while it is trying. Nothing loops for decoration
-         except the host marquee, which is the only "still alive" signal and
-         carries real text while it does it.
+   TYPE — Segoe UI Variable, the Windows 11 UI font, at Fluent's own ramp
+   (12/16, 14/20, 18/24, 20/28, 28/36). Nothing is bundled. An app that ships
+   its own font to draw its own chrome is announcing that it is not native.
 
-   BIDI  Every machine string is isolated. An IP address at the end of a
-         Persian sentence gets reordered by the bidi algorithm otherwise, and
-         a scrambled address is worst exactly when someone is checking
-         whether to trust it.
+   SPACING — Fluent's 4/8/12/16/24/32 scale with a 16px window inset. The
+   previous 26px padding was off every grid there is.
    ========================================================================= */
 
-@font-face {
-  font-family: 'Estedad';
-  src: url('fonts/Estedad-Variable.woff2') format('woff2-variations');
-  font-weight: 100 900;
-  font-display: block;
-}
-@font-face {
-  font-family: 'Plex Mono';
-  src: url('fonts/IBMPlexMono-400.woff2') format('woff2');
-  font-weight: 400;
-  font-display: block;
-}
-@font-face {
-  font-family: 'Plex Mono';
-  src: url('fonts/IBMPlexMono-500.woff2') format('woff2');
-  font-weight: 500;
-  font-display: block;
-}
-
 :root {
-  --fa: 'Estedad', 'Noto Sans Arabic', 'Segoe UI', system-ui, sans-serif;
-  --mono: 'Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  --bg: #111113;
+  --surface: #18191B;
+  --control: #212225;
+  --control-hover: #272A2D;
+  --control-active: #2E3135;
+  --divider: #363A3F;
+  --border: #43484E;
 
-  --ground: #100E0C;
-  --ground-lift: #17150F;
-  --ink: #F3EFE7;
-  --ink-2: rgba(243, 239, 231, 0.56);
-  --ink-3: rgba(243, 239, 231, 0.30);
-  --rule: rgba(243, 239, 231, 0.11);
+  --text: #EDEEF0;
+  --text-muted: #B0B4BA;
+  --text-off: #777B84;
 
-  /* Sodium. Not a VPN green and not a gradient — a filament that is either
-     lit or it is not. */
-  --live: #F2A03B;
-  --live-dim: rgba(242, 160, 59, 0.22);
-  --bad: #D8643F;
+  --ok: #1FD8A4;
+  --ok-bg: #0F2E22;
+  --work: #FFCA16;
+  --fail: #FF9592;
+  --fail-bg: #3B1219;
+  --focus: #27B08B;
 
-  --pad: 26px;
-  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  /* Fluent's own motion tokens. Fast entrance, faster fade, and one easing
+     curve so nothing in the app moves to a different rhythm. */
+  --enter: 167ms cubic-bezier(0, 0, 0, 1);
+  --fade: 83ms linear;
+
+  --r-card: 12px;
+  --r-ctl: 4px;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -73,397 +60,368 @@
 html, body { height: 100%; }
 
 body {
-  background: var(--ground);
-  color: var(--ink);
-  font-family: var(--fa);
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI Variable Display', 'Segoe UI Variable',
+               'Segoe UI', system-ui, sans-serif;
   font-size: 14px;
-  line-height: 1.65;
+  line-height: 20px;
   overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
-  /* Estedad ships a Latin→Farsi digits set. It must never fire on an
-     address: 192.168.1.1 becoming ۱۹۲.۱۶۸.۱.۱ is unverifiable and
-     unpasteable. Off everywhere; the counters convert their own digits. */
-  font-feature-settings: 'ss20' 0;
-  /* A dither rather than a gradient: texture with no direction and no
-     colour, at the threshold of visible. */
-  background-image:
-    radial-gradient(rgba(255, 255, 255, 0.022) 0.5px, transparent 0.5px);
-  background-size: 3px 3px;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* --------------------------------------------------------------- chrome */
+button { font: inherit; color: inherit; cursor: pointer; border: 0; background: none; }
 
-.chrome {
-  height: 46px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 14px 0 var(--pad);
-  -webkit-app-region: drag;
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
 }
 
-.chrome__mark {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  color: var(--ink-3);
+/* Machine strings sit in the mono face and never reflow when a digit
+   changes width. */
+.mono {
+  font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
 }
 
-.chrome__buttons { display: flex; gap: 8px; -webkit-app-region: no-drag; }
-
-.chip {
-  width: 26px; height: 26px;
-  display: grid; place-items: center;
-  border: 0; border-radius: 50%;
-  background: transparent;
-  cursor: pointer;
-  transition: background 140ms var(--ease);
-}
-.chip span {
-  width: 11px; height: 1.5px;
-  background: var(--ink-3);
-  transition: background 140ms var(--ease);
-}
-.chip--close span {
-  height: 11px; width: 11px;
-  background: none;
-  border-left: 1.5px solid var(--ink-3);
-  border-bottom: 1.5px solid var(--ink-3);
-  transform: rotate(-45deg) translate(1px, -1px);
-  transition: border-color 140ms var(--ease);
-}
-.chip:hover { background: rgba(255, 255, 255, 0.06); }
-.chip:hover span { background: var(--ink); }
-.chip--close:hover span { background: none; border-color: var(--ink); }
-
-/* ---------------------------------------------------------------- stage */
-
-.stage {
-  height: calc(100% - 46px);
+.app {
+  height: 100%;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  padding: 0 var(--pad) 22px;
+  padding: 16px;
 }
 
-/* The block sits high rather than centred. Centring it would make the
-   window symmetrical top to bottom, and the emptiness underneath is what
-   gives the place name room to be as large as it is. */
-.where { padding-top: 4vh; }
+/* ---------------------------------------------------------------- the top */
 
-.where__label {
-  font-size: 12.5px;
-  color: var(--ink-3);
-  letter-spacing: 0.01em;
-  margin-bottom: 10px;
-  transition: color 200ms var(--ease);
-}
-
-.where__slot {
-  min-height: 84px;
+/* The ambient area carries one fact: the address you now present to the web.
+   Mullvad puts a world map here; a map for a proxy would be decoration
+   pretending to be information, so this is the thing being claimed instead —
+   and it is the largest element on screen because it is the whole point. */
+.exit {
+  flex: 1;
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 8px 8px;
 }
 
-.where__place {
-  font-size: 62px;
-  font-weight: 700;
-  line-height: 1.02;
-  letter-spacing: -0.015em;
-  color: var(--ink);
-  transform-origin: right bottom;
+.exit__cap {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-off);
+  margin-bottom: 6px;
+  transition: color var(--fade);
 }
 
-/* "Snappy text stretch": the word deforms and settles rather than fading,
-   so the change of country is felt as one event rather than a crossfade of
-   two states. 200ms, which is long enough to read as motion and short
-   enough not to be waited on. */
-.where__place.is-changing {
-  animation: settle 210ms var(--ease);
-}
-@keyframes settle {
-  0%   { transform: scaleY(1.16) translateY(4px); opacity: 0.25; }
-  60%  { transform: scaleY(0.985) translateY(0); opacity: 1; }
-  100% { transform: scaleY(1) translateY(0); opacity: 1; }
-}
-
-.where__place[data-state='idle'] { color: var(--ink-3); }
-.where__place[data-state='off']  { color: var(--ink-2); }
-.where__place[data-state='on']   { color: var(--ink); }
-.where__place[data-state='busy'] { color: var(--ink-2); }
-
-/* The wire. Asymmetry lives here: it starts at the left edge and stops well
-   short of the right, so the block is never a tidy rectangle. It draws
-   itself on connect — a line being made. */
-.wire {
-  margin: 20px 0 18px;
-  height: 1px;
-  background: var(--rule);
-  position: relative;
-  overflow: hidden;
-}
-.wire i {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 62%;
-  background: var(--live);
-  transform: scaleX(0);
-  transform-origin: left;
-  transition: transform 460ms var(--ease);
-}
-.wire.is-live i { transform: scaleX(1); }
-.wire.is-bad i { background: var(--bad); transform: scaleX(1); }
-
-/* The ledger. Deliberately about a third of the place name's size and just
-   over half its brightness — the sub-facts must never compete with the
-   state they describe. */
-.facts { display: grid; gap: 7px; }
-.facts__row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 12px;
-}
-.facts dt { font-size: 12px; color: var(--ink-3); }
-.facts dd { font-size: 12.5px; color: var(--ink-2); }
-
-/* Machine strings: isolated from the bidi algorithm, tabular, and in the
-   other voice. */
-.mono {
-  font-family: var(--mono);
-  font-weight: 400;
-  direction: ltr;
-  unicode-bidi: isolate;
-  text-align: left;
-  font-variant-numeric: tabular-nums;
+.exit__ip {
+  font-size: 28px;
+  line-height: 36px;
+  font-weight: 600;
   letter-spacing: -0.01em;
+  color: var(--text-off);
+  transition: color 200ms ease-out;
 }
 
-.note {
-  margin-top: 16px;
-  font-size: 12.5px;
-  line-height: 1.75;
-  color: var(--ink-3);
-  min-height: 42px;
+.exit__place {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--text-off);
+  margin-top: 2px;
+  transition: color var(--fade);
 }
-.note.is-bad { color: var(--bad); }
 
-/* The one loop in the app, and it carries text rather than shapes: the exit
-   host, moving slowly enough to be ignorable. It is the "still alive"
-   signal, in place of a spinner that would say nothing. */
-.marquee {
-  margin-top: 14px;
-  height: 15px;
-  overflow: hidden;
+.exit[data-state='on'] .exit__ip { color: var(--text); }
+.exit[data-state='on'] .exit__place { color: var(--text-muted); }
+.exit[data-state='on'] .exit__cap { color: var(--text-muted); }
+
+/* Disconnected, the last address is struck through rather than blanked. It
+   says "this was true and is not any more", which an empty box does not. */
+.exit[data-state='off'] .exit__ip.was {
+  text-decoration: line-through;
+  text-decoration-color: var(--text-off);
+  opacity: 0.55;
+}
+
+/* --------------------------------------------------------------- the card */
+
+.card {
   position: relative;
-  mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--r-card);
+  padding: 16px;
+  overflow: hidden;
 }
-.marquee span {
+
+.card__more {
   position: absolute;
+  top: 12px; right: 12px;
+  width: 24px; height: 24px;
+  display: grid; place-items: center;
+  border-radius: var(--r-ctl);
+  color: var(--text-muted);
+  transition: background var(--fade), color var(--fade), transform var(--enter);
+}
+.card__more:hover { background: var(--control-hover); color: var(--text); }
+.card__more[aria-expanded='true'] { transform: rotate(180deg); }
+
+/* The shouted word. One line, colour-coded, and it holds its height while
+   empty so the card never jumps as the state changes. */
+.status {
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  min-height: 28px;
+  color: var(--text);
+}
+.status[data-state='on']   { color: var(--ok); }
+.status[data-state='busy'] { color: var(--text); }
+.status[data-state='off']  { color: var(--text-muted); }
+.status[data-state='fail'] { color: var(--fail); }
+
+.status__where {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--text);
+  min-height: 20px;
+}
+
+.status__host {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
+  min-height: 16px;
+  opacity: 0.75;
   white-space: nowrap;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  color: rgba(242, 160, 59, 0.34);
-  direction: ltr;
-  animation: drift 42s linear infinite;
-}
-@keyframes drift {
-  from { transform: translateX(0); }
-  to   { transform: translateX(-50%); }
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-/* ------------------------------------------------------------- controls */
+/* In and Out, and deliberately nothing else. No latency, no throughput, no
+   bytes — the most privacy-obsessed client in this category shows neither,
+   and every extra number is one more thing to be wrong about. */
+.details {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--divider);
+}
+.details__head {
+  font-size: 10px;
+  line-height: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-off);
+  margin-bottom: 8px;
+}
+.details__grid {
+  display: grid;
+  grid-template-columns: 32px 1fr;
+  gap: 4px 12px;
+  font-size: 12px;
+  line-height: 16px;
+}
+.details__grid dt { color: var(--text-off); }
+.details__grid dd { color: var(--text-muted); word-break: break-all; }
 
-.controls { display: grid; gap: 10px; }
+.stack { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
 
-/* Text-led rather than box-led: the label and the value do the work and the
-   container barely exists until you touch it. */
-.pick {
+/* ------------------------------------------------------------- the buttons */
+
+.btn {
+  width: 100%;
+  height: 36px;
+  border-radius: var(--r-ctl);
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 13px 16px;
-  border: 1px solid var(--rule);
-  border-radius: 11px;
-  background: transparent;
-  color: var(--ink);
-  font-family: var(--fa);
+  justify-content: center;
+  gap: 8px;
   font-size: 14px;
-  cursor: pointer;
-  transition: border-color 160ms var(--ease), background 160ms var(--ease);
-}
-.pick:hover { border-color: rgba(243, 239, 231, 0.24); background: rgba(255,255,255,0.02); }
-.pick__key { font-size: 12px; color: var(--ink-3); }
-.pick__value { flex: 1; text-align: left; font-weight: 500; }
-.pick__caret {
-  width: 7px; height: 7px;
-  border-left: 1.5px solid var(--ink-3);
-  border-bottom: 1.5px solid var(--ink-3);
-  transform: rotate(-45deg);
-  margin-bottom: 3px;
-}
-.pick:disabled { opacity: 0.4; cursor: default; }
-
-.act {
-  position: relative;
-  width: 100%;
-  padding: 17px;
-  border: 0;
-  border-radius: 11px;
-  background: var(--ink);
-  color: var(--ground);
-  font-family: var(--fa);
-  font-size: 15px;
   font-weight: 600;
-  cursor: pointer;
-  overflow: hidden;
-  transition: background 200ms var(--ease), color 200ms var(--ease);
-}
-.act[data-mode='on'] {
-  background: transparent;
-  color: var(--ink-2);
-  box-shadow: inset 0 0 0 1px var(--rule);
-}
-.act[data-mode='on']:hover { color: var(--ink); box-shadow: inset 0 0 0 1px rgba(243,239,231,0.26); }
-.act[data-mode='busy'] {
-  background: transparent;
-  color: var(--ink-2);
-  box-shadow: inset 0 0 0 1px var(--live-dim);
-  cursor: default;
+  transition: background var(--fade), color var(--fade), box-shadow var(--fade);
 }
 
-/* "Interactive button: trace" — while it is trying, a stroke travels the
-   control's own perimeter. Progress lives in the thing you pressed, so
-   there is no spinner and no second element to explain. */
-.act__meter { position: absolute; inset: 0; pointer-events: none; opacity: 0; }
-.act[data-mode='busy'] .act__meter { opacity: 1; }
-.act__meter::before {
+.btn--quiet {
+  background: var(--control);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border);
+  justify-content: space-between;
+  padding: 0 12px;
+  font-weight: 400;
+}
+.btn--quiet:hover { background: var(--control-hover); }
+.btn--quiet:active { background: var(--control-active); }
+.btn__chev { color: var(--text-off); flex: none; }
+.btn__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Three labels stacked in one grid cell, so the button is sized by its
+   longest word and never resizes when the state changes. A control that
+   changes width mid-transition is the loudest amateur tell there is. */
+.btn__track { display: grid; }
+.btn__word {
+  grid-area: 1 / 1;
+  opacity: 0;
+  transition: opacity var(--fade);
+}
+.btn[data-mode='off'] .btn__word[data-for='off'],
+.btn[data-mode='busy'] .btn__word[data-for='busy'],
+.btn[data-mode='on'] .btn__word[data-for='on'] { opacity: 1; }
+
+/* Connect is affirmative, Cancel and Disconnect are destructive. Copied
+   exactly, because the version where the button still says "Connect" while
+   connecting is the mistake nearly everyone makes. */
+.btn--go[data-mode='off'] { background: var(--ok); color: #06281D; }
+.btn--go[data-mode='off']:hover { background: #2BE7B1; }
+.btn--go[data-mode='busy'],
+.btn--go[data-mode='on'] { background: var(--fail-bg); color: var(--fail); box-shadow: inset 0 0 0 1px #5E2028; }
+.btn--go[data-mode='busy']:hover,
+.btn--go[data-mode='on']:hover { background: #4C1720; }
+.btn:disabled { opacity: 0.5; cursor: default; }
+
+/* Full-bleed along the card's bottom edge, like browser chrome. Uneven
+   keyframes on purpose: a constant sweep reads as a decoration, an uneven
+   one reads as work being done. */
+.progress {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 2px;
+  background: var(--divider);
+  opacity: 0;
+  transition: opacity var(--fade);
+}
+.card[data-busy='true'] .progress { opacity: 1; }
+.progress::after {
   content: '';
   position: absolute;
-  inset: 0;
-  border-radius: 11px;
-  padding: 1px;
-  background: conic-gradient(from 0deg, transparent 0deg 300deg, var(--live) 355deg, transparent 360deg);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  animation: trace 1.5s linear infinite;
+  inset: 0 auto 0 0;
+  width: 40%;
+  background: var(--work);
+  animation: sweep 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
-@keyframes trace { to { transform: rotate(360deg); } }
+@keyframes sweep {
+  0%   { left: -40%; width: 40%; }
+  55%  { left: 45%;  width: 55%; }
+  100% { left: 100%; width: 30%; }
+}
 
-/* ---------------------------------------------------------------- sheet */
+.hint {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-off);
+  min-height: 32px;
+  margin-top: 12px;
+  padding: 0 4px;
+}
+.hint.is-bad { color: var(--fail); }
 
-.sheet {
-  position: fixed;
-  inset: 0;
-  background: var(--ground);
+/* -------------------------------------------------------------- the picker */
+
+/* A real <dialog>. showModal() puts it in the top layer, which no stylesheet
+   can override — unlike the div-with-hidden it replaces, whose display rule
+   silently beat the hidden attribute and left an invisible panel over the
+   whole window swallowing every click. */
+/* NOTE THE [open]. `dialog:not([open]) { display: none }` is a user-agent
+   style, so a bare `.picker { display: flex }` overrides it and the dialog
+   keeps covering the window after close() - reporting open === false while
+   still eating every click. That is the identical mistake that broke the
+   previous version with a div and the hidden attribute, and the automated
+   check caught it here only because it asserts on elementFromPoint rather
+   than on the flag. Style the open state, never the element. */
+.picker {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+.picker[open] {
   display: flex;
   flex-direction: column;
-  animation: rise 240ms var(--ease);
-  z-index: 5;
 }
-@keyframes rise {
-  from { transform: translateY(14px); opacity: 0; }
+.picker::backdrop { background: rgba(0, 0, 0, 0.4); }
+.picker[open] { animation: slide var(--enter); }
+@keyframes slide {
+  from { transform: translateY(10px); opacity: 0; }
   to   { transform: translateY(0); opacity: 1; }
 }
 
-.sheet__top {
+.picker__top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--divider);
+  flex: none;
+}
+.picker__search {
+  flex: 1;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-ctl);
+  background: var(--control);
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+.picker__search:focus { box-shadow: inset 0 0 0 1px var(--focus); }
+.picker__search::placeholder { color: var(--text-off); }
+.picker__close {
+  width: 32px; height: 32px;
+  display: grid; place-items: center;
+  border-radius: var(--r-ctl);
+  color: var(--text-muted);
+  flex: none;
+}
+.picker__close:hover { background: var(--control-hover); color: var(--text); }
+
+.picker__list { flex: 1; overflow-y: auto; padding: 4px 0 8px; }
+.picker__list::-webkit-scrollbar { width: 10px; }
+.picker__list::-webkit-scrollbar-thumb {
+  background: var(--control-active);
+  border-radius: 5px;
+  border: 3px solid var(--bg);
+}
+.picker__list::-webkit-scrollbar-thumb:hover { background: var(--border); }
+
+/* 40px rows. Places as type and a number — no flags, no pins, no map. */
+.row {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 16px var(--pad);
-  border-bottom: 1px solid var(--rule);
-}
-.sheet__search {
-  flex: 1;
-  border: 0;
-  background: transparent;
-  color: var(--ink);
-  font-family: var(--fa);
-  font-size: 16px;
-  outline: none;
-}
-.sheet__search::placeholder { color: var(--ink-3); }
-.sheet__close {
-  border: 0;
-  background: transparent;
-  color: var(--ink-3);
-  font-family: var(--fa);
-  font-size: 13px;
-  cursor: pointer;
-}
-.sheet__close:hover { color: var(--ink); }
-
-.sheet__list { flex: 1; overflow-y: auto; padding: 6px 0 14px; }
-.sheet__list::-webkit-scrollbar { width: 8px; }
-.sheet__list::-webkit-scrollbar-thumb {
-  background: rgba(243, 239, 231, 0.13);
-  border-radius: 4px;
-}
-
-/* Places as plain type and a number. No flags, no pins, no map — a location
-   list reads perfectly without any of them, and the country name is already
-   the label an icon would be duplicating. */
-.row {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
   width: 100%;
-  padding: 11px var(--pad);
-  border: 0;
-  background: transparent;
-  color: var(--ink);
-  font-family: var(--fa);
-  font-size: 15px;
-  text-align: right;
-  cursor: pointer;
+  height: 40px;
+  padding: 0 16px;
+  text-align: left;
+  color: var(--text);
 }
-.row:hover { background: rgba(255, 255, 255, 0.04); }
-.row__name { flex: 1; }
-.row__code {
-  font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: 0.08em;
-  color: var(--ink-3);
-  direction: ltr;
-  unicode-bidi: isolate;
-}
-.row__time {
-  font-family: var(--mono);
-  font-size: 11.5px;
-  color: var(--ink-3);
-  direction: ltr;
-  unicode-bidi: isolate;
+.row:hover, .row.is-cursor { background: var(--control-hover); }
+.row__name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row__meta {
+  font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--text-off);
   font-variant-numeric: tabular-nums;
+  flex: none;
 }
-.row.is-picked { background: rgba(242, 160, 59, 0.09); }
-.row.is-picked .row__name { color: var(--live); }
-.row--auto { border-bottom: 1px solid var(--rule); padding-top: 14px; padding-bottom: 14px; }
-.row--auto .row__sub { font-size: 11.5px; color: var(--ink-3); }
-
-.empty { padding: 30px var(--pad); color: var(--ink-3); font-size: 13px; }
-
-/* ---------------------------------------------------------------- toast */
-
-.toast {
-  position: fixed;
-  left: var(--pad); right: var(--pad); bottom: 18px;
-  padding: 12px 15px;
-  border-radius: 10px;
-  background: var(--ground-lift);
-  box-shadow: inset 0 0 0 1px var(--rule), 0 12px 28px rgba(0,0,0,0.5);
-  font-size: 12.5px;
-  line-height: 1.7;
-  color: var(--ink-2);
-  z-index: 9;
-  animation: rise 200ms var(--ease);
+.row.is-picked .row__name { color: var(--ok); }
+.row--auto {
+  border-bottom: 1px solid var(--divider);
+  height: 52px;
+  margin-bottom: 4px;
 }
+.row--auto .row__name { display: flex; flex-direction: column; }
+.row--auto .row__sub { font-size: 12px; line-height: 16px; color: var(--text-off); }
 
-/* Motion is a courtesy, not the message. Every state above is readable with
-   all of it switched off — which is the trade the reference that scored
-   highest on animation and lowest on accessibility got wrong. */
+.empty { padding: 24px 16px; color: var(--text-off); font-size: 13px; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
