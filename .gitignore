@@ -23,3 +23,6 @@ note.md
 
 # pid, log and what-is-connected, written while a tunnel is up.
 .state/
+
+# left behind whenever anything imports ovpn-proxy.py
+__pycache__/

@@ -692,46 +692,91 @@ def serve_one(client, exit_, quiet):
 
 #--------------------------------------------------------------- what is up
 
-# One line of plain text rather than a pid file and a lock: this changes only
-# when a proxy starts or stops, and being able to read it with cat is worth
-# more here than being able to parse it.
+# One line of plain text per proxy rather than a pid file and a lock: this
+# changes only when a proxy starts or stops, and being able to read it with
+# cat is worth more here than being able to parse it.
+#
+# Several lines, because several at once is the ordinary case rather than an
+# edge: one exit a browser points at and you change whenever you like, and a
+# second on its own port that a terminal and a chat client have settled on
+# and that nothing should disturb. Keyed by port, since a port is what a
+# client is actually pointed at - the pid is bookkeeping, the port is the
+# address someone typed into a settings box.
 STATE_PATH = os.path.join(HERE, '.state', 'proxy.state')
 
 
-def write_state(listen_host, listen_port, exit_):
+def read_states():
+    """Every proxy the file claims, minus the ones no longer there.
+
+    A record left behind by something that was killed is worse than no
+    record, so each is checked against the process table rather than
+    trusted. Sorted by port, so two readings agree on the order.
+    """
+    out = []
+    try:
+        with open(STATE_PATH, encoding='utf-8') as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        parts = line.split('\t')
+        if len(parts) < 6 or not parts[0].isdigit() or not alive(int(parts[0])):
+            continue
+        out.append({'pid': int(parts[0]), 'host': parts[1], 'port': parts[2],
+                    'ip': parts[3], 'name': parts[4], 'since': parts[5]})
+    out.sort(key=lambda r: int(r['port']) if r['port'].isdigit() else 0)
+    return out
+
+
+def read_state(port=None):
+    """The proxy on a given port - or, with no port named, the only one
+    running. Deliberately nothing when there are several: every caller of
+    this wants a proxy it can name, and picking one of two for them is how
+    you end up stopping the wrong one."""
+    live = read_states()
+    if port is not None:
+        return next((r for r in live if str(r['port']) == str(port)), None)
+    return live[0] if len(live) == 1 else None
+
+
+def put_states(records):
+    """Write the file whole, to one side and then moved into place, so that
+    a reader never catches it half-written. Two proxies starting in the same
+    second is unlikely; a truncated file would outlast the second."""
     try:
         os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-        with open(STATE_PATH, 'w', encoding='utf-8') as f:
-            f.write('\t'.join([str(os.getpid()), listen_host, str(listen_port),
-                               exit_.ip, exit_.host,
-                               time.strftime('%Y-%m-%d %H:%M:%S')]) + '\n')
+        if not records:
+            try:
+                os.remove(STATE_PATH)
+            except OSError:
+                pass
+            return
+        tmp = f'{STATE_PATH}.{os.getpid()}'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            for r in records:
+                f.write('\t'.join([str(r['pid']), r['host'], str(r['port']),
+                                   r['ip'], r['name'], r['since']]) + '\n')
+        os.replace(tmp, STATE_PATH)
     except OSError as e:
         warn('could not record what is running', f'{STATE_PATH}: {e}')
 
 
-def clear_state():
-    try:
-        os.remove(STATE_PATH)
-    except OSError:
-        pass
+def write_state(listen_host, listen_port, exit_):
+    keep = [r for r in read_states() if str(r['port']) != str(listen_port)]
+    keep.append({'pid': os.getpid(), 'host': listen_host,
+                 'port': str(listen_port), 'ip': exit_.ip, 'name': exit_.host,
+                 'since': time.strftime('%Y-%m-%d %H:%M:%S')})
+    put_states(keep)
 
 
-def read_state():
-    """What the state file says, if the process it names is still there.
-    A file left behind by something that was killed is worse than no file,
-    so it is checked rather than trusted."""
-    try:
-        with open(STATE_PATH, encoding='utf-8') as f:
-            parts = f.read().strip().split('\t')
-    except OSError:
-        return None
-    if len(parts) < 6:
-        return None
-    pid = int(parts[0]) if parts[0].isdigit() else 0
-    if not alive(pid):
-        return None
-    return {'pid': pid, 'host': parts[1], 'port': parts[2],
-            'ip': parts[3], 'name': parts[4], 'since': parts[5]}
+def clear_state(port=None):
+    """Take out one line and leave the rest. A proxy shutting down used to
+    delete the whole file, which with a second one running meant the
+    survivor disappeared from `status` while it was still serving."""
+    me = os.getpid()
+    put_states([r for r in read_states()
+                if r['pid'] != me
+                and (port is None or str(r['port']) != str(port))])
 
 
 def alive(pid):
@@ -823,9 +868,9 @@ def strays():
 
 
 def do_status():
-    st = read_state()
-    if not st:
-        head('Proxy')
+    live = read_states()
+    head('Proxy')
+    if not live:
         loose = strays()
         if loose:
             warn(f'no record of a proxy, but {len(loose)} copy of this is '
@@ -843,13 +888,17 @@ def do_status():
         note('    ovpn proxy connect uk-lon   or name one')
         print()
         return 0
-    head('Proxy')
-    ok(f'{C["bold"]}http://{st["host"]}:{st["port"]}{C["off"]}')
-    field('exit', f'{st["ip"]}   {st["name"]}')
-    field('pid', st['pid'])
-    field('since', st['since'])
-    print()
-    note('ovpn proxy stop   ends it')
+    for st in live:
+        ok(f'{C["bold"]}http://{st["host"]}:{st["port"]}{C["off"]}')
+        field('exit', f'{st["ip"]}   {st["name"]}')
+        field('pid', st['pid'])
+        field('since', st['since'])
+        print()
+    if len(live) == 1:
+        note('ovpn proxy stop   ends it')
+    else:
+        note('ovpn proxy stop --port N   ends that one')
+        note('ovpn proxy stop --all      ends all of them')
     print()
     return 0
 
@@ -864,13 +913,37 @@ def kill(pid):
         os.kill(pid, signal.SIGTERM)
 
 
-def do_stop():
-    st = read_state()
-    if not st:
+def do_stop(port=None, every=False):
+    live = read_states()
+    head('Proxy')
+
+    if port is not None:
+        wanted = [r for r in live if str(r['port']) == str(port)]
+        if not wanted:
+            note(f'nothing of ours on port {port} - nothing to stop.')
+            for r in live:
+                note(f'    port {r["port"]}  {r["name"]}  pid {r["pid"]}')
+            print()
+            return 0
+        live = wanted
+
+    if len(live) > 1 and not every:
+        # Refuse rather than guess. The browser's proxy and the one a chat
+        # client has been sitting on for a week are one keystroke apart, and
+        # only one of the two is easy to notice the loss of.
+        warn(f'{len(live)} proxies are running - say which one')
+        for r in live:
+            note(f'    port {r["port"]}  {r["name"]}  pid {r["pid"]}  '
+                 f'since {r["since"]}')
+        note('    ovpn proxy stop --port N   ends that one')
+        note('    ovpn proxy stop --all      ends all of them')
+        print()
+        return 1
+
+    if not live:
         # No record does not mean nothing is there. Look for ourselves before
         # claiming otherwise, or `stop` and `connect` end up contradicting
         # each other over the same port.
-        head('Proxy')
         loose = strays()
         if not loose:
             note('nothing running - nothing to stop.')
@@ -891,23 +964,23 @@ def do_stop():
         clear_state()
         print()
         return 0 if stopped else 1
-    try:
-        if os.name == 'nt':
-            import subprocess
-            subprocess.run(['taskkill', '/PID', str(st['pid']), '/F'],
-                           capture_output=True, check=True)
-        else:
-            import signal
-            os.kill(st['pid'], signal.SIGTERM)
-    except Exception as e:
-        die(f'could not stop pid {st["pid"]}', f'{e}\n'
-            'It may have gone already. Clear the record by hand if it sticks:\n'
-            f'    rm {STATE_PATH}')
-    clear_state()
-    head('Proxy')
-    ok(f'stopped - {st["name"]} on port {st["port"]} (pid {st["pid"]})')
+
+    # One that will not die is not a reason to leave the others running, so
+    # this reports and carries on rather than stopping at the first failure.
+    stopped = 0
+    for st in live:
+        try:
+            kill(st['pid'])
+        except Exception as e:
+            warn(f'could not stop pid {st["pid"]}', f'{e}\n'
+                 'It may have gone already. Clear the record by hand if it '
+                 f'sticks:\n    rm {STATE_PATH}')
+            continue
+        clear_state(st['port'])
+        stopped += 1
+        ok(f'stopped - {st["name"]} on port {st["port"]} (pid {st["pid"]})')
     print()
-    return 0
+    return 0 if stopped else 1
 
 
 def pick_live(folder, auth, jobs, timeout, bind=None, limit=140):
@@ -976,6 +1049,13 @@ def serve(listen_host, listen_port, exit_, quiet):
         # Naming what holds it, because "address already in use" plus a
         # `stop` that reports nothing running is a pair of answers that
         # cannot both be acted on.
+        mine = read_state(listen_port)
+        if mine:
+            die(f'cannot listen on {listen_host}:{listen_port}', f'{e}\n'
+                f'{mine["name"]} has had that port since {mine["since"]} '
+                f'(pid {mine["pid"]}).\n'
+                f'ovpn proxy stop --port {listen_port}  ends it, or --port '
+                f'gives this one somewhere else to sit.')
         held = '\n'.join(f'    pid {pid}  {cmd[:80]}' for pid, cmd in strays())
         die(f'cannot listen on {listen_host}:{listen_port}', f'{e}\n' +
             (f'These copies of this script are running:\n{held}\n'
@@ -990,6 +1070,12 @@ def serve(listen_host, listen_port, exit_, quiet):
     field('certificate', f'checked against {exit_.host}, and the name is not sent')
     if exit_.bind:
         field('leaving via', exit_.bind)
+    # Said plainly, because the whole point of a second port is that the
+    # first one carries on undisturbed - and "undisturbed" is easier to
+    # believe when you can see it listed.
+    for r in read_states():
+        if str(r['port']) != str(listen_port):
+            field('also up', f'port {r["port"]}   {r["name"]}   left alone')
     print()
     print(f'  {C["head"]}In the browser, set BOTH the HTTP and the HTTPS '
           f'proxy to{C["off"]}')
@@ -1078,11 +1164,36 @@ def do_help():
         exits and starts measuring how hard you have been sweeping.{o}
 
     {b}ovpn proxy stop{o}
-        Ends it, and says which one it ended.
+        Ends it, and says which one it ended. With more than one running it
+        will not guess: {d}--port N{o} for one, {d}--all{o} for all of them.
+
+  {h}{b}More than one at a time{o}
+
+    Each proxy is a port and an exit, and they know nothing of each other.
+    A second one is a second port:
+
+        {b}ovpn proxy connect{o}                    {d}browser, port 8888{o}
+        {b}ovpn proxy connect de-ber --port 8899{o} {d}and one to settle on{o}
+
+    Which is worth doing when something wants an exit that does not move
+    under it - a terminal, a chat client - while the browser's keeps being
+    changed. Starting, stopping or reconnecting one leaves the other alone;
+    they share no routes, no DNS and no system setting, because there are
+    none to share.
+
+    For the terminal, this is the whole of it:
+
+        {b}export http_proxy=http://127.0.0.1:8899{o}
+        {b}export https_proxy=$http_proxy{o}
+
+    curl, git, npm, pip and apt read those. The name you asked for is
+    resolved at the exit, not here, so a poisoned resolver never sees it.
 
   {h}{b}Flags{o}
 
-    {b}--port{o} N          listen somewhere other than 8888
+    {b}--port{o} N          listen somewhere other than 8888 {d}(and, with stop,
+                      which of several to end){o}
+    {b}--all{o}             with stop, end every proxy rather than naming one
     {b}--dir{o} DIR         which folder of configs to use {d}(pinned/){o}
     {b}--bind{o} ADDR       which address to leave from. {d}Needed when a tunnel
                       owns the default route, or this goes out through the
@@ -1102,9 +1213,15 @@ def do_help():
 
   {h}{b}What it does and does not carry{o}
 
-    HTTP and HTTPS, which is what a browser asks of a proxy. Nothing else
-    on the machine goes through it, and neither does anything that is not
-    HTTP - for those you still want the tunnel.
+    HTTP and HTTPS, which is what a browser asks of a proxy. HTTPS goes
+    through as CONNECT, and CONNECT carries whatever the two ends put in
+    it, so anything speaking TCP on 443 - a chat client, say - travels the
+    same way. Not UDP, not ICMP, and nothing that ignores the proxy setting
+    it was given; for those you would still want a tunnel.
+
+    Nothing else on the machine goes through it. That is the point rather
+    than a shortcoming: it is why a second one on another port can serve a
+    different exit without the first one noticing.
 
     It changes no routes, no DNS and no system proxy setting, so there is
     nothing to put back. Failures are logged to {d}.state/proxy.log{o}.
@@ -1165,7 +1282,11 @@ def main():
                    help='--sweep one address per exit rather than all of them')
     p.add_argument('--timeout', type=int, default=20,
                    help='seconds to wait on an exit during --sweep (20)')
-    p.add_argument('--port', type=int, default=8888, help='listen port (8888)')
+    # No default here on purpose: `stop` has to be able to tell "port 8888"
+    # from "you did not say a port", and it cannot if the parser has already
+    # filled one in. The 8888 goes on further down, where it means listening.
+    p.add_argument('--port', type=int, help='listen port (8888). With stop, '
+                                            'which of several to end')
     p.add_argument('--host', help='name the certificate must serve. Read from '
                                   'the config when not given')
     p.add_argument('--exit-port', type=int, default=443,
@@ -1183,6 +1304,8 @@ def main():
     p.add_argument('--status', action='store_true',
                    help='say whether a proxy is running, and through what')
     p.add_argument('--stop', action='store_true', help='stop the running proxy')
+    p.add_argument('--all', action='store_true',
+                   help='with stop, end every proxy rather than naming one')
     p.add_argument('--usage', action='store_true',
                    help='the commands and flags, in full')
     args = p.parse_args(read_verb(sys.argv[1:]))
@@ -1192,7 +1315,12 @@ def main():
     if args.status:
         raise SystemExit(do_status())
     if args.stop:
-        raise SystemExit(do_stop())
+        raise SystemExit(do_stop(args.port, args.all))
+
+    # Everything past here is about listening, so the default belongs here
+    # rather than in the parser, where it would have blunted `stop --port`.
+    if args.port is None:
+        args.port = 8888
 
     # Both forms take --site the same way the other scripts do: a comma or a
     # space separated list, or the flag more than once.
@@ -1217,11 +1345,13 @@ def main():
 
     # Said before the work rather than after the port clash, because the fix
     # is usually "you already have one" and not "pick another port".
-    running = read_state()
-    if running and str(running['port']) == str(args.port):
-        warn(f'a proxy is already up on port {args.port}',
-             f'{running["name"]} since {running["since"]}, pid {running["pid"]}.'
-             '\novpn proxy stop  ends it, or --port for a second one.')
+    running = read_state(args.port)
+    if running:
+        die(f'a proxy is already up on port {args.port}',
+            f'{running["name"]} since {running["since"]}, pid '
+            f'{running["pid"]}.\n'
+            f'    ovpn proxy stop --port {args.port}   ends it\n'
+            f'    ovpn proxy connect --port 8899  puts this one beside it')
 
     if not args.target:
         ip, name, chosen = pick_live(args.dir, (user, password), args.jobs,

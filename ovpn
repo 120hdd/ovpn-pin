@@ -276,7 +276,24 @@ usage() {
         everything.
 
     ovpn proxy stop
-        Ends it, and says which one it ended.
+        Ends it, and says which one it ended. With more than one running it
+        will not guess - --port N ends that one, --all ends every one.
+
+    ovpn proxy connect de-ber --port 8899
+        A second proxy, on a second port, through a second exit. Worth doing
+        when something wants an exit that does not move under it - a
+        terminal, a chat client - while the browser's keeps being changed.
+        The two know nothing of each other: starting, stopping or
+        reconnecting one leaves the other serving.
+
+        For the terminal that is the whole of it -
+
+          export http_proxy=http://127.0.0.1:8899
+          export https_proxy=\$http_proxy
+
+        which curl, git, npm, pip and apt all read. The host you asked for
+        is resolved at the exit rather than here, so no local resolver is
+        given the chance to answer for it.
 
         The same exits also run an HTTPS proxy on 443, and a line that
         throttles OpenVPN usually has no opinion about that - it cannot tell
