@@ -36,7 +36,10 @@ RESERVED=(
 if [ -t 1 ]; then
     C_OFF=$'\033[0m'; C_CYAN=$'\033[36m'; C_DCYAN=$'\033[36;2m'
     C_GREEN=$'\033[32m'; C_RED=$'\033[31m'; C_YELLOW=$'\033[33m'
-    C_GRAY=$'\033[90m'; C_WHITE=$'\033[97m'
+    # 37m, not 90m. 90m is "bright black", which on a black terminal is very
+# nearly nothing - and the grey lines here are the ones that explain what
+# just happened, so they are the worst ones to lose.
+C_GRAY=$'\033[37m'; C_WHITE=$'\033[97m'
 else
     C_OFF=''; C_CYAN=''; C_DCYAN=''; C_GREEN=''; C_RED=''; C_YELLOW=''
     C_GRAY=''; C_WHITE=''

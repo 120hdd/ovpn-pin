@@ -19,7 +19,8 @@ done
 
 if [ -t 1 ]; then
     C_OFF=$'\033[0m'; C_CYAN=$'\033[36m'; C_DCYAN=$'\033[36;2m'
-    C_GRAY=$'\033[90m'; C_WHITE=$'\033[97m'; C_RED=$'\033[31m'
+    # 37m rather than 90m - see ovpn-lib.sh. Bright black is unreadable on black.
+C_GRAY=$'\033[37m'; C_WHITE=$'\033[97m'; C_RED=$'\033[31m'
 else
     C_OFF=''; C_CYAN=''; C_DCYAN=''; C_GRAY=''; C_WHITE=''; C_RED=''
 fi
