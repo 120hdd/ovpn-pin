@@ -76,8 +76,9 @@ SWEEP_CAP = 40
 # 90m: that is "bright black", and on a black terminal it is very nearly
 # nothing at all - which is the worst possible fate for the lines that
 # explain what just went wrong.
-def _colours():
-    if os.environ.get('NO_COLOR') or not sys.stdout.isatty():
+def _colours(stream=None):
+    stream = stream or sys.stdout
+    if os.environ.get('NO_COLOR') or not stream.isatty():
         return {k: '' for k in
                 ('off', 'head', 'ok', 'warn', 'fail', 'dim', 'bold')}
     if os.name == 'nt':
@@ -98,6 +99,21 @@ def _colours():
 C = _colours()
 LOG_PATH = os.path.join(HERE, '.state', 'proxy.log')
 
+# Where the lines meant for a person go. stdout everywhere except `env`,
+# whose stdout belongs to a shell that is about to eval it - a stray "folder:
+# pinned" in among the exports would be run as a command. See do_env.
+OUT = sys.stdout
+
+
+def talk_on(stream):
+    """Send the human-facing half of the output somewhere else, and decide
+    colour by that stream rather than by stdout - otherwise a run whose
+    stdout is a pipe comes out plain even when the person is watching a
+    terminal."""
+    global OUT, C
+    OUT = stream
+    C = _colours(stream)
+
 
 def log(level, msg):
     """Every warning and failure also goes to .state/proxy.log, because the
@@ -114,31 +130,31 @@ def log(level, msg):
 
 
 def head(msg):
-    print(f'\n  {C["head"]}{C["bold"]}{msg}{C["off"]}')
+    print(f'\n  {C["head"]}{C["bold"]}{msg}{C["off"]}', file=OUT)
 
 
 def field(label, value):
-    print(f'  {C["head"]}{label:<12}{C["off"]}{value}')
+    print(f'  {C["head"]}{label:<12}{C["off"]}{value}', file=OUT)
 
 
 def ok(msg):
-    print(f'  {C["ok"]}[ ok ]{C["off"]} {msg}')
+    print(f'  {C["ok"]}[ ok ]{C["off"]} {msg}', file=OUT)
 
 
 def warn(msg, detail=''):
     # Flushed, because the failure that usually follows goes to stderr, and
     # unflushed stdout would let it print first and read as the cause.
     sys.stdout.flush()
-    print(f'  {C["warn"]}[warn]{C["off"]} {msg}', flush=True)
+    print(f'  {C["warn"]}[warn]{C["off"]} {msg}', file=OUT, flush=True)
     # Every line indented, not just the first - an unindented second line
     # reads as a separate message rather than as part of this one.
     for line in detail.splitlines():
-        print(f'         {C["dim"]}{line}{C["off"]}', flush=True)
+        print(f'         {C["dim"]}{line}{C["off"]}', file=OUT, flush=True)
     log('WARN', msg + (f' - {detail.replace(chr(10), " ")}' if detail else ''))
 
 
 def note(msg):
-    print(f'  {C["dim"]}{msg}{C["off"]}')
+    print(f'  {C["dim"]}{msg}{C["off"]}', file=OUT)
 
 
 def die(msg, detail=''):
@@ -983,6 +999,156 @@ def do_stop(port=None, every=False):
     return 0 if stopped else 1
 
 
+#------------------------------------------------------- pointing a terminal
+
+# The lower-case pair is what curl, git, pip and npm read. The upper-case
+# pair is for the ones that only read those - curl deliberately ignores an
+# upper-case HTTP_PROXY, because a CGI script's environment can be poisoned
+# through it, so the lower-case one does the work and the other is manners.
+#
+# no_proxy earns its place: without it a request to something listening on
+# this machine gets sent abroad and back, if it arrives at all.
+PROXY_VARS = ('http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY',
+              'no_proxy', 'NO_PROXY', 'OVPN_PROXY')
+NEVER_PROXY = ('localhost', '127.0.0.1', '::1')
+
+# What may appear in a no_proxy entry. Theirs is merged with ours rather than
+# replaced, and theirs is not ours to trust: it is about to be pasted into a
+# shell command. Anything with a character that could end the quoting is
+# dropped rather than escaped, because no legitimate entry needs one.
+SAFE_HOST = re.compile(r'^[A-Za-z0-9_.:*/\[\]-]+$')
+
+
+def env_lines(rec):
+    """The exports, as a shell would want them."""
+    url = f'http://{rec["host"]}:{rec["port"]}'
+    skip = []
+    for part in re.split(r'[,\s]+', os.environ.get('no_proxy', '')):
+        if part and SAFE_HOST.match(part) and part not in skip:
+            skip.append(part)
+    for part in NEVER_PROXY:
+        if part not in skip:
+            skip.append(part)
+    skip = ','.join(skip)
+
+    out = [f"export {v}='{url}'"
+           for v in ('http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY')]
+    out.append(f"export no_proxy='{skip}'")
+    out.append(f"export NO_PROXY='{skip}'")
+    # A marker, so that `px status` can tell a proxy this set from one that
+    # was already in the environment when the shell started.
+    out.append(f"export OVPN_PROXY='{rec['host']}:{rec['port']}'")
+    return out
+
+
+def env_port_in(url):
+    """The port out of an http_proxy value, or None if it is not one of ours
+    to reason about."""
+    m = re.search(r':(\d+)/?$', url or '')
+    return m.group(1) if m else None
+
+
+def do_env(port=None, off=False, show=False):
+    """Shell lines that point a terminal at a running proxy.
+
+    Printed rather than applied. A child process cannot change its parent's
+    environment, which is the whole reason this is a subcommand here and a
+    function in the shell rather than one thing: this says what to do, the
+    shell does it.
+
+    So stdout carries the exports and nothing else, ever, and every word
+    meant for a person goes to stderr - `eval` of the output has to get
+    either the exports or nothing at all. A sentence in among them would be
+    run as a command.
+    """
+    if off:
+        for v in PROXY_VARS:
+            print(f'unset {v}')
+        head('Terminal')
+        ok('direct again - no proxy set for this shell')
+        note('    px      to send it back through one')
+        print(file=OUT)
+        return 0
+
+    if show:
+        return do_env_show()
+
+    live = read_states()
+    if port is None:
+        # Set once in the rc file by someone who keeps a proxy on a fixed
+        # port for exactly this. Without it, a single running proxy is
+        # unambiguous and several are not.
+        port = os.environ.get('OVPN_PROXY_PORT') or None
+
+    if port is not None:
+        rec = read_state(port)
+        if not rec:
+            die(f'no proxy of ours is listening on port {port}',
+                (f'These are:\n' +
+                 '\n'.join(f'    port {r["port"]}  {r["name"]}' for r in live)
+                 if live else 'Nothing is running at all.') + '\n'
+                f'    ovpn proxy connect --port {port}   starts one there')
+    elif len(live) == 1:
+        rec = live[0]
+    elif not live:
+        die('no proxy is running, so there is nothing to point the terminal at',
+            'ovpn proxy connect --port 8899   starts one\n'
+            'px                               then sends this shell through it')
+    else:
+        die(f'{len(live)} proxies are running - say which one',
+            '\n'.join(f'    px {r["port"]}   {r["name"]}' for r in live) + '\n'
+            'Or put the one you always want in your rc file:\n'
+            "    export OVPN_PROXY_PORT=8899")
+
+    for line in env_lines(rec):
+        print(line)
+
+    head('Terminal')
+    ok(f'{C["bold"]}http://{rec["host"]}:{rec["port"]}{C["off"]}')
+    field('exit', f'{rec["ip"]}   {rec["name"]}')
+    note('    curl, git, npm, pip and wget read this. The name you ask for is')
+    note('    resolved at the exit, so no local resolver is given a chance.')
+    note('    px off    to stop')
+    print(file=OUT)
+    return 0
+
+
+def do_env_show():
+    url = os.environ.get('http_proxy') or os.environ.get('HTTP_PROXY') or ''
+    head('Terminal')
+    if not url:
+        note('nothing set - this shell goes out directly.')
+        live = read_states()
+        for r in live:
+            note(f'    px {r["port"]}   through {r["name"]}')
+        if not live:
+            note('    ovpn proxy connect --port 8899   starts one to use')
+        print(file=OUT)
+        return 0
+
+    port = env_port_in(url)
+    rec = read_state(port) if port else None
+    if rec:
+        ok(f'{C["bold"]}{url}{C["off"]}')
+        field('exit', f'{rec["ip"]}   {rec["name"]}')
+        field('since', rec['since'])
+    else:
+        # The expensive mistake this whole subcommand exists to prevent: the
+        # variables outlive the proxy, so every request fails at once and
+        # nothing says why. Worth being blunt about.
+        warn(f'set to {url}, but nothing of ours is listening there',
+             'Every request from this shell will fail until that is one or\n'
+             'the other. The proxy was probably stopped after it was set.')
+        live = read_states()
+        for r in live:
+            note(f'    px {r["port"]}   through {r["name"]}, which is up')
+        note('    px off      go back to direct')
+    if not os.environ.get('OVPN_PROXY'):
+        note('Set by something other than px - it left no marker.')
+    print(file=OUT)
+    return 0
+
+
 def pick_live(folder, auth, jobs, timeout, bind=None, limit=140):
     """The quickest exit in the folder that will take the credentials now.
 
@@ -1133,7 +1299,7 @@ def serve(listen_host, listen_port, exit_, quiet):
 # turned into the flags the parser already knows. A verb rather than a flag
 # because that is how the rest of the repo is typed - `ovpn connect`, `ovpn
 # stop` - and `ovpn proxy connect uk-lon` should not be the odd one out.
-VERBS = {'connect': [], 'sweep': ['--sweep'],
+VERBS = {'connect': [], 'sweep': ['--sweep'], 'env': ['--env'],
          'status': ['--status'], 'stop': ['--stop'], 'help': ['--usage']}
 
 
@@ -1181,13 +1347,30 @@ def do_help():
     they share no routes, no DNS and no system setting, because there are
     none to share.
 
-    For the terminal, this is the whole of it:
+    For the terminal there is {b}px{o}, which does the exporting for you:
 
-        {b}export http_proxy=http://127.0.0.1:8899{o}
-        {b}export https_proxy=$http_proxy{o}
+        {b}px{o}            send this shell through the proxy that is running
+        {b}px 8899{o}       through the one on that port
+        {b}px off{o}        stop
+        {b}px status{o}     what this shell is set to, and whether it still works
 
-    curl, git, npm, pip and apt read those. The name you asked for is
-    resolved at the exit, not here, so a poisoned resolver never sees it.
+    curl, git, npm, pip and wget read what it sets. The name you asked for
+    is resolved at the exit, not here, so a poisoned resolver never sees it.
+
+    {b}px{o} is a shell function, and has to be: it changes the shell you typed
+    it in, and nothing run as a child can do that to its parent. {d}ovpn
+    install{o} adds the line that defines it - or add it by hand:
+
+        {b}. /path/to/ovpn-pin/ovpn-shell.sh{o}
+
+    With more than one proxy up, say which port, or name it once in the rc
+    file and stop thinking about it:
+
+        {b}export OVPN_PROXY_PORT=8899{o}
+
+    {b}ovpn proxy env{o} is what {b}px{o} calls. It prints the exports rather than
+    applying them, for the same reason - so its stdout is shell and nothing
+    else, and everything for you to read goes to stderr.
 
   {h}{b}Flags{o}
 
@@ -1306,6 +1489,13 @@ def main():
     p.add_argument('--stop', action='store_true', help='stop the running proxy')
     p.add_argument('--all', action='store_true',
                    help='with stop, end every proxy rather than naming one')
+    p.add_argument('--env', action='store_true',
+                   help='print the exports that send a terminal through a '
+                        'running proxy. Meant to be eval-ed, not read')
+    p.add_argument('--off', action='store_true',
+                   help='with env, print the unsets instead')
+    p.add_argument('--show', action='store_true',
+                   help='with env, say what this shell is set to now')
     p.add_argument('--usage', action='store_true',
                    help='the commands and flags, in full')
     args = p.parse_args(read_verb(sys.argv[1:]))
@@ -1316,6 +1506,11 @@ def main():
         raise SystemExit(do_status())
     if args.stop:
         raise SystemExit(do_stop(args.port, args.all))
+    if args.env:
+        # Everything a person reads moves to stderr for the rest of this run,
+        # so that stdout is the shell's alone.
+        talk_on(sys.stderr)
+        raise SystemExit(do_env(args.port, args.off, args.show))
 
     # Everything past here is about listening, so the default belongs here
     # rather than in the parser, where it would have blunted `stop --port`.

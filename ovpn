@@ -170,8 +170,40 @@ add_to_path() {
     note "Undo by deleting that line from $rc."
 }
 
+# `px` has to be a shell function, not a script and not a symlink: it sets
+# variables in the shell you typed it into, and nothing run as a child can do
+# that to its parent. So the rc file has to source the file that defines it.
+add_shell_function() {
+    local rc line
+    line=". \"$ROOT/ovpn-shell.sh\""
+
+    case ${SHELL##*/} in
+        zsh)  rc=$HOME/.zshrc ;;
+        bash) rc=$HOME/.bashrc ;;
+        *)    rc='' ;;
+    esac
+
+    if [ -z "$rc" ]; then
+        note "For the px command, add this wherever ${SHELL##*/} keeps its startup:"
+        note "     $line"
+        return 0
+    fi
+
+    if [ -f "$rc" ] && grep -qsF 'ovpn-shell.sh' "$rc"; then
+        note "$rc already sources ovpn-shell.sh"
+        return 0
+    fi
+
+    { printf '%s\n' "$line" >> "$rc"; } 2>/dev/null || {
+        warn "could not write $rc. For the px command, add this yourself:"
+        note "     $line"
+        return 0
+    }
+    ok "added the px command to $rc"
+}
+
 do_install() {
-    local bindir=${1:-$HOME/.local/bin} link
+    local bindir=${1:-$HOME/.local/bin} link rc
 
     mkdir -p -- "$bindir" || die "cannot create $bindir"
     link=$bindir/ovpn
@@ -193,6 +225,7 @@ do_install() {
         *":$bindir:"*) note "$bindir is on your PATH - type: ovpn" ;;
         *)             add_to_path "$bindir" ;;
     esac
+    add_shell_function
     printf '\n'
     note 'Then, from anywhere:'
     note '     ovpn                     the menu'
@@ -205,10 +238,14 @@ do_install() {
     note '     cd success && ovpn connect uk'
     note 'acts on success/, because that is where you were standing.'
     printf '\n'
+    note 'For the terminal itself, in a new shell:'
+    note '     px                       send this shell through the proxy'
+    note '     px off                   stop'
+    printf '\n'
 }
 
 do_uninstall() {
-    local bindir=${1:-$HOME/.local/bin} link
+    local bindir=${1:-$HOME/.local/bin} link rc
     link=$bindir/ovpn
     printf '\n'
     if [ -L "$link" ]; then
@@ -217,6 +254,17 @@ do_uninstall() {
         note "nothing to remove at $link"
     fi
     note 'The repo itself is untouched.'
+    # Same reasoning as add_to_path: a line someone may have edited is not
+    # ours to delete on a guess, so it gets named rather than removed.
+    case ${SHELL##*/} in
+        zsh)  rc=$HOME/.zshrc ;;
+        bash) rc=$HOME/.bashrc ;;
+        *)    rc='' ;;
+    esac
+    if [ -n "$rc" ] && grep -qsF 'ovpn-shell.sh' "$rc"; then
+        note "$rc still sources ovpn-shell.sh, which is what defines px."
+        note 'Delete that line from it if you want px gone too.'
+    fi
     printf '\n'
 }
 
@@ -286,14 +334,29 @@ usage() {
         The two know nothing of each other: starting, stopping or
         reconnecting one leaves the other serving.
 
-        For the terminal that is the whole of it -
+    px
+        Send the shell you are typing in through the proxy that is running.
 
-          export http_proxy=http://127.0.0.1:8899
-          export https_proxy=\$http_proxy
+          px            through whichever one is up
+          px 8899       through the one on that port
+          px off        stop
+          px status     what this shell is set to, and whether it still works
 
-        which curl, git, npm, pip and apt all read. The host you asked for
-        is resolved at the exit rather than here, so no local resolver is
-        given the chance to answer for it.
+        curl, git, npm, pip and wget read what it sets. The host you asked
+        for is resolved at the exit rather than here, so no local resolver
+        is given the chance to answer for it.
+
+        px is a shell function rather than a command, and has to be: it
+        changes the shell you typed it in, and nothing run as a child can do
+        that to its parent. \`ovpn install\` adds the line that defines it.
+        By hand, in ~/.bashrc:
+
+          . $ROOT/ovpn-shell.sh
+
+        With more than one proxy up it wants to be told which - or name one
+        once, in the same rc file, and stop thinking about it:
+
+          export OVPN_PROXY_PORT=8899
 
         The same exits also run an HTTPS proxy on 443, and a line that
         throttles OpenVPN usually has no opinion about that - it cannot tell
@@ -536,6 +599,11 @@ prx() {
     # it, and a mistyped one gets named there rather than here.
     [ $# -eq 0 ] && set -- status
     case ${1:-} in -h|--help|help) exec "$(find_python)" "$PRX" help ;; esac
+
+    # `env` prints shell for `eval` to read, so nothing else may reach stdout
+    # on its way out - use_cwd's "folder: ..." line would be eval'd as a
+    # command. It reads no configs either, so there is nothing to work out.
+    case ${1:-} in env) exec "$py" "$PRX" "$@" ;; esac
 
     use_cwd "$@"
     # Appended rather than prepended, and only when they did not say - both so
