@@ -1113,6 +1113,100 @@ def do_env(port=None, off=False, show=False):
     return 0
 
 
+def do_detach(args, exit_):
+    """Start the proxy in a process of its own and come straight back.
+
+    Everything that can fail slowly has already failed by the time this
+    runs, here, where there is someone to tell: the config has been read,
+    the address resolved, and the exit has answered. So the child is handed
+    a bare address and does no choosing. What is left can only fail at the
+    bind, which takes no time at all.
+
+    Which is why this waits for the child to record itself rather than
+    assuming it did, and reads its output when it does not. A detached
+    process that dies quietly is worse than no detaching: `stop` would find
+    nothing, `connect` would find the port taken, and the pair of answers
+    would make no sense together.
+    """
+    import subprocess
+
+    out_path = os.path.join(HERE, '.state', f'proxy-{args.port}.out')
+    try:
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        out = open(out_path, 'w', encoding='utf-8')
+    except OSError as e:
+        die('nowhere to put the detached proxy\'s output', f'{out_path}: {e}')
+
+    argv = [sys.executable, os.path.abspath(__file__), exit_.ip,
+            '--host', exit_.host, '--port', str(args.port),
+            '--exit-port', str(exit_.port), '--listen', args.listen,
+            '--auth', args.auth]
+    if exit_.bind:
+        argv += ['--bind', exit_.bind]
+    if args.quiet:
+        argv.append('--quiet')
+
+    kw = {}
+    if os.name == 'nt':
+        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: no console of ours for
+        # it to inherit, and no Ctrl-C in this one reaching it.
+        kw['creationflags'] = 0x00000008 | 0x00000200
+    else:
+        # Its own session, so closing the terminal hangs up on this shell's
+        # process group without it being in that group.
+        kw['start_new_session'] = True
+
+    try:
+        with out:
+            child = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
+                                     stdout=out, stderr=subprocess.STDOUT,
+                                     **kw)
+    except OSError as e:
+        die('could not start a proxy of its own', str(e))
+
+    # Binding a socket is instant; thirty seconds is generous only so that a
+    # loaded machine cannot turn into a false alarm.
+    for _ in range(60):
+        rec = read_state(args.port)
+        if rec and rec['pid'] == child.pid:
+            head('Detached')
+            ok(f'{C["bold"]}http://{args.listen}:{args.port}{C["off"]}')
+            field('exit', f'{exit_.ip}   {exit_.host}')
+            field('pid', child.pid)
+            field('output', out_path)
+            print(file=OUT)
+            note('It has no terminal of its own, so closing this one - or')
+            note('logging out altogether - leaves it running.')
+            note(f'    px {args.port}                      point a shell at it')
+            note(f'    ovpn proxy stop --port {args.port}   end it')
+            print(file=OUT)
+            return 0
+        if child.poll() is not None:
+            break
+        time.sleep(0.5)
+
+    try:
+        with open(out_path, encoding='utf-8') as f:
+            said = f.read().strip()
+    except OSError:
+        said = ''
+
+    if child.poll() is None:
+        # Alive, but it never recorded itself, so nothing can find it while
+        # it goes on holding the port. That is the exact pair of answers
+        # this repo has already been bitten by once.
+        try:
+            kill(child.pid)
+            said += '\n\nIt was still running without having recorded itself, '
+            said += 'so it was stopped.'
+        except Exception:
+            said += f'\n\nIt is still running as pid {child.pid} and could '
+            said += 'not be stopped. End it by hand.'
+
+    die('the detached proxy did not come up',
+        (said or 'It printed nothing at all.') + f'\n\nIn full: {out_path}')
+
+
 def do_env_show():
     url = os.environ.get('http_proxy') or os.environ.get('HTTP_PROXY') or ''
     head('Terminal')
@@ -1339,7 +1433,18 @@ def do_help():
     A second one is a second port:
 
         {b}ovpn proxy connect{o}                    {d}browser, port 8888{o}
-        {b}ovpn proxy connect de-ber --port 8899{o} {d}and one to settle on{o}
+        {b}ovpn proxy connect de-ber --port 8899 --detach{o}
+
+    {b}--detach{o} is what makes the second one worth having: it comes back
+    rather than holding the terminal, and having no terminal of its own it
+    survives that one closing, and logging out. Without it the proxy lives
+    exactly as long as the window you started it in.
+
+    The exit is chosen, checked and proved before anything is detached, so
+    a failure is reported here rather than disappearing into a log. What is
+    left can only fail at the bind, and that is waited for too - a detached
+    proxy that died quietly would leave `stop` finding nothing while
+    `connect` found the port taken.
 
     Which is worth doing when something wants an exit that does not move
     under it - a terminal, a chat client - while the browser's keeps being
@@ -1376,6 +1481,8 @@ def do_help():
 
     {b}--port{o} N          listen somewhere other than 8888 {d}(and, with stop,
                       which of several to end){o}
+    {b}--detach{o}          leave it running and come back {d}(output goes to
+                      .state/proxy-N.out){o}
     {b}--all{o}             with stop, end every proxy rather than naming one
     {b}--dir{o} DIR         which folder of configs to use {d}(pinned/){o}
     {b}--bind{o} ADDR       which address to leave from. {d}Needed when a tunnel
@@ -1489,6 +1596,9 @@ def main():
     p.add_argument('--stop', action='store_true', help='stop the running proxy')
     p.add_argument('--all', action='store_true',
                    help='with stop, end every proxy rather than naming one')
+    p.add_argument('--detach', action='store_true',
+                   help='leave it running in a process of its own and come '
+                        'back, rather than holding this terminal')
     p.add_argument('--env', action='store_true',
                    help='print the exports that send a terminal through a '
                         'running proxy. Meant to be eval-ed, not read')
@@ -1578,6 +1688,12 @@ def main():
             die(f'{host} will not take the credentials just now', f'{e}\n'
                 'A good many exits refuse at any one time. Either try one of\n'
                 'its other addresses, or let it choose:  ovpn proxy connect')
+
+    # Below this line the exit is known good, which is the point to hand it
+    # to a process that will outlive this one.
+    if args.detach:
+        raise SystemExit(do_detach(args, exit_))
+
     serve(args.listen, args.port, exit_, args.quiet)
 
 

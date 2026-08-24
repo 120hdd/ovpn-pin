@@ -327,12 +327,21 @@ usage() {
         Ends it, and says which one it ended. With more than one running it
         will not guess - --port N ends that one, --all ends every one.
 
-    ovpn proxy connect de-ber --port 8899
+    ovpn proxy connect de-ber --port 8899 --detach
         A second proxy, on a second port, through a second exit. Worth doing
         when something wants an exit that does not move under it - a
         terminal, a chat client - while the browser's keeps being changed.
         The two know nothing of each other: starting, stopping or
         reconnecting one leaves the other serving.
+
+        --detach is what makes the second one worth having. It comes back
+        instead of holding the terminal, and having no terminal of its own
+        it outlives that one closing, and logging out. Without it the proxy
+        lives exactly as long as the window you started it in.
+
+        The exit is chosen, checked and proved before anything is detached,
+        so a failure lands here rather than in a log you have to go and
+        find. Output goes to .state/proxy-8899.out.
 
     px
         Send the shell you are typing in through the proxy that is running.
