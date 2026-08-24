@@ -63,8 +63,7 @@ function nameOf(code) {
 function render() {
   const act = $('act');
   act.dataset.mode = state.mode === 'fail' ? 'off' : state.mode;
-  $('card').dataset.busy = String(state.mode === 'busy');
-  $('swap').dataset.state = state.mode === 'fail' ? 'off' : state.mode;
+  $('stage').dataset.state = state.mode === 'fail' ? 'off' : state.mode;
   $('pick').disabled = state.mode === 'busy';
   $('more').hidden = state.mode !== 'on';
   if (state.mode !== 'on') {

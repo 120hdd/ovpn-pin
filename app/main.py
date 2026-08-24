@@ -271,6 +271,8 @@ class Api:
         self._busy = False
         self._settings = self._settings_early
         self._since = None
+        self._real_ip = None
+        self._stop = threading.Event()
 
     # -- talking to the page ----------------------------------------------
 
@@ -315,18 +317,47 @@ class Api:
         return out
 
     def whoami(self):
-        """The address you have before anything is changed.
-
-        In a thread: it is a network round trip, and on a filtered line it
-        can take the full timeout to fail. Nothing on screen waits for it.
-        """
-        def work():
-            try:
-                self._emit('RealIp', self._engine.current_ip())
-            except Exception:
-                self._emit('RealIp', {})
-        threading.Thread(target=work, daemon=True).start()
+        """Ask once, now."""
+        threading.Thread(target=self._look_up_self, daemon=True).start()
         return {'ok': True}
+
+    def _look_up_self(self):
+        """The address you have when nothing of ours is in the way.
+
+        Only meaningful while disconnected: routed, this would come back
+        with the exit's address and claim it as yours.
+        """
+        if self._engine.running():
+            return
+        try:
+            info = self._engine.current_ip()
+        except Exception:
+            info = {}
+        if info.get('ip') != self._real_ip:
+            self._real_ip = info.get('ip')
+            self._emit('RealIp', info)
+        elif self._real_ip is None:
+            self._emit('RealIp', info)
+
+    def _watch_self(self):
+        """Keep the address honest while it is not ours to change.
+
+        It was fetched once at startup, so unplugging another VPN left the
+        window showing an address that had stopped being true - and on this
+        machine that is the normal case, since the whole point is watching
+        one address become another.
+
+        Only polled while disconnected, and only every fifteen seconds:
+        connected there is nothing to learn, and a tighter loop would be a
+        request to somebody else's server every few seconds forever.
+        """
+        while not self._stop.wait(15):
+            if self._engine.running():
+                continue
+            try:
+                self._look_up_self()
+            except Exception:
+                pass
 
     def setSystemProxy(self, on):
         """Whether connecting should move the whole machine or just serve.
@@ -463,6 +494,9 @@ class Api:
         except Exception as e:
             return {'ok': False, 'error': str(e)}
         self._retray('off')
+        # Straight away rather than on the next tick: the address just
+        # changed back and the window is showing the exit's.
+        threading.Thread(target=self._look_up_self, daemon=True).start()
         return {'ok': True, 'session': {'minutes': minutes}}
 
     def minimise(self):
@@ -580,10 +614,10 @@ def main():
         APP_NAME,
         os.path.join(paths.UI_DIR, 'index.html'),
         js_api=api,
-        width=settings.get('w', 400),
-        height=settings.get('h', 660),
+        width=settings.get('w', 880),
+        height=settings.get('h', 540),
         x=settings.get('x'), y=settings.get('y'),
-        min_size=(380, 560),
+        min_size=(640, 420),
         background_color='#111113',
         resizable=True,
         text_select=False,
@@ -596,6 +630,7 @@ def main():
 
     def on_start():
         tray.start()
+        threading.Thread(target=api._watch_self, daemon=True).start()
 
     def closing():
         # Remember where it was, and leave the connection alone. Quitting is
@@ -615,6 +650,7 @@ def main():
         webview.start(on_start, gui='edgechromium',
                       icon=paths.ICON if os.path.isfile(paths.ICON) else None)
     finally:
+        api._stop.set()
         try:
             if tray.icon:
                 tray.icon.stop()
