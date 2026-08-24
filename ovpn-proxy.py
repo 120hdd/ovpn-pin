@@ -841,7 +841,13 @@ def strays():
         return any(a.replace('\\', '/').endswith('/ovpn-proxy.py')
                    or a == 'ovpn-proxy.py' for a in argv[1:])
 
-    me = os.getpid()
+    # Our own parent is excluded along with ourselves. The only thing that
+    # ever starts one of these from another is --detach, and that parent
+    # never binds anything - so listing it under "cannot listen" would name
+    # an innocent process as the suspect, and the obvious next move would be
+    # to stop a working proxy to free a port it was never holding. Any other
+    # parent is a shell, which does not match is_ours anyway.
+    me, parent = os.getpid(), os.getppid()
     found = []
     if os.name == 'nt':
         try:
@@ -855,7 +861,7 @@ def strays():
             for line in out.stdout.splitlines():
                 pid, _, cmd = line.partition('\t')
                 cmd = cmd.strip()
-                if not (pid.strip().isdigit() and int(pid) != me):
+                if not (pid.strip().isdigit() and int(pid) not in (me, parent)):
                     continue
                 # Windows hands back one string; splitting on spaces is
                 # crude but the pieces we test never contain any.
@@ -867,7 +873,7 @@ def strays():
 
     try:
         for entry in os.listdir('/proc'):
-            if not entry.isdigit() or int(entry) == me:
+            if not entry.isdigit() or int(entry) in (me, parent):
                 continue
             try:
                 with open(f'/proc/{entry}/cmdline', 'rb') as f:
@@ -1318,9 +1324,10 @@ def serve(listen_host, listen_port, exit_, quiet):
                 f'gives this one somewhere else to sit.')
         held = '\n'.join(f'    pid {pid}  {cmd[:80]}' for pid, cmd in strays())
         die(f'cannot listen on {listen_host}:{listen_port}', f'{e}\n' +
-            (f'These copies of this script are running:\n{held}\n'
-             if held else 'Nothing of ours is running, so it is something '
-                          'else on that port.\n') +
+            ('Nothing of ours is recorded on that port. These copies are\n'
+             f'running unrecorded, so it may be one of them:\n{held}\n'
+             if held else 'No copy of this is running at all, so whatever '
+                          'holds that port is\nsomething else entirely.\n') +
             'ovpn proxy stop  ends ours, or --port picks a different one.')
     srv.listen(128)
 
