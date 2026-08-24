@@ -33,3 +33,4 @@
 
 # Prose, left to the platform.
 *.md            text
+*.woff2 binary

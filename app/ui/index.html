@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>اتصال</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<!--
+  The window is one sentence: where does your internet come out?
+
+  So the country name is the interface. It is the largest thing on screen by
+  a wide margin, it is the only thing that changes, and both states use the
+  same slot - off shows where you actually are, on shows where you appear to
+  be. The change between them is the whole product, and putting both in one
+  place is what makes it legible at a glance from across a desk.
+-->
+
+<header class="chrome pywebview-drag-region">
+  <div class="chrome__buttons">
+    <button class="chip" id="min" aria-label="کوچک کردن"><span></span></button>
+    <button class="chip chip--close" id="quit" aria-label="بستن"><span></span></button>
+  </div>
+  <div class="chrome__mark">اتصال</div>
+</header>
+
+<main class="stage">
+
+  <section class="where" id="where">
+    <p class="where__label" id="whereLabel">اینترنت شما از اینجا بیرون می‌رود</p>
+
+    <div class="where__slot">
+      <h1 class="where__place" id="place" data-state="idle">…</h1>
+    </div>
+
+    <div class="wire" id="wire" aria-hidden="true"><i></i></div>
+
+    <dl class="facts" id="facts">
+      <div class="facts__row"><dt>نشانی</dt><dd class="mono" id="factIp">—</dd></div>
+      <div class="facts__row"><dt>شهر</dt><dd class="mono" id="factCity">—</dd></div>
+      <div class="facts__row"><dt>پاسخ</dt><dd class="mono" id="factMs">—</dd></div>
+    </dl>
+
+    <p class="note" id="note"></p>
+  </section>
+
+  <section class="controls">
+    <button class="pick" id="pick" type="button">
+      <span class="pick__key">کشور</span>
+      <span class="pick__value" id="pickValue">خودکار</span>
+      <span class="pick__caret" aria-hidden="true"></span>
+    </button>
+
+    <button class="act" id="act" type="button" data-mode="off">
+      <span class="act__label" id="actLabel">اتصال</span>
+      <span class="act__meter" id="actMeter" aria-hidden="true"></span>
+    </button>
+  </section>
+</main>
+
+<!-- The picker is a sheet rather than a dropdown: seventy-five countries is
+     a list you read, and a list you read deserves the whole window. -->
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet__top">
+    <input class="sheet__search" id="search" type="text" placeholder="جست‌وجوی کشور"
+           autocomplete="off" spellcheck="false">
+    <button class="sheet__close" id="sheetClose" type="button">بستن</button>
+  </div>
+  <div class="sheet__list" id="list"></div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>

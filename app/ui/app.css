@@ -1,0 +1,473 @@
+/* ============================================================================
+   اتصال — a 430px window whose entire content is one sentence.
+
+   The design decisions, and why each one is what it is:
+
+   TYPE  Estedad (OFL-1.1, variable 100–900, one 125 KB file) does everything
+         Persian. It was picked because its own brief is low contrast, small
+         optical size, screen — which is what survives at 12px inside a small
+         window on Windows. IBM Plex Mono carries the machine strings, and
+         the change of voice is the point: it draws a line between the app
+         talking and the network reporting. Nothing here is Vazir, Vazirmatn,
+         IRANSans or Sahel, including in the fallback stack.
+
+   COLOUR One accent, appearing once, only when the line is live. Everything
+         else is warm greyscale. Colour is the reward for the state change,
+         not the decoration of the window.
+
+   MOTION Three moves, each because a value really changed: the place name
+         stretches and settles when the country changes, the wire draws
+         itself when a connection is made, and the action control traces its
+         own perimeter while it is trying. Nothing loops for decoration
+         except the host marquee, which is the only "still alive" signal and
+         carries real text while it does it.
+
+   BIDI  Every machine string is isolated. An IP address at the end of a
+         Persian sentence gets reordered by the bidi algorithm otherwise, and
+         a scrambled address is worst exactly when someone is checking
+         whether to trust it.
+   ========================================================================= */
+
+@font-face {
+  font-family: 'Estedad';
+  src: url('fonts/Estedad-Variable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Plex Mono';
+  src: url('fonts/IBMPlexMono-400.woff2') format('woff2');
+  font-weight: 400;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Plex Mono';
+  src: url('fonts/IBMPlexMono-500.woff2') format('woff2');
+  font-weight: 500;
+  font-display: block;
+}
+
+:root {
+  --fa: 'Estedad', 'Noto Sans Arabic', 'Segoe UI', system-ui, sans-serif;
+  --mono: 'Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --ground: #100E0C;
+  --ground-lift: #17150F;
+  --ink: #F3EFE7;
+  --ink-2: rgba(243, 239, 231, 0.56);
+  --ink-3: rgba(243, 239, 231, 0.30);
+  --rule: rgba(243, 239, 231, 0.11);
+
+  /* Sodium. Not a VPN green and not a gradient — a filament that is either
+     lit or it is not. */
+  --live: #F2A03B;
+  --live-dim: rgba(242, 160, 59, 0.22);
+  --bad: #D8643F;
+
+  --pad: 26px;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--fa);
+  font-size: 14px;
+  line-height: 1.65;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  /* Estedad ships a Latin→Farsi digits set. It must never fire on an
+     address: 192.168.1.1 becoming ۱۹۲.۱۶۸.۱.۱ is unverifiable and
+     unpasteable. Off everywhere; the counters convert their own digits. */
+  font-feature-settings: 'ss20' 0;
+  /* A dither rather than a gradient: texture with no direction and no
+     colour, at the threshold of visible. */
+  background-image:
+    radial-gradient(rgba(255, 255, 255, 0.022) 0.5px, transparent 0.5px);
+  background-size: 3px 3px;
+}
+
+/* --------------------------------------------------------------- chrome */
+
+.chrome {
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px 0 var(--pad);
+  -webkit-app-region: drag;
+}
+
+.chrome__mark {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--ink-3);
+}
+
+.chrome__buttons { display: flex; gap: 8px; -webkit-app-region: no-drag; }
+
+.chip {
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  border: 0; border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  transition: background 140ms var(--ease);
+}
+.chip span {
+  width: 11px; height: 1.5px;
+  background: var(--ink-3);
+  transition: background 140ms var(--ease);
+}
+.chip--close span {
+  height: 11px; width: 11px;
+  background: none;
+  border-left: 1.5px solid var(--ink-3);
+  border-bottom: 1.5px solid var(--ink-3);
+  transform: rotate(-45deg) translate(1px, -1px);
+  transition: border-color 140ms var(--ease);
+}
+.chip:hover { background: rgba(255, 255, 255, 0.06); }
+.chip:hover span { background: var(--ink); }
+.chip--close:hover span { background: none; border-color: var(--ink); }
+
+/* ---------------------------------------------------------------- stage */
+
+.stage {
+  height: calc(100% - 46px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 0 var(--pad) 22px;
+}
+
+/* The block sits high rather than centred. Centring it would make the
+   window symmetrical top to bottom, and the emptiness underneath is what
+   gives the place name room to be as large as it is. */
+.where { padding-top: 4vh; }
+
+.where__label {
+  font-size: 12.5px;
+  color: var(--ink-3);
+  letter-spacing: 0.01em;
+  margin-bottom: 10px;
+  transition: color 200ms var(--ease);
+}
+
+.where__slot {
+  min-height: 84px;
+  display: flex;
+  align-items: flex-end;
+}
+
+.where__place {
+  font-size: 62px;
+  font-weight: 700;
+  line-height: 1.02;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+  transform-origin: right bottom;
+}
+
+/* "Snappy text stretch": the word deforms and settles rather than fading,
+   so the change of country is felt as one event rather than a crossfade of
+   two states. 200ms, which is long enough to read as motion and short
+   enough not to be waited on. */
+.where__place.is-changing {
+  animation: settle 210ms var(--ease);
+}
+@keyframes settle {
+  0%   { transform: scaleY(1.16) translateY(4px); opacity: 0.25; }
+  60%  { transform: scaleY(0.985) translateY(0); opacity: 1; }
+  100% { transform: scaleY(1) translateY(0); opacity: 1; }
+}
+
+.where__place[data-state='idle'] { color: var(--ink-3); }
+.where__place[data-state='off']  { color: var(--ink-2); }
+.where__place[data-state='on']   { color: var(--ink); }
+.where__place[data-state='busy'] { color: var(--ink-2); }
+
+/* The wire. Asymmetry lives here: it starts at the left edge and stops well
+   short of the right, so the block is never a tidy rectangle. It draws
+   itself on connect — a line being made. */
+.wire {
+  margin: 20px 0 18px;
+  height: 1px;
+  background: var(--rule);
+  position: relative;
+  overflow: hidden;
+}
+.wire i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 62%;
+  background: var(--live);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 460ms var(--ease);
+}
+.wire.is-live i { transform: scaleX(1); }
+.wire.is-bad i { background: var(--bad); transform: scaleX(1); }
+
+/* The ledger. Deliberately about a third of the place name's size and just
+   over half its brightness — the sub-facts must never compete with the
+   state they describe. */
+.facts { display: grid; gap: 7px; }
+.facts__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.facts dt { font-size: 12px; color: var(--ink-3); }
+.facts dd { font-size: 12.5px; color: var(--ink-2); }
+
+/* Machine strings: isolated from the bidi algorithm, tabular, and in the
+   other voice. */
+.mono {
+  font-family: var(--mono);
+  font-weight: 400;
+  direction: ltr;
+  unicode-bidi: isolate;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.note {
+  margin-top: 16px;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--ink-3);
+  min-height: 42px;
+}
+.note.is-bad { color: var(--bad); }
+
+/* The one loop in the app, and it carries text rather than shapes: the exit
+   host, moving slowly enough to be ignorable. It is the "still alive"
+   signal, in place of a spinner that would say nothing. */
+.marquee {
+  margin-top: 14px;
+  height: 15px;
+  overflow: hidden;
+  position: relative;
+  mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+}
+.marquee span {
+  position: absolute;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: rgba(242, 160, 59, 0.34);
+  direction: ltr;
+  animation: drift 42s linear infinite;
+}
+@keyframes drift {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+/* ------------------------------------------------------------- controls */
+
+.controls { display: grid; gap: 10px; }
+
+/* Text-led rather than box-led: the label and the value do the work and the
+   container barely exists until you touch it. */
+.pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 13px 16px;
+  border: 1px solid var(--rule);
+  border-radius: 11px;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--fa);
+  font-size: 14px;
+  cursor: pointer;
+  transition: border-color 160ms var(--ease), background 160ms var(--ease);
+}
+.pick:hover { border-color: rgba(243, 239, 231, 0.24); background: rgba(255,255,255,0.02); }
+.pick__key { font-size: 12px; color: var(--ink-3); }
+.pick__value { flex: 1; text-align: left; font-weight: 500; }
+.pick__caret {
+  width: 7px; height: 7px;
+  border-left: 1.5px solid var(--ink-3);
+  border-bottom: 1.5px solid var(--ink-3);
+  transform: rotate(-45deg);
+  margin-bottom: 3px;
+}
+.pick:disabled { opacity: 0.4; cursor: default; }
+
+.act {
+  position: relative;
+  width: 100%;
+  padding: 17px;
+  border: 0;
+  border-radius: 11px;
+  background: var(--ink);
+  color: var(--ground);
+  font-family: var(--fa);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  overflow: hidden;
+  transition: background 200ms var(--ease), color 200ms var(--ease);
+}
+.act[data-mode='on'] {
+  background: transparent;
+  color: var(--ink-2);
+  box-shadow: inset 0 0 0 1px var(--rule);
+}
+.act[data-mode='on']:hover { color: var(--ink); box-shadow: inset 0 0 0 1px rgba(243,239,231,0.26); }
+.act[data-mode='busy'] {
+  background: transparent;
+  color: var(--ink-2);
+  box-shadow: inset 0 0 0 1px var(--live-dim);
+  cursor: default;
+}
+
+/* "Interactive button: trace" — while it is trying, a stroke travels the
+   control's own perimeter. Progress lives in the thing you pressed, so
+   there is no spinner and no second element to explain. */
+.act__meter { position: absolute; inset: 0; pointer-events: none; opacity: 0; }
+.act[data-mode='busy'] .act__meter { opacity: 1; }
+.act__meter::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 11px;
+  padding: 1px;
+  background: conic-gradient(from 0deg, transparent 0deg 300deg, var(--live) 355deg, transparent 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: trace 1.5s linear infinite;
+}
+@keyframes trace { to { transform: rotate(360deg); } }
+
+/* ---------------------------------------------------------------- sheet */
+
+.sheet {
+  position: fixed;
+  inset: 0;
+  background: var(--ground);
+  display: flex;
+  flex-direction: column;
+  animation: rise 240ms var(--ease);
+  z-index: 5;
+}
+@keyframes rise {
+  from { transform: translateY(14px); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+
+.sheet__top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px var(--pad);
+  border-bottom: 1px solid var(--rule);
+}
+.sheet__search {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--fa);
+  font-size: 16px;
+  outline: none;
+}
+.sheet__search::placeholder { color: var(--ink-3); }
+.sheet__close {
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  font-family: var(--fa);
+  font-size: 13px;
+  cursor: pointer;
+}
+.sheet__close:hover { color: var(--ink); }
+
+.sheet__list { flex: 1; overflow-y: auto; padding: 6px 0 14px; }
+.sheet__list::-webkit-scrollbar { width: 8px; }
+.sheet__list::-webkit-scrollbar-thumb {
+  background: rgba(243, 239, 231, 0.13);
+  border-radius: 4px;
+}
+
+/* Places as plain type and a number. No flags, no pins, no map — a location
+   list reads perfectly without any of them, and the country name is already
+   the label an icon would be duplicating. */
+.row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  padding: 11px var(--pad);
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--fa);
+  font-size: 15px;
+  text-align: right;
+  cursor: pointer;
+}
+.row:hover { background: rgba(255, 255, 255, 0.04); }
+.row__name { flex: 1; }
+.row__code {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+.row__time {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-3);
+  direction: ltr;
+  unicode-bidi: isolate;
+  font-variant-numeric: tabular-nums;
+}
+.row.is-picked { background: rgba(242, 160, 59, 0.09); }
+.row.is-picked .row__name { color: var(--live); }
+.row--auto { border-bottom: 1px solid var(--rule); padding-top: 14px; padding-bottom: 14px; }
+.row--auto .row__sub { font-size: 11.5px; color: var(--ink-3); }
+
+.empty { padding: 30px var(--pad); color: var(--ink-3); font-size: 13px; }
+
+/* ---------------------------------------------------------------- toast */
+
+.toast {
+  position: fixed;
+  left: var(--pad); right: var(--pad); bottom: 18px;
+  padding: 12px 15px;
+  border-radius: 10px;
+  background: var(--ground-lift);
+  box-shadow: inset 0 0 0 1px var(--rule), 0 12px 28px rgba(0,0,0,0.5);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--ink-2);
+  z-index: 9;
+  animation: rise 200ms var(--ease);
+}
+
+/* Motion is a courtesy, not the message. Every state above is readable with
+   all of it switched off — which is the trade the reference that scored
+   highest on animation and lowest on accessibility got wrong. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

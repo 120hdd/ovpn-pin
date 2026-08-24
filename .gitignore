@@ -26,3 +26,7 @@ note.md
 
 # left behind whenever anything imports ovpn-proxy.py
 __pycache__/
+
+# built app, and PyInstaller working files
+dist/
+build/
