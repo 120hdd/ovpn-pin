@@ -609,6 +609,12 @@ prx() {
     [ $# -eq 0 ] && set -- status
     case ${1:-} in -h|--help|help) exec "$(find_python)" "$PRX" help ;; esac
 
+    # So that the messages can say `ovpn proxy stop` rather than `python3
+    # ovpn-proxy.py stop`. Told, not guessed: the script is perfectly usable
+    # without this wrapper - on Windows there is nothing else - and it should
+    # not name a command that only exists when it was started this way.
+    export OVPN_DISPATCHER=1
+
     # `env` prints shell for `eval` to read, so nothing else may reach stdout
     # on its way out - use_cwd's "folder: ..." line would be eval'd as a
     # command. It reads no configs either, so there is nothing to work out.

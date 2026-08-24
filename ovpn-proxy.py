@@ -105,6 +105,39 @@ LOG_PATH = os.path.join(HERE, '.state', 'proxy.log')
 OUT = sys.stdout
 
 
+# What to tell someone to type. Every message in this file is written as
+# `ovpn proxy ...`, because that is what it is called on the machine it was
+# written for - but `ovpn` is a bash script, and on Windows there is nothing
+# by that name. Printing it there sends someone off to type a command that
+# cannot exist, which is a worse failure than being wordy.
+#
+# The dispatcher says so itself rather than being guessed at, so a Linux box
+# where the script is called directly gets the honest form too.
+CMD = ('ovpn proxy' if os.environ.get('OVPN_DISPATCHER')
+       else ('python ovpn-proxy.py' if os.name == 'nt'
+             else 'python3 ovpn-proxy.py'))
+
+# px comes from ovpn-shell.sh, so it exists in bash and zsh and nowhere else.
+# No sense offering it to a PowerShell prompt.
+HAS_PX = os.name != 'nt'
+
+
+def phrase(s):
+    """Say the command's name the way this machine would.
+
+    Done here, where everything is printed, rather than at the forty-odd
+    places that mention it.
+    """
+    return s if CMD == 'ovpn proxy' else s.replace('ovpn proxy', CMD)
+
+
+def point_hint(port, host='127.0.0.1'):
+    """The shortest true thing to type to send a terminal through it."""
+    if HAS_PX:
+        return f'px {port}'
+    return f"$env:http_proxy='http://{host}:{port}'"
+
+
 def talk_on(stream):
     """Send the human-facing half of the output somewhere else, and decide
     colour by that stream rather than by stdout - otherwise a run whose
@@ -130,37 +163,39 @@ def log(level, msg):
 
 
 def head(msg):
-    print(f'\n  {C["head"]}{C["bold"]}{msg}{C["off"]}', file=OUT)
+    print(phrase(f'\n  {C["head"]}{C["bold"]}{msg}{C["off"]}'), file=OUT)
 
 
 def field(label, value):
-    print(f'  {C["head"]}{label:<12}{C["off"]}{value}', file=OUT)
+    print(phrase(f'  {C["head"]}{label:<12}{C["off"]}{value}'), file=OUT)
 
 
 def ok(msg):
-    print(f'  {C["ok"]}[ ok ]{C["off"]} {msg}', file=OUT)
+    print(phrase(f'  {C["ok"]}[ ok ]{C["off"]} {msg}'), file=OUT)
 
 
 def warn(msg, detail=''):
     # Flushed, because the failure that usually follows goes to stderr, and
     # unflushed stdout would let it print first and read as the cause.
     sys.stdout.flush()
-    print(f'  {C["warn"]}[warn]{C["off"]} {msg}', file=OUT, flush=True)
+    print(phrase(f'  {C["warn"]}[warn]{C["off"]} {msg}'), file=OUT, flush=True)
     # Every line indented, not just the first - an unindented second line
     # reads as a separate message rather than as part of this one.
     for line in detail.splitlines():
-        print(f'         {C["dim"]}{line}{C["off"]}', file=OUT, flush=True)
+        print(phrase(f'         {C["dim"]}{line}{C["off"]}'), file=OUT,
+              flush=True)
     log('WARN', msg + (f' - {detail.replace(chr(10), " ")}' if detail else ''))
 
 
 def note(msg):
-    print(f'  {C["dim"]}{msg}{C["off"]}', file=OUT)
+    print(phrase(f'  {C["dim"]}{msg}{C["off"]}'), file=OUT)
 
 
 def die(msg, detail=''):
-    print(f'\n  {C["fail"]}{C["bold"]}[fail]{C["off"]} {msg}', file=sys.stderr)
+    print(phrase(f'\n  {C["fail"]}{C["bold"]}[fail]{C["off"]} {msg}'),
+          file=sys.stderr)
     for line in detail.splitlines():
-        print(f'         {C["dim"]}{line}{C["off"]}', file=sys.stderr)
+        print(phrase(f'         {C["dim"]}{line}{C["off"]}'), file=sys.stderr)
     print(file=sys.stderr)
     log('FAIL', msg + (f' - {detail.replace(chr(10), " ")}' if detail else ''))
     raise SystemExit(1)
@@ -1065,8 +1100,13 @@ NEVER_PROXY = ('localhost', '127.0.0.1', '::1')
 SAFE_HOST = re.compile(r'^[A-Za-z0-9_.:*/\[\]-]+$')
 
 
-def env_lines(rec):
-    """The exports, as a shell would want them."""
+def env_lines(rec, powershell=False):
+    """The exports, in the dialect of whichever shell is going to eval them.
+
+    Two dialects rather than one, because the alternative on Windows was
+    printing `export` lines at a PowerShell prompt, which are not wrong so
+    much as meaningless there.
+    """
     url = f'http://{rec["host"]}:{rec["port"]}'
     skip = []
     for part in re.split(r'[,\s]+', os.environ.get('no_proxy', '')):
@@ -1077,14 +1117,16 @@ def env_lines(rec):
             skip.append(part)
     skip = ','.join(skip)
 
-    out = [f"export {v}='{url}'"
-           for v in ('http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY')]
-    out.append(f"export no_proxy='{skip}'")
-    out.append(f"export NO_PROXY='{skip}'")
-    # A marker, so that `px status` can tell a proxy this set from one that
-    # was already in the environment when the shell started.
-    out.append(f"export OVPN_PROXY='{rec['host']}:{rec['port']}'")
-    return out
+    # A marker on the end, so that `px status` can tell a proxy this set
+    # from one that was already in the environment when the shell started.
+    values = [(v, url) for v in
+              ('http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY')]
+    values += [('no_proxy', skip), ('NO_PROXY', skip),
+               ('OVPN_PROXY', f'{rec["host"]}:{rec["port"]}')]
+
+    if powershell:
+        return [f"$env:{v} = '{val}'" for v, val in values]
+    return [f"export {v}='{val}'" for v, val in values]
 
 
 def env_port_in(url):
@@ -1094,7 +1136,7 @@ def env_port_in(url):
     return m.group(1) if m else None
 
 
-def do_env(port=None, off=False, show=False):
+def do_env(port=None, off=False, show=False, powershell=None):
     """Shell lines that point a terminal at a running proxy.
 
     Printed rather than applied. A child process cannot change its parent's
@@ -1107,12 +1149,18 @@ def do_env(port=None, off=False, show=False):
     either the exports or nothing at all. A sentence in among them would be
     run as a command.
     """
+    # PowerShell unless told otherwise on Windows, sh unless told otherwise
+    # anywhere else. Git Bash on Windows is the case that needs --sh.
+    ps = powershell if powershell is not None else (os.name == 'nt')
+
     if off:
         for v in PROXY_VARS:
-            print(f'unset {v}')
+            print(f'Remove-Item -ErrorAction SilentlyContinue Env:\\{v}'
+                  if ps else f'unset {v}')
         head('Terminal')
         ok('direct again - no proxy set for this shell')
-        note('    px      to send it back through one')
+        note(f'    {"px" if HAS_PX else "the env line above"}'
+             '      to send it back through one')
         print(file=OUT)
         return 0
 
@@ -1146,7 +1194,7 @@ def do_env(port=None, off=False, show=False):
             'Or put the one you always want in your rc file:\n'
             "    export OVPN_PROXY_PORT=8899")
 
-    for line in env_lines(rec):
+    for line in env_lines(rec, ps):
         print(line)
 
     head('Terminal')
@@ -1154,7 +1202,8 @@ def do_env(port=None, off=False, show=False):
     field('exit', f'{rec["ip"]}   {rec["name"]}')
     note('    curl, git, npm, pip and wget read this. The name you ask for is')
     note('    resolved at the exit, so no local resolver is given a chance.')
-    note('    px off    to stop')
+    note(f'    {"px off" if HAS_PX else "ovpn proxy env --off | iex"}'
+         '    to stop')
     print(file=OUT)
     return 0
 
@@ -1223,7 +1272,8 @@ def do_detach(args, exit_):
             print(file=OUT)
             note('It has no terminal of its own, so closing this one - or')
             note('logging out altogether - leaves it running.')
-            note(f'    px {args.port}                      point a shell at it')
+            note(f'    {point_hint(args.port, args.listen)}'
+                 '   point a terminal at it')
             note(f'    ovpn proxy stop --port {args.port}   end it')
             print(file=OUT)
             return 0
@@ -1260,7 +1310,7 @@ def do_env_show():
         note('nothing set - this shell goes out directly.')
         live = read_states()
         for r in live:
-            note(f'    px {r["port"]}   through {r["name"]}')
+            note(f'    {point_hint(r["port"], r["host"])}   through {r["name"]}')
         if not live:
             note('    ovpn proxy connect --port 8899   starts one to use')
         print(file=OUT)
@@ -1447,7 +1497,7 @@ VERBS = {'connect': [], 'sweep': ['--sweep'], 'env': ['--env'],
 
 def do_help():
     h, d, b, o = C['head'], C['dim'], C['bold'], C['off']
-    print(f"""
+    print(phrase(f"""
   {h}{b}ovpn proxy{o} - reach the web through an exit's HTTPS proxy on 443,
   {d}instead of through an OpenVPN tunnel the line throttles.{o}
 
@@ -1572,7 +1622,7 @@ def do_help():
     on the way out. The certificate is checked by hand instead, against the
     system CAs and against the name the config was pinned from, so the name
     is proved without being announced.
-""")
+"""))
     return 0
 
 
@@ -1654,6 +1704,11 @@ def main():
                    help='with env, print the unsets instead')
     p.add_argument('--show', action='store_true',
                    help='with env, say what this shell is set to now')
+    p.add_argument('--powershell', action='store_true',
+                   help='with env, print $env: lines (the default on Windows)')
+    p.add_argument('--sh', action='store_true',
+                   help='with env, print export lines. Needed for Git Bash '
+                        'on Windows, where the default guesses PowerShell')
     p.add_argument('--usage', action='store_true',
                    help='the commands and flags, in full')
     args = p.parse_args(read_verb(sys.argv[1:]))
@@ -1668,7 +1723,9 @@ def main():
         # Everything a person reads moves to stderr for the rest of this run,
         # so that stdout is the shell's alone.
         talk_on(sys.stderr)
-        raise SystemExit(do_env(args.port, args.off, args.show))
+        raise SystemExit(do_env(args.port, args.off, args.show,
+                                True if args.powershell else
+                                False if args.sh else None))
 
     # Everything past here is about listening, so the default belongs here
     # rather than in the parser, where it would have blunted `stop --port`.
