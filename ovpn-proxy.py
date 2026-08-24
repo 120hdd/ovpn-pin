@@ -1681,8 +1681,21 @@ def main():
                    help="the exit's proxy port (443)")
     p.add_argument('--auth', default=os.path.join(HERE, '.ovpn-auth'),
                    help='file holding username and password, one per line')
-    p.add_argument('--dir', default=os.path.join(HERE, 'pinned'),
-                   help='where to look for configs by name (pinned/)')
+    # OVPN_OUT_DIR is how the rest of the repo is told which folder to act on
+    # - ovpn-connect.sh and resolve-ovpn-remote.sh both read it, falling back
+    # to pinned/. This script did not, which made it the odd one out anywhere
+    # the dispatcher was not there to translate: on Windows there is no
+    # dispatcher, so setting it had no effect at all.
+    #
+    # What it still will not do is look at the folder you are standing in.
+    # That convenience lives in the `ovpn` wrapper on purpose - a script that
+    # quietly acts on wherever you happen to be is a bad script, and this one
+    # is also what the wrapper calls.
+    p.add_argument('--dir',
+                   default=os.environ.get('OVPN_OUT_DIR')
+                   or os.path.join(HERE, 'pinned'),
+                   help='where to look for configs by name. Defaults to '
+                        '$OVPN_OUT_DIR, or pinned/')
     p.add_argument('--bind', help='source address for the connection out. Only '
                                   'needed when a tunnel owns the default route '
                                   'and this would otherwise go through it')

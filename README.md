@@ -887,8 +887,23 @@ python ovpn-proxy.py stop
 
 It prints its own name back the way you would type it, so the hints in its
 output are runnable as they stand rather than naming a command this machine
-does not have. `--dir` matters more here than on Linux: there is no dispatcher
-noticing the folder you are standing in, so it stays on `pinned/` unless told.
+does not have.
+
+**Which folder it acts on** is the thing to know here. Standing in a folder
+does nothing — that convenience lives in the `ovpn` wrapper, which does not
+exist on Windows. Say it outright, either per command or once:
+
+```
+python ovpn-proxy.py connect uk-gla --dir sitetest\www-scamspotter-org
+
+$env:OVPN_OUT_DIR = "C:\Users\you\ovpn-pin\sitetest\www-scamspotter-org"
+python ovpn-proxy.py connect uk-gla
+```
+
+`OVPN_OUT_DIR` is the same variable `ovpn-connect.sh` and
+`resolve-ovpn-remote.sh` read, so all three now agree on how they are told.
+Note that `sitetest/` itself holds a folder per host rather than configs — it
+is `sitetest/<host>/` you want, not `sitetest/`.
 
 There is no `px` either — that is a bash function. The same job in PowerShell:
 
