@@ -5,9 +5,21 @@ proxy. It drives `ovpn-proxy.py`, sets the system proxy so every program on
 the machine goes through it, and puts the machine back when it stops.
 
 ```
-python app/main.py        run it from the repo
-python app/build.py       build dist/Ettesal/, which is the shipped thing
-python app/main.py --selftest    say what it can see, and stop
+python app/build.py       build it, then run the Desktop shortcut it makes
+python app/main.py        or run it straight from the repo, unbuilt
+```
+
+The built app is **`dist/Ettesal/Ettesal.exe`**, and the build puts a shortcut
+to it on the Desktop. Nothing is left in `build/` — PyInstaller writes an
+intermediate `Ettesal.exe` there which looks identical, has no `_internal`
+beside it and fails the moment it is double-clicked, so the build deletes the
+whole folder rather than leaving two exes where one is broken.
+
+The build also copies the servers and credentials in, so what comes out is
+ready to run rather than ready to assemble.
+
+```
+dist/Ettesal/Ettesal.exe --selftest    what it can see, and where it looked
 ```
 
 ## What it does when you press the button
