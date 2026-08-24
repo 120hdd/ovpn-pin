@@ -876,14 +876,32 @@ brings up no tunnel and touches no system proxy setting.
 
 ### On Windows
 
-Same file, same command:
+`ovpn` is a bash script, so there is no `ovpn proxy` here. Call the script
+directly — it takes the same verbs:
 
 ```
-python ovpn-proxy.py uk-man
+python ovpn-proxy.py connect uk-man --dir success --port 8899 --detach
+python ovpn-proxy.py status
+python ovpn-proxy.py stop
 ```
 
-`ovpn proxy` is the Linux dispatcher's name for it; on Windows call the script
-directly. It is the one thing in this repo that needs Python 3 — everything
+It prints its own name back the way you would type it, so the hints in its
+output are runnable as they stand rather than naming a command this machine
+does not have. `--dir` matters more here than on Linux: there is no dispatcher
+noticing the folder you are standing in, so it stays on `pinned/` unless told.
+
+There is no `px` either — that is a bash function. The same job in PowerShell:
+
+```
+python ovpn-proxy.py env --port 8899 | Out-String | Invoke-Expression
+python ovpn-proxy.py env --off       | Out-String | Invoke-Expression
+```
+
+`env` prints `$env:` lines here and `export` lines on Linux, guessed from the
+platform. In Git Bash on Windows that guess is wrong, so pass `--sh`.
+
+Measured end to end in PowerShell: `--detach` returns immediately, and `curl`
+with no flags at all came out of Oslo. It is the one thing in this repo that needs Python 3 — everything
 else runs without it — because it has to hold a socket open both ways for a
 browser and check a certificate along the way, which neither `curl` nor
 PowerShell's stack will do on their own terms.
