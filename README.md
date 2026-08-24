@@ -732,9 +732,41 @@ downgraded. What is given up is announcing the name, not proving it.
 A proxy is a port and an exit, and nothing else. Two of them are two ports:
 
 ```
-ovpn proxy connect                      # whatever is quickest, on 8888
-ovpn proxy connect de-ber --port 8899   # and one that stays put
+ovpn proxy connect                                # whatever is quickest, on 8888
+ovpn proxy connect de-ber --port 8899 --detach    # and one that stays put
 ```
+
+`--detach` is what makes the second one worth having. It comes back instead of
+holding the terminal, and having no terminal of its own it outlives that one
+closing — and logging out. Without it the proxy lives exactly as long as the
+window you started it in.
+
+```
+$ ovpn proxy connect de-ber --port 8899 --detach
+  Detached
+  [ ok ] http://127.0.0.1:8899
+  exit        152.89.163.229   de-ber.prod.surfshark.com
+  pid         486367
+  output      .state/proxy-8899.out
+```
+
+`nohup ovpn proxy connect … &` does the same job and was measured doing it —
+it survives the terminal closing, and a full logout too where `logind` is left
+at its default `KillUserProcesses=no`. `--detach` only saves you remembering
+that, and puts the output somewhere predictable instead of wherever you were
+standing.
+
+What it does *not* do is restart itself. If the exit stops taking the
+credentials, the proxy stays up and every request through it fails — `px
+status` will not catch that, because the proxy is running exactly as it should
+be. For that, a `systemd --user` unit with `Restart=always` is the honest
+answer, and this repo does not ship one.
+
+The exit is chosen, checked and proved *before* anything is detached, so a
+failure is reported to you rather than disappearing into a log. What is left
+can only fail at the bind, and that is waited for too — a detached proxy that
+died quietly would leave `stop` finding nothing while `connect` found the port
+taken.
 
 They know nothing of each other. Starting, stopping or reconnecting one
 leaves the other serving, because there is no shared state to disturb — no
