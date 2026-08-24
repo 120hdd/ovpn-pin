@@ -727,6 +727,66 @@ and the presented certificate still has to say it serves the name the config
 was pinned from. Fail either and the connection is dropped rather than
 downgraded. What is given up is announcing the name, not proving it.
 
+### More than one at a time
+
+A proxy is a port and an exit, and nothing else. Two of them are two ports:
+
+```
+ovpn proxy connect                      # whatever is quickest, on 8888
+ovpn proxy connect de-ber --port 8899   # and one that stays put
+```
+
+They know nothing of each other. Starting, stopping or reconnecting one
+leaves the other serving, because there is no shared state to disturb — no
+routes, no DNS, no system proxy setting. Measured on one line, both up at
+once:
+
+| port | exit | what a request came out as |
+|---|---|---|
+| 8888 | `de-ber` | `152.89.163.230`, Frankfurt |
+| 8899 | `se-sto` | `130.195.218.206`, Stockholm |
+
+The reason to want a second one is that the two jobs pull in opposite
+directions. A browser's exit is something you change on purpose and often. A
+terminal or a chat client wants one that does not move underneath it — a
+download that dies halfway because you switched countries is a download you
+start again.
+
+For a terminal, that is the whole of the setup:
+
+```
+export http_proxy=http://127.0.0.1:8899
+export https_proxy=$http_proxy
+```
+
+`curl`, `git`, `npm`, `pip` and `apt` all read those. Anything speaking TCP on
+443 travels the same way, because HTTPS goes through as `CONNECT` and
+`CONNECT` carries whatever the two ends put inside it — a chat client pointed
+at the same address and port works without knowing it is a proxy at all. What
+does *not* go through: UDP, ICMP, and anything that ignores the proxy setting
+it was handed.
+
+`curl` fetching 25 MB through it finished at **11.4 MB/s** — about 91 Mbit,
+against the 0.3 Mbit the same line gives the tunnel.
+
+DNS needs no thought here. A request goes upstream as `CONNECT host:443`, so
+the *exit* resolves the name; the only address this machine ever looks up is
+the exit's own, and that one came out of the pinned config. There is no
+setting to get wrong.
+
+Because two are ordinary rather than exceptional, `stop` stops guessing once
+there is more than one:
+
+```
+ovpn proxy stop              # names them and ends nothing
+ovpn proxy stop --port 8899  # ends that one
+ovpn proxy stop --all        # ends all of them
+```
+
+Refusing is the point. The browser's proxy and the one something has been
+sitting on for a week are one keystroke apart, and only one of the two is easy
+to notice the loss of.
+
 ### Not the other proxy in this README
 
 `ovpn proxy` **serves** one, for your browser to reach the web through. The
