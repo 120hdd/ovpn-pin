@@ -754,10 +754,70 @@ def alive(pid):
         return False
 
 
+def strays():
+    """Any other copy of this script running, whatever started it.
+
+    The state file only knows about proxies this version started. One left
+    over from an older copy, or from a shell that was closed, holds its port
+    just as firmly and appears in no record - and then `stop` says there is
+    nothing to stop while `connect` says the address is in use, which is a
+    maddening pair of answers to get. So: ask the process table instead.
+
+    Returns (pid, command line) pairs, never raising - not being able to look
+    is a reason to say less, not to fail.
+    """
+    me = os.getpid()
+    found = []
+    if os.name == 'nt':
+        try:
+            import subprocess
+            out = subprocess.run(
+                ['powershell', '-NoProfile', '-Command',
+                 "Get-CimInstance Win32_Process | Where-Object "
+                 "{ $_.CommandLine -like '*ovpn-proxy.py*' } | "
+                 "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"],
+                capture_output=True, text=True, timeout=15)
+            for line in out.stdout.splitlines():
+                pid, _, cmd = line.partition('\t')
+                if pid.strip().isdigit() and int(pid) != me:
+                    found.append((int(pid), cmd.strip()))
+        except Exception:
+            pass
+        return found
+
+    try:
+        for entry in os.listdir('/proc'):
+            if not entry.isdigit() or int(entry) == me:
+                continue
+            try:
+                with open(f'/proc/{entry}/cmdline', 'rb') as f:
+                    cmd = f.read().replace(b'\0', b' ').decode(
+                        'utf-8', 'replace').strip()
+            except OSError:
+                continue
+            if 'ovpn-proxy.py' in cmd:
+                found.append((int(entry), cmd))
+    except OSError:
+        pass
+    return found
+
+
 def do_status():
     st = read_state()
     if not st:
         head('Proxy')
+        loose = strays()
+        if loose:
+            warn(f'no record of a proxy, but {len(loose)} copy of this is '
+                 f'running' if len(loose) == 1 else
+                 f'no record of a proxy, but {len(loose)} copies of this are '
+                 f'running')
+            for pid, cmd in loose:
+                note(f'    pid {pid}  {cmd[:90]}')
+            note('Started by an older copy, or by a shell since closed.')
+            note('    ovpn proxy stop   will end them')
+            print()
+            return 0
         note('nothing running.')
         note('    ovpn proxy connect          pick a live exit and serve it')
         note('    ovpn proxy connect uk-lon   or name one')
@@ -774,13 +834,43 @@ def do_status():
     return 0
 
 
+def kill(pid):
+    if os.name == 'nt':
+        import subprocess
+        subprocess.run(['taskkill', '/PID', str(pid), '/F'],
+                       capture_output=True, check=True)
+    else:
+        import signal
+        os.kill(pid, signal.SIGTERM)
+
+
 def do_stop():
     st = read_state()
     if not st:
+        # No record does not mean nothing is there. Look for ourselves before
+        # claiming otherwise, or `stop` and `connect` end up contradicting
+        # each other over the same port.
         head('Proxy')
-        note('nothing running - nothing to stop.')
+        loose = strays()
+        if not loose:
+            note('nothing running - nothing to stop.')
+            print()
+            return 0
+        warn(f'no record of a proxy, but {len(loose)} other copy of this is '
+             f'running' if len(loose) == 1 else
+             f'no record of a proxy, but {len(loose)} other copies of this '
+             f'are running')
+        stopped = 0
+        for pid, cmd in loose:
+            try:
+                kill(pid)
+                stopped += 1
+                ok(f'stopped pid {pid}   {cmd[:74]}')
+            except Exception as e:
+                warn(f'could not stop pid {pid}', str(e))
+        clear_state()
         print()
-        return 0
+        return 0 if stopped else 1
     try:
         if os.name == 'nt':
             import subprocess
@@ -863,9 +953,15 @@ def serve(listen_host, listen_port, exit_, quiet):
     try:
         srv.bind((listen_host, listen_port))
     except OSError as e:
-        die(f'cannot listen on {listen_host}:{listen_port}', f'{e}\n'
-            'Something is already there - most likely another copy of this.\n'
-            'Stop it with  ovpn proxy stop  , or pass --port for a second one.')
+        # Naming what holds it, because "address already in use" plus a
+        # `stop` that reports nothing running is a pair of answers that
+        # cannot both be acted on.
+        held = '\n'.join(f'    pid {pid}  {cmd[:80]}' for pid, cmd in strays())
+        die(f'cannot listen on {listen_host}:{listen_port}', f'{e}\n' +
+            (f'These copies of this script are running:\n{held}\n'
+             if held else 'Nothing of ours is running, so it is something '
+                          'else on that port.\n') +
+            'ovpn proxy stop  ends ours, or --port picks a different one.')
     srv.listen(128)
 
     head('Up')
