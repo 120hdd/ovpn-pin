@@ -763,9 +763,23 @@ def strays():
     nothing to stop while `connect` says the address is in use, which is a
     maddening pair of answers to get. So: ask the process table instead.
 
+    Matched on the shape of the command line, not on the filename appearing
+    anywhere in it: a shell running a script that merely mentions this file -
+    a grep, an editor, the very command that asked the question - would
+    otherwise be reported as a proxy, and `stop` would then kill it.
+
     Returns (pid, command line) pairs, never raising - not being able to look
     is a reason to say less, not to fail.
     """
+
+    def is_ours(argv):
+        if len(argv) < 2:
+            return False
+        if not os.path.basename(argv[0]).lower().startswith('python'):
+            return False
+        return any(a.replace('\\', '/').endswith('/ovpn-proxy.py')
+                   or a == 'ovpn-proxy.py' for a in argv[1:])
+
     me = os.getpid()
     found = []
     if os.name == 'nt':
@@ -779,8 +793,13 @@ def strays():
                 capture_output=True, text=True, timeout=15)
             for line in out.stdout.splitlines():
                 pid, _, cmd = line.partition('\t')
-                if pid.strip().isdigit() and int(pid) != me:
-                    found.append((int(pid), cmd.strip()))
+                cmd = cmd.strip()
+                if not (pid.strip().isdigit() and int(pid) != me):
+                    continue
+                # Windows hands back one string; splitting on spaces is
+                # crude but the pieces we test never contain any.
+                if is_ours(cmd.replace('"', '').split()):
+                    found.append((int(pid), cmd))
         except Exception:
             pass
         return found
@@ -791,12 +810,13 @@ def strays():
                 continue
             try:
                 with open(f'/proc/{entry}/cmdline', 'rb') as f:
-                    cmd = f.read().replace(b'\0', b' ').decode(
-                        'utf-8', 'replace').strip()
+                    raw = f.read()
             except OSError:
                 continue
-            if 'ovpn-proxy.py' in cmd:
-                found.append((int(entry), cmd))
+            argv = [a.decode('utf-8', 'replace')
+                    for a in raw.split(b'\0') if a]
+            if is_ours(argv):
+                found.append((int(entry), ' '.join(argv)))
     except OSError:
         pass
     return found
