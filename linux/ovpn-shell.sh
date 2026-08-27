@@ -6,7 +6,7 @@
 # `ovpn proxy env` prints the exports instead of applying them, and why this
 # file exists to eval what it prints.
 #
-#     . /path/to/ovpn-pin/ovpn-shell.sh
+#     . /path/to/ovpn-pin/linux/ovpn-shell.sh
 #
 # `ovpn install` puts that line in your rc file. Works in bash and zsh.
 #

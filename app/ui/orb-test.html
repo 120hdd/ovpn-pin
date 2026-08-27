@@ -1,0 +1,909 @@
+<!doctype html>
+<html lang="en" data-state="off">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ORB LAB — Twisted Assistant</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    color-scheme: dark;
+    --orb-a: #9c8cff;
+    --orb-b: #4ce2d2;
+    --orb-c: #483ac2;
+    --orb-glow: rgba(116, 98, 255, 0.36);
+  }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    display: grid;
+    place-items: center;
+    background:
+      radial-gradient(circle at 50% 48%, color-mix(in srgb, var(--orb-c), transparent 92%), transparent 36%),
+      radial-gradient(circle at 50% 115%, rgba(69, 53, 145, 0.14), transparent 38%),
+      #050509;
+    color: #777986;
+    font: 10px/1.6 "Cascadia Mono", Consolas, monospace;
+    transition: background 500ms ease;
+  }
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.22;
+    background-image:
+      linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px);
+    background-size: 52px 52px;
+    mask-image: radial-gradient(circle at 50% 48%, black, transparent 70%);
+  }
+  .cap {
+    position: fixed;
+    top: 18px;
+    left: 22px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: #454650;
+    user-select: none;
+  }
+  .cap b { color: #8a8c99; font-weight: 400; }
+  #fps {
+    position: fixed;
+    top: 18px;
+    right: 22px;
+    letter-spacing: 0.18em;
+    color: #454650;
+    user-select: none;
+  }
+  #stage {
+    position: relative;
+    width: min(74vmin, 680px);
+    height: min(74vmin, 680px);
+    isolation: isolate;
+  }
+  #stage::before,
+  #stage::after {
+    content: "";
+    position: absolute;
+    inset: 13%;
+    z-index: -2;
+    border-radius: 50%;
+    background: var(--orb-glow);
+    filter: blur(54px);
+    opacity: 0.42;
+    animation: breathe 5.8s ease-in-out infinite;
+    transition: background 500ms ease;
+  }
+  #stage::after {
+    inset: 27%;
+    z-index: 2;
+    opacity: 0.16;
+    filter: blur(26px);
+    mix-blend-mode: screen;
+    pointer-events: none;
+    animation-delay: -2.8s;
+  }
+  canvas {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    display: block;
+    cursor: crosshair;
+  }
+  .orbit {
+    position: absolute;
+    z-index: 0;
+    left: 50%;
+    top: 50%;
+    display: block;
+    border: 1px solid color-mix(in srgb, var(--orb-a), transparent 83%);
+    border-radius: 50%;
+    pointer-events: none;
+    transition: border-color 500ms ease;
+  }
+  .orbit::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: -3px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--orb-b);
+    box-shadow: 0 0 12px var(--orb-b);
+    transition: background 500ms ease, box-shadow 500ms ease;
+  }
+  .orbit--a {
+    width: 72%;
+    height: 67%;
+    transform: translate(-50%, -50%) rotate(-13deg);
+    animation: spin-a 17s linear infinite;
+  }
+  .orbit--b {
+    width: 58%;
+    height: 65%;
+    opacity: 0.58;
+    transform: translate(-50%, -50%) rotate(68deg);
+    animation: spin-b 12s linear infinite reverse;
+  }
+  .signature {
+    position: absolute;
+    z-index: 3;
+    left: 50%;
+    bottom: 10.5%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: rgba(224, 226, 237, 0.58);
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    user-select: none;
+    pointer-events: none;
+  }
+  .signature i {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--orb-b);
+    box-shadow: 0 0 9px var(--orb-b);
+    animation: pulse 1.8s ease-in-out infinite;
+  }
+  .panel {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 5;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px 20px;
+    justify-content: center;
+    align-items: center;
+    padding: 26px 20px 16px;
+    background: linear-gradient(transparent, rgba(5,5,9,.91) 34%);
+  }
+  .states { display: flex; gap: 4px; }
+  label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #555762;
+    user-select: none;
+  }
+  label b { color: #9294a1; font-weight: 400; min-width: 4ch; text-align: right; }
+  input[type=range] {
+    appearance: none;
+    width: 74px;
+    height: 2px;
+    border-radius: 1px;
+    outline: none;
+    background: #292a32;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    appearance: none;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #c5c7d2;
+    box-shadow: 0 0 8px color-mix(in srgb, var(--orb-a), transparent 40%);
+    cursor: ew-resize;
+  }
+  button {
+    font: inherit;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #858793;
+    background: rgba(255,255,255,.025);
+    border: 1px solid #30313a;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  button:hover { color: #e1e3ec; border-color: #51535f; }
+  button[aria-pressed="true"] {
+    color: #f4f4f8;
+    border-color: color-mix(in srgb, var(--orb-a), transparent 25%);
+    background: color-mix(in srgb, var(--orb-a), transparent 88%);
+    box-shadow: inset 0 0 14px color-mix(in srgb, var(--orb-a), transparent 91%);
+  }
+  #err {
+    position: fixed;
+    z-index: 10;
+    inset: auto 16px 84px 16px;
+    display: none;
+    max-height: 40vh;
+    overflow: auto;
+    color: #ff7793;
+    white-space: pre-wrap;
+    font-size: 11px;
+  }
+  @keyframes breathe {
+    0%, 100% { transform: scale(.92); opacity: .31; }
+    50% { transform: scale(1.08); opacity: .5; }
+  }
+  @keyframes spin-a {
+    from { transform: translate(-50%, -50%) rotate(-13deg); }
+    to { transform: translate(-50%, -50%) rotate(347deg); }
+  }
+  @keyframes spin-b {
+    from { transform: translate(-50%, -50%) rotate(68deg); }
+    to { transform: translate(-50%, -50%) rotate(428deg); }
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: .45; transform: scale(.8); }
+    50% { opacity: 1; transform: scale(1.25); }
+  }
+  @media (max-width: 760px) {
+    #stage { width: min(92vw, 580px); height: min(92vw, 580px); transform: translateY(-3vh); }
+    .panel { gap: 7px 13px; }
+    label { font-size: 9px; }
+    input[type=range] { width: 58px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #stage::before, #stage::after, .orbit, .signature i { animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<p class="cap">orb lab — <b>twisted assistant</b> · webgl2 test only</p>
+<p id="fps"></p>
+
+<div id="stage">
+  <span class="orbit orbit--a"></span>
+  <span class="orbit orbit--b"></span>
+  <canvas id="c" aria-label="Twisted AI assistant orb preview"></canvas>
+  <p class="signature"><i></i><span id="signatureText">ready to relay</span></p>
+</div>
+
+<pre id="err"></pre>
+
+<div class="panel">
+  <div class="states" aria-label="Connection state preview">
+    <button type="button" data-state="off" aria-pressed="true">idle</button>
+    <button type="button" data-state="busy" aria-pressed="false">thinking</button>
+    <button type="button" data-state="on" aria-pressed="false">connected</button>
+    <button type="button" data-state="fail" aria-pressed="false">failed</button>
+  </div>
+  <label>speed <input type="range" data-p="speed" min="0" max="2.4" step="0.01" value="1"><b></b></label>
+  <label>shape <input type="range" data-p="strength" min="0.03" max="0.34" step="0.01" value="0.19"><b></b></label>
+  <label>twist <input type="range" data-p="twist" min="0" max="2.2" step="0.01" value="1.18"><b></b></label>
+  <label>bands <input type="range" data-p="bands" min="2" max="9" step="0.1" value="4.8"><b></b></label>
+  <label>detail <input type="range" data-p="density" min="1.2" max="5" step="0.01" value="2.55"><b></b></label>
+  <label>rim <input type="range" data-p="rim" min="0" max="2.2" step="0.01" value="1.2"><b></b></label>
+  <label>bloom <input type="range" data-p="bloom" min="0" max="2.4" step="0.01" value="0.95"><b></b></label>
+  <button type="button" id="reseed">reseed</button>
+</div>
+
+<script>
+'use strict';
+
+/* Visual direction: Codrops "Twisted Colorful Spheres" by Mario Carrillo
+   (MIT). This is a dependency-free WebGL2 interpretation for the OVPN Pin
+   test lab: noise displacement + a latitude-driven twist + a cosine-like
+   flowing palette. It is intentionally isolated from the production orb. */
+
+const FULL_VERT = `#version 300 es
+void main(){
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(p*2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const SPHERE_VERT = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPosition;
+layout(location=1) in vec3 aNormal;
+layout(location=2) in vec2 aUv;
+
+uniform float uTime;
+uniform float uSpeed;
+uniform float uDensity;
+uniform float uStrength;
+uniform float uTwist;
+uniform float uBands;
+uniform float uSeed;
+uniform float uAspect;
+uniform vec2 uPointer;
+
+out vec3 vNormal;
+out vec3 vViewPos;
+out vec2 vUv;
+out float vDistort;
+out float vWave;
+
+#define PI 3.14159265359
+#define TAU 6.28318530718
+
+vec3 mod289(vec3 x){ return x - floor(x*(1.0/289.0))*289.0; }
+vec4 mod289(vec4 x){ return x - floor(x*(1.0/289.0))*289.0; }
+vec4 permute(vec4 x){ return mod289(((x*34.0)+1.0)*x); }
+vec4 taylorInvSqrt(vec4 r){ return 1.79284291400159 - 0.85373472095314*r; }
+
+float snoise(vec3 v){
+  const vec2 C = vec2(1.0/6.0, 1.0/3.0);
+  const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+  vec3 i = floor(v + dot(v, C.yyy));
+  vec3 x0 = v - i + dot(i, C.xxx);
+  vec3 g = step(x0.yzx, x0.xyz);
+  vec3 l = 1.0 - g;
+  vec3 i1 = min(g.xyz, l.zxy);
+  vec3 i2 = max(g.xyz, l.zxy);
+  vec3 x1 = x0 - i1 + C.xxx;
+  vec3 x2 = x0 - i2 + C.yyy;
+  vec3 x3 = x0 - D.yyy;
+  i = mod289(i);
+  vec4 p = permute(permute(permute(
+    i.z + vec4(0.0, i1.z, i2.z, 1.0))
+    + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+    + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+  float n_ = 1.0/7.0;
+  vec3 ns = n_*D.wyz - D.xzx;
+  vec4 j = p - 49.0*floor(p*ns.z*ns.z);
+  vec4 x_ = floor(j*ns.z);
+  vec4 y_ = floor(j - 7.0*x_);
+  vec4 x = x_*ns.x + ns.yyyy;
+  vec4 y = y_*ns.x + ns.yyyy;
+  vec4 h = 1.0 - abs(x) - abs(y);
+  vec4 b0 = vec4(x.xy, y.xy);
+  vec4 b1 = vec4(x.zw, y.zw);
+  vec4 s0 = floor(b0)*2.0 + 1.0;
+  vec4 s1 = floor(b1)*2.0 + 1.0;
+  vec4 sh = -step(h, vec4(0.0));
+  vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
+  vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
+  vec3 p0 = vec3(a0.xy, h.x);
+  vec3 p1 = vec3(a0.zw, h.y);
+  vec3 p2 = vec3(a1.xy, h.z);
+  vec3 p3 = vec3(a1.zw, h.w);
+  vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+  p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+  vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+  m *= m;
+  return 42.0*dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+}
+
+mat3 rotY(float a){
+  float c = cos(a), s = sin(a);
+  return mat3(c,0.0,-s, 0.0,1.0,0.0, s,0.0,c);
+}
+mat3 rotX(float a){
+  float c = cos(a), s = sin(a);
+  return mat3(1.0,0.0,0.0, 0.0,c,-s, 0.0,s,c);
+}
+
+void main(){
+  float t = uTime*uSpeed;
+  vec3 seed = vec3(uSeed*0.31, uSeed*0.17, uSeed*0.23);
+  float n1 = snoise(aNormal*uDensity + seed + vec3(t*0.10, -t*0.14, t*0.12));
+  float n2 = snoise(aNormal*uDensity*2.07 - seed.yzx + vec3(-t*0.17, t*0.08, -t*0.11));
+  float wave = sin((aUv.y - 0.5)*uBands*TAU + t*0.86 + n1*0.9);
+  float distort = (n1*0.72 + n2*0.28)*uStrength + wave*uStrength*0.20;
+
+  vec3 p = aPosition + aNormal*distort;
+  vec3 n = normalize(aNormal + aNormal*(n1*0.12));
+
+  float twistAngle = sin(aUv.y*uBands*PI + t*0.72 + n2*0.35)*uTwist
+                   + (aUv.y - 0.5)*uTwist*1.22;
+  mat3 tw = rotY(twistAngle);
+  p = tw*p;
+  n = normalize(tw*n);
+
+  mat3 model = rotX(-0.16 + uPointer.y*0.20)
+             * rotY(t*0.075 + uPointer.x*0.28);
+  p = model*p;
+  n = normalize(model*n);
+
+  vec3 viewPos = p - vec3(0.0, 0.0, 3.65);
+  float f = 2.05;
+  float near = 0.1;
+  float far = 20.0;
+  gl_Position = vec4(
+    viewPos.x*f/uAspect,
+    viewPos.y*f,
+    ((far + near)/(near - far))*viewPos.z + (2.0*far*near)/(near - far),
+    -viewPos.z
+  );
+
+  vNormal = n;
+  vViewPos = viewPos;
+  vUv = aUv;
+  vDistort = distort;
+  vWave = wave;
+}`;
+
+const SPHERE_FRAG = `#version 300 es
+precision highp float;
+out vec4 O;
+
+uniform float uTime;
+uniform float uSpeed;
+uniform float uBands;
+uniform float uRim;
+uniform float uEnergy;
+uniform vec3 uA;
+uniform vec3 uB;
+uniform vec3 uC;
+
+in vec3 vNormal;
+in vec3 vViewPos;
+in vec2 vUv;
+in float vDistort;
+in float vWave;
+
+#define TAU 6.28318530718
+
+vec3 triPalette(float t){
+  t = fract(t);
+  if (t < 0.3333) return mix(uA, uB, smoothstep(0.0, 0.3333, t));
+  if (t < 0.6666) return mix(uB, uC, smoothstep(0.3333, 0.6666, t));
+  return mix(uC, uA, smoothstep(0.6666, 1.0, t));
+}
+
+void main(){
+  float t = uTime*uSpeed;
+  vec3 N = normalize(vNormal);
+  vec3 V = normalize(-vViewPos);
+  vec3 L = normalize(vec3(-0.36, 0.58, 0.92));
+  vec3 H = normalize(L + V);
+
+  float ndv = max(dot(N, V), 0.0);
+  float diff = max(dot(N, L), 0.0);
+  float fresnel = pow(1.0 - ndv, 2.55);
+  float spec = pow(max(dot(N, H), 0.0), 76.0);
+
+  float field = vDistort*5.6 + vUv.y*2.25 + t*0.075;
+  vec3 base = triPalette(field);
+  vec3 echo = triPalette(field + 0.31 + 0.08*sin(t*0.4));
+  base = mix(base, echo, 0.22 + 0.18*vWave);
+
+  float flow = 0.5 + 0.5*sin(vUv.y*uBands*TAU + vDistort*34.0 - t*1.35);
+  float ribbon = pow(smoothstep(0.42, 1.0, flow), 4.0);
+  float filament = pow(0.5 + 0.5*sin(vUv.x*TAU*7.0 + vUv.y*TAU*3.0 + t*0.42), 12.0);
+
+  vec3 col = base*(0.18 + diff*0.72);
+  col += base*ribbon*(0.38 + uEnergy*0.36);
+  col += mix(uB, uA, flow)*filament*ribbon*0.28*uEnergy;
+  col += mix(uC, uB, ndv)*fresnel*uRim*(0.65 + uEnergy*0.42);
+  col += vec3(1.0, 0.93, 1.08)*spec*(0.34 + uEnergy*0.38);
+
+  float inner = pow(max(dot(N, normalize(vec3(0.3,-0.1,0.95))), 0.0), 3.0);
+  col += uB*inner*0.10*uEnergy;
+  col *= 0.91 + 0.09*sin(vDistort*70.0 + t*0.5);
+
+  O = vec4(col, 1.0);
+}`;
+
+const DOWN_FRAG = `#version 300 es
+precision highp float;
+out vec4 O;
+uniform sampler2D uTex;
+uniform vec2 uTexel;
+uniform vec2 uDstSize;
+void main(){
+  vec2 uv = gl_FragCoord.xy/uDstSize;
+  vec2 h = uTexel;
+  vec4 s = texture(uTex, uv)*4.0;
+  s += texture(uTex, uv + vec2(-h.x,-h.y));
+  s += texture(uTex, uv + vec2( h.x,-h.y));
+  s += texture(uTex, uv + vec2(-h.x, h.y));
+  s += texture(uTex, uv + vec2( h.x, h.y));
+  O = s/8.0;
+}`;
+
+const UP_FRAG = `#version 300 es
+precision highp float;
+out vec4 O;
+uniform sampler2D uTex;
+uniform vec2 uTexel;
+uniform vec2 uDstSize;
+uniform float uFade;
+void main(){
+  vec2 uv = gl_FragCoord.xy/uDstSize;
+  vec2 h = uTexel;
+  vec4 s = texture(uTex, uv + vec2(-h.x*2.0,0.0));
+  s += texture(uTex, uv + vec2(-h.x, h.y))*2.0;
+  s += texture(uTex, uv + vec2(0.0, h.y*2.0));
+  s += texture(uTex, uv + vec2( h.x, h.y))*2.0;
+  s += texture(uTex, uv + vec2( h.x*2.0,0.0));
+  s += texture(uTex, uv + vec2( h.x,-h.y))*2.0;
+  s += texture(uTex, uv + vec2(0.0,-h.y*2.0));
+  s += texture(uTex, uv + vec2(-h.x,-h.y))*2.0;
+  O = s/12.0*uFade;
+}`;
+
+const COMP_FRAG = `#version 300 es
+precision highp float;
+out vec4 O;
+uniform sampler2D uScene;
+uniform sampler2D uBloomTex;
+uniform vec2 uOutSize;
+uniform float uBloomAmt;
+uniform float uT;
+uniform vec3 uA;
+uniform vec3 uB;
+
+float hash13(vec3 p){
+  p = fract(p*0.1031);
+  p += dot(p, p.zyx + 31.32);
+  return fract((p.x + p.y)*p.z);
+}
+void main(){
+  vec2 uv = gl_FragCoord.xy/uOutSize;
+  vec2 p = (2.0*gl_FragCoord.xy - uOutSize)/min(uOutSize.x, uOutSize.y);
+  vec3 scene = texture(uScene, uv).rgb;
+  vec3 bloom = texture(uBloomTex, uv).rgb;
+  vec3 c = scene + bloom*uBloomAmt;
+
+  float aura = exp(-dot(p,p)*3.7);
+  c += (uA*0.030 + uB*0.024)*aura;
+  c *= 1.0 - smoothstep(0.78, 1.34, length(p))*0.72;
+
+  c = (c*(2.51*c + 0.03))/(c*(2.43*c + 0.59) + 0.14);
+  c = clamp(c, 0.0, 1.0);
+  float l = dot(c, vec3(0.2126,0.7152,0.0722));
+  c = clamp(mix(vec3(l), c, 1.10), 0.0, 1.0);
+  c = pow(c, vec3(0.4545));
+  c += (hash13(vec3(gl_FragCoord.xy, fract(uT)*9.0)) - 0.5)/190.0;
+  O = vec4(c, 1.0);
+}`;
+
+const PALETTES = {
+  off:  { a: '#9c8cff', b: '#4ce2d2', c: '#483ac2', glow: 'rgba(116,98,255,.36)', speed: 0.58, energy: 0.78, text: 'ready to relay' },
+  busy: { a: '#ffcb67', b: '#ff778e', c: '#9b4bda', glow: 'rgba(255,126,100,.35)', speed: 1.52, energy: 1.24, text: 'thinking through route' },
+  on:   { a: '#71f1bd', b: '#3dd4ee', c: '#087e6a', glow: 'rgba(48,218,171,.35)', speed: 0.78, energy: 1.04, text: 'secure relay active' },
+  fail: { a: '#ff8495', b: '#b968e7', c: '#8b2849', glow: 'rgba(223,70,106,.31)', speed: 0.25, energy: 0.62, text: 'relay unavailable' },
+};
+
+const canvas = document.getElementById('c');
+const stage = document.getElementById('stage');
+const errBox = document.getElementById('err');
+const fpsBox = document.getElementById('fps');
+const signatureText = document.getElementById('signatureText');
+const gl = canvas.getContext('webgl2', { antialias: true, alpha: false, powerPreference: 'high-performance' });
+
+function fail(message){
+  errBox.style.display = 'block';
+  errBox.textContent = message;
+}
+
+if (!gl) {
+  fail('WebGL2 is not available in this view.\nOpen orb-test.html in Edge or Chrome.');
+} else {
+  boot();
+}
+
+function boot(){
+  const floatColor = gl.getExtension('EXT_color_buffer_float');
+  const floatLinear = gl.getExtension('OES_texture_float_linear');
+  const HDR = Boolean(floatColor && floatLinear);
+  const IFMT = HDR ? gl.RGBA16F : gl.RGBA8;
+  const TYPE = HDR ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
+  if (!HDR) fail('HDR buffers unavailable — preview is running with softer LDR bloom.');
+
+  function shader(type, src){
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      fail('shader compile:\n' + gl.getShaderInfoLog(s));
+      return null;
+    }
+    return s;
+  }
+  function program(vsrc, fsrc){
+    const vs = shader(gl.VERTEX_SHADER, vsrc);
+    const fs = shader(gl.FRAGMENT_SHADER, fsrc);
+    if (!vs || !fs) return null;
+    const p = gl.createProgram();
+    gl.attachShader(p, vs);
+    gl.attachShader(p, fs);
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+      fail('program link:\n' + gl.getProgramInfoLog(p));
+      return null;
+    }
+    return p;
+  }
+  const progSphere = program(SPHERE_VERT, SPHERE_FRAG);
+  const progDown = program(FULL_VERT, DOWN_FRAG);
+  const progUp = program(FULL_VERT, UP_FRAG);
+  const progComp = program(FULL_VERT, COMP_FRAG);
+  if (!progSphere || !progDown || !progUp || !progComp) return;
+
+  function loc(prog, names){
+    const out = {};
+    for (const name of names) out[name] = gl.getUniformLocation(prog, name);
+    return out;
+  }
+  const uSphere = loc(progSphere, ['uTime','uSpeed','uDensity','uStrength','uTwist','uBands','uSeed','uAspect','uPointer','uRim','uEnergy','uA','uB','uC']);
+  const uDown = loc(progDown, ['uTex','uTexel','uDstSize']);
+  const uUp = loc(progUp, ['uTex','uTexel','uDstSize','uFade']);
+  const uComp = loc(progComp, ['uScene','uBloomTex','uOutSize','uBloomAmt','uT','uA','uB']);
+
+  function makeSphere(latSegments, lonSegments){
+    const data = [];
+    const indices = [];
+    for (let y = 0; y <= latSegments; y++) {
+      const v = y/latSegments;
+      const phi = v*Math.PI;
+      const sp = Math.sin(phi);
+      const cp = Math.cos(phi);
+      for (let x = 0; x <= lonSegments; x++) {
+        const u = x/lonSegments;
+        const theta = u*Math.PI*2;
+        const px = sp*Math.cos(theta);
+        const py = cp;
+        const pz = sp*Math.sin(theta);
+        data.push(px, py, pz, px, py, pz, u, v);
+      }
+    }
+    const row = lonSegments + 1;
+    for (let y = 0; y < latSegments; y++) {
+      for (let x = 0; x < lonSegments; x++) {
+        const a = y*row + x;
+        const b = a + row;
+        /* Counter-clockwise from outside; back-face culling then keeps the
+           convex shell clean instead of drawing its far side through it. */
+        indices.push(a, a + 1, b, b, a + 1, b + 1);
+      }
+    }
+    return { vertices: new Float32Array(data), indices: new Uint32Array(indices) };
+  }
+
+  const sphere = makeSphere(112, 168);
+  const sphereVao = gl.createVertexArray();
+  gl.bindVertexArray(sphereVao);
+  const vbo = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+  gl.bufferData(gl.ARRAY_BUFFER, sphere.vertices, gl.STATIC_DRAW);
+  const ebo = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, sphere.indices, gl.STATIC_DRAW);
+  const stride = 8*4;
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, stride, 0);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribPointer(1, 3, gl.FLOAT, false, stride, 3*4);
+  gl.enableVertexAttribArray(2);
+  gl.vertexAttribPointer(2, 2, gl.FLOAT, false, stride, 6*4);
+  const quadVao = gl.createVertexArray();
+  gl.bindVertexArray(null);
+
+  function makeTarget(w, h, withDepth = false){
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, IFMT, w, h, 0, gl.RGBA, TYPE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    let depth = null;
+    if (withDepth) {
+      depth = gl.createRenderbuffer();
+      gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
+      gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, w, h);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depth);
+    }
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+      fail('framebuffer incomplete at ' + w + '×' + h);
+    }
+    return { tex, fbo, depth, w, h };
+  }
+  function freeTarget(target){
+    if (!target) return;
+    gl.deleteTexture(target.tex);
+    gl.deleteFramebuffer(target.fbo);
+    if (target.depth) gl.deleteRenderbuffer(target.depth);
+  }
+
+  let scene = null;
+  let mips = [];
+  function alloc(){
+    freeTarget(scene);
+    mips.forEach(freeTarget);
+    mips = [];
+    const w = Math.max(8, canvas.width);
+    const h = Math.max(8, canvas.height);
+    scene = makeTarget(w, h, true);
+    let mw = w >> 1;
+    let mh = h >> 1;
+    while (mips.length < 6 && mw >= 16 && mh >= 16) {
+      mips.push(makeTarget(mw, mh));
+      mw >>= 1;
+      mh >>= 1;
+    }
+  }
+  function resize(){
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    const box = canvas.getBoundingClientRect();
+    const w = Math.max(2, Math.round(box.width*dpr));
+    const h = Math.max(2, Math.round(box.height*dpr));
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      alloc();
+    }
+  }
+  addEventListener('resize', resize);
+
+  const P = { speed: 1, strength: 0.19, twist: 1.18, bands: 4.8, density: 2.55, rim: 1.2, bloom: 0.95, seed: 4.37 };
+  for (const input of document.querySelectorAll('input[type="range"]')) {
+    const key = input.dataset.p;
+    const out = input.parentElement.querySelector('b');
+    const show = () => { out.textContent = (+input.value).toFixed(key === 'bands' ? 1 : 2); };
+    input.addEventListener('input', () => { P[key] = +input.value; show(); });
+    show();
+  }
+  document.getElementById('reseed').addEventListener('click', () => { P.seed = Math.random()*40; });
+
+  function rgb(hex){
+    const n = parseInt(hex.slice(1), 16);
+    return [(n >> 16 & 255)/255, (n >> 8 & 255)/255, (n & 255)/255];
+  }
+  function cssState(name){
+    const state = PALETTES[name];
+    const root = document.documentElement;
+    root.dataset.state = name;
+    root.style.setProperty('--orb-a', state.a);
+    root.style.setProperty('--orb-b', state.b);
+    root.style.setProperty('--orb-c', state.c);
+    root.style.setProperty('--orb-glow', state.glow);
+    signatureText.textContent = state.text;
+    for (const button of document.querySelectorAll('.states [data-state]')) {
+      button.setAttribute('aria-pressed', String(button.dataset.state === name));
+    }
+  }
+
+  const initialName = new URLSearchParams(location.search).get('state');
+  let stateName = PALETTES[initialName] ? initialName : 'off';
+  let target = PALETTES[stateName];
+  let cur = {
+    a: rgb(target.a), b: rgb(target.b), c: rgb(target.c),
+    speed: target.speed, energy: target.energy,
+  };
+  cssState(stateName);
+  for (const button of document.querySelectorAll('.states [data-state]')) {
+    button.addEventListener('click', () => {
+      stateName = button.dataset.state;
+      target = PALETTES[stateName];
+      cssState(stateName);
+    });
+  }
+
+  const pointerTarget = [0, 0];
+  const pointer = [0, 0];
+  stage.addEventListener('pointermove', event => {
+    const rect = stage.getBoundingClientRect();
+    pointerTarget[0] = ((event.clientX - rect.left)/rect.width)*2 - 1;
+    pointerTarget[1] = (1 - (event.clientY - rect.top)/rect.height)*2 - 1;
+  });
+  stage.addEventListener('pointerleave', () => { pointerTarget[0] = 0; pointerTarget[1] = 0; });
+
+  let running = true;
+  let last = performance.now();
+  let elapsed = 0;
+  let frames = 0;
+  let fpsMark = last;
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  const queryTime = parseFloat(new URLSearchParams(location.search).get('t')) || 0;
+  addEventListener('keydown', event => { if (event.code === 'Space') running = !running; });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) last = performance.now(); });
+
+  function set3(location, value){ gl.uniform3f(location, value[0], value[1], value[2]); }
+
+  function frame(now){
+    requestAnimationFrame(frame);
+    if (document.hidden) return;
+    const dt = Math.min((now - last)/1000, 0.1);
+    last = now;
+    if (running && !reduceMotion.matches) elapsed += dt;
+    resize();
+    if (!scene) return;
+
+    const k = 1 - Math.exp(-dt*5.5);
+    const targetColors = [rgb(target.a), rgb(target.b), rgb(target.c)];
+    for (const [slot, wanted] of [['a',targetColors[0]], ['b',targetColors[1]], ['c',targetColors[2]]]) {
+      for (let i = 0; i < 3; i++) cur[slot][i] += (wanted[i] - cur[slot][i])*k;
+    }
+    cur.speed += (target.speed - cur.speed)*k;
+    cur.energy += (target.energy - cur.energy)*k;
+    pointer[0] += (pointerTarget[0] - pointer[0])*k;
+    pointer[1] += (pointerTarget[1] - pointer[1])*k;
+    const time = elapsed + queryTime;
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, scene.fbo);
+    gl.viewport(0, 0, scene.w, scene.h);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.CULL_FACE);
+    gl.cullFace(gl.BACK);
+    gl.useProgram(progSphere);
+    gl.bindVertexArray(sphereVao);
+    gl.uniform1f(uSphere.uTime, time);
+    gl.uniform1f(uSphere.uSpeed, P.speed*cur.speed);
+    gl.uniform1f(uSphere.uDensity, P.density);
+    gl.uniform1f(uSphere.uStrength, P.strength);
+    gl.uniform1f(uSphere.uTwist, P.twist);
+    gl.uniform1f(uSphere.uBands, P.bands);
+    gl.uniform1f(uSphere.uSeed, P.seed);
+    gl.uniform1f(uSphere.uAspect, scene.w/scene.h);
+    gl.uniform2f(uSphere.uPointer, pointer[0], pointer[1]);
+    gl.uniform1f(uSphere.uRim, P.rim);
+    gl.uniform1f(uSphere.uEnergy, cur.energy);
+    set3(uSphere.uA, cur.a);
+    set3(uSphere.uB, cur.b);
+    set3(uSphere.uC, cur.c);
+    gl.drawElements(gl.TRIANGLES, sphere.indices.length, gl.UNSIGNED_INT, 0);
+    gl.disable(gl.CULL_FACE);
+    gl.disable(gl.DEPTH_TEST);
+
+    gl.bindVertexArray(quadVao);
+    gl.useProgram(progDown);
+    gl.uniform1i(uDown.uTex, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    let src = scene;
+    for (const mip of mips) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, mip.fbo);
+      gl.viewport(0, 0, mip.w, mip.h);
+      gl.bindTexture(gl.TEXTURE_2D, src.tex);
+      gl.uniform2f(uDown.uTexel, 1/src.w, 1/src.h);
+      gl.uniform2f(uDown.uDstSize, mip.w, mip.h);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      src = mip;
+    }
+
+    gl.useProgram(progUp);
+    gl.uniform1i(uUp.uTex, 0);
+    gl.uniform1f(uUp.uFade, 0.66);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    for (let i = mips.length - 1; i >= 1; i--) {
+      const small = mips[i];
+      const dst = mips[i - 1];
+      gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo);
+      gl.viewport(0, 0, dst.w, dst.h);
+      gl.bindTexture(gl.TEXTURE_2D, small.tex);
+      gl.uniform2f(uUp.uTexel, 1/small.w, 1/small.h);
+      gl.uniform2f(uUp.uDstSize, dst.w, dst.h);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+    gl.disable(gl.BLEND);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.useProgram(progComp);
+    gl.uniform1i(uComp.uScene, 0);
+    gl.uniform1i(uComp.uBloomTex, 1);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, scene.tex);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, mips.length ? mips[0].tex : scene.tex);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.uniform2f(uComp.uOutSize, canvas.width, canvas.height);
+    gl.uniform1f(uComp.uBloomAmt, P.bloom);
+    gl.uniform1f(uComp.uT, time);
+    set3(uComp.uA, cur.a);
+    set3(uComp.uB, cur.b);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    frames++;
+    if (now - fpsMark > 600) {
+      fpsBox.textContent = Math.round(frames*1000/(now - fpsMark)) + ' fps · ' + stateName;
+      frames = 0;
+      fpsMark = now;
+    }
+  }
+
+  requestAnimationFrame(frame);
+}
+</script>
+</body>
+</html>

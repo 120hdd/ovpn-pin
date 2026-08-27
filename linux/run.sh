@@ -5,16 +5,20 @@
 # Everything here is a shortcut for a flag you could type yourself, and the
 # flags it builds are printed before each run - so this is a way of learning
 # the command line rather than a replacement for it. Arguments are passed
-# straight through, so `./run.sh --sweep --one-per` skips the menu entirely.
+# straight through, so `./linux/run.sh --sweep --one-per` skips the menu entirely.
 
 set -uo pipefail
-cd "$(dirname "$(readlink -f "$0")")" || exit 1
+# Two places, not one. The menu stands in the repo root, because pinned/,
+# success/ and configs/ are there and half of what follows names them without
+# a path. The two scripts it drives are in this folder, beside it.
+HERE=$(dirname "$(readlink -f "$0")")
+cd "$HERE/.." || exit 1
 
-PIN=./resolve-ovpn-remote.sh
-CON=./ovpn-connect.sh
+PIN=$HERE/resolve-ovpn-remote.sh
+CON=$HERE/ovpn-connect.sh
 
 for f in "$PIN" "$CON"; do
-    [ -f "$f" ] || { printf '\n  [fail] %s is missing - keep run.sh in the ovpn-pin folder.\n\n' "$f"; exit 1; }
+    [ -f "$f" ] || { printf '\n  [fail] %s is missing - keep run.sh in the linux folder of the repo.\n\n' "$f"; exit 1; }
 done
 
 if [ -t 1 ]; then
@@ -61,7 +65,7 @@ options() {
   Options
   -------
   Everything below works on menu item 8, and on the run.sh line itself - so
-      ./run.sh --sweep --one-per --landlord M247
+      ./linux/run.sh --sweep --one-per --landlord M247
   does that one job and nothing else.
 
   Pinning - resolve-ovpn-remote.sh

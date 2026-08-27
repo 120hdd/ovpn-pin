@@ -61,15 +61,21 @@ def find_servers():
     return None
 
 
-def make_shortcut(target, folder, name):
+def make_shortcut(target, folder, name, icon=None):
     """A .lnk via PowerShell, so there is nothing to install to make one."""
     link = os.path.join(folder, f'{name}.lnk')
-    script = (
+    commands = [
         "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('"
-        + link.replace("'", "''") + "');"
-        "$s.TargetPath = '" + target.replace("'", "''") + "';"
-        "$s.WorkingDirectory = '" + os.path.dirname(target).replace("'", "''") + "';"
-        "$s.Save()")
+        + link.replace("'", "''") + "');",
+        "$s.TargetPath = '" + target.replace("'", "''") + "';",
+        "$s.WorkingDirectory = '"
+        + os.path.dirname(target).replace("'", "''") + "';",
+    ]
+    if icon:
+        commands.append("$s.IconLocation = '"
+                        + icon.replace("'", "''") + ",0';")
+    commands.append("$s.Save()")
+    script = ''.join(commands)
     try:
         subprocess.run(['powershell', '-NoProfile', '-Command', script],
                        capture_output=True, check=True, timeout=30)
@@ -102,13 +108,15 @@ def main():
         # The page, its stylesheet, its script and the vendored search.
         '--add-data', f'{os.path.join(HERE, "ui")}{sep}ui',
         '--add-data', f'{os.path.join(HERE, "assets")}{sep}assets',
-        # The proxy is a sibling of app/ in the repo and a child of the bundle
+        # The proxy lives in core/ in the repo and at the top of the bundle
         # once frozen; paths.py knows the difference.
-        '--add-data', f'{os.path.join(ROOT, "ovpn-proxy.py")}{sep}.',
+        '--add-data', f'{os.path.join(ROOT, "core", "ovpn-proxy.py")}{sep}.',
         '--hidden-import', 'winproxy',
         '--hidden-import', 'engine',
         '--hidden-import', 'countries',
         '--hidden-import', 'paths',
+        '--hidden-import', 'sweep',
+        '--hidden-import', 'pin',
         # pystray is imported inside a function so a machine without it still
         # runs. PyInstaller only follows imports it can see statically, so
         # without these the tray silently does not exist in the built app -
@@ -127,6 +135,10 @@ def main():
 
     out = os.path.join(DIST, NAME)
     exe = os.path.join(out, f'{NAME}.exe')
+    shortcut_icon = None
+    if os.path.isfile(icon):
+        shortcut_icon = os.path.join(out, f'{NAME}.ico')
+        shutil.copy2(icon, shortcut_icon)
 
     # -- make it actually runnable ----------------------------------------
 
@@ -143,6 +155,60 @@ def main():
     else:
         print('servers: NONE FOUND - the app will have nothing to connect to')
 
+    # Somewhere obvious to put the files you download from the provider, and
+    # whatever is already in it. Made rather than explained: "Pin them to
+    # real addresses" reads this folder, and a first run whose answer is the
+    # name of a folder that does not exist is a step nobody can follow - one
+    # that exists and is empty is only half a step better, because the
+    # section then opens saying it has nothing to do.
+    inbox = os.path.join(out, 'configs')
+    os.makedirs(inbox, exist_ok=True)
+    source = os.path.join(ROOT, 'configs')
+    n = 0
+    try:
+        for f in os.listdir(source):
+            if f.endswith('.ovpn'):
+                shutil.copy2(os.path.join(source, f), os.path.join(inbox, f))
+                n += 1
+    except OSError:
+        pass
+    if n:
+        print(f'inbox: {n} unpinned config(s) copied into configs/')
+    else:
+        print('inbox: configs/ made, empty - drop .ovpn files in it to pin them')
+
+    # The two PowerShell files behind "Time the servers properly", and the
+    # second of them is also the whole of "Pin them to real addresses". They are
+    # copied rather than bundled: PyInstaller would put them inside _internal,
+    # and Sweep-OvpnExits.ps1 dot-sources its neighbour by looking beside
+    # itself and writes results into folders beside itself too - both of which
+    # have to be where the person can see them, not inside a bundle.
+    swept = 0
+    for name in ('Sweep-OvpnExits.ps1', 'Resolve-OvpnRemote.ps1'):
+        src = os.path.join(ROOT, 'windows', name)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(out, name))
+            swept += 1
+    if swept == 2:
+        print('sweep scripts: copied')
+    else:
+        print('sweep scripts: MISSING - the app can connect, but "Time the '
+              'servers properly" and "Pin them to real addresses" will both '
+              'say they have nothing to run')
+
+    # Who each address is rented from. Already paid for - one HTTP request per
+    # hundred addresses, with a deliberate wait between them - and without it
+    # the "one per company" groupings come out as zero and the chips are an
+    # empty row, which reads as broken rather than as unasked.
+    owners = os.path.join(ROOT, '.state', 'owners.tsv')
+    if os.path.isfile(owners):
+        state = os.path.join(out, '.state')
+        os.makedirs(state, exist_ok=True)
+        shutil.copy2(owners, os.path.join(state, 'owners.tsv'))
+        print('landlords: copied')
+    else:
+        print('landlords: none on record - the app can look them up itself')
+
     auth = os.path.join(ROOT, '.ovpn-auth')
     if os.path.isfile(auth):
         shutil.copy2(auth, os.path.join(out, '.ovpn-auth'))
@@ -158,7 +224,7 @@ def main():
     shutil.rmtree(WORK, ignore_errors=True)
 
     link = make_shortcut(exe, os.path.join(os.path.expanduser('~'), 'Desktop'),
-                         NAME)
+                         NAME, shortcut_icon)
 
     print()
     print('done.')

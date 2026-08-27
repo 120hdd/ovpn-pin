@@ -30,14 +30,20 @@
 set -uo pipefail
 
 VERSION=1.1.0
-ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# HERE is linux/, where ovpn-lib.sh and the other scripts are. ROOT is the
+# repo above it, where the reader's own things are - configs/, pinned/,
+# success/, .env, the credentials - beside the platform folders rather than
+# inside either one. Answering both questions with one name is how a script
+# ends up writing pinned configs into linux/ and saying nothing about it.
+HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+ROOT=$(cd -- "$HERE/.." && pwd)
 SELF=$(basename -- "${BASH_SOURCE[0]}")
 
 # Output helpers, the .env parser, the address checks and the reachability
 # probe live next door, because ovpn-connect.sh needs the same ones.
 # shellcheck source=ovpn-lib.sh
-. "$ROOT/ovpn-lib.sh" 2>/dev/null || {
-    printf '\n  [fail] ovpn-lib.sh is missing from %s\n\n' "$ROOT" >&2
+. "$HERE/ovpn-lib.sh" 2>/dev/null || {
+    printf '\n  [fail] ovpn-lib.sh is missing from %s\n\n' "$HERE" >&2
     exit 1
 }
 
@@ -544,7 +550,7 @@ show_cloudflare_check() {
     printf '\n'
     info 'This judges the exit you are on right now and nothing else. To compare'
     info 'them all in one go, without connecting to each by hand:'
-    info '     ./ovpn-connect.sh --sweep'
+    info '     ./linux/ovpn-connect.sh --sweep'
     printf '\n'
 }
 
@@ -871,7 +877,7 @@ for f in "${FILES[@]}"; do
                 [ "$PROXY_NOTE" -eq 0 ] && {
                     info 'the server is alive but your line will not dial it - the address'
                     info 'itself is blocked, not just its DNS. Connect it with'
-                    info '     ./ovpn-connect.sh --via-proxy'
+                    info '     ./linux/ovpn-connect.sh --via-proxy'
                     PROXY_NOTE=1
                 } ;;
             *)

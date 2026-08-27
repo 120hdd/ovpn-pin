@@ -38,6 +38,13 @@
     HTTP proxy for the DoH lookups, e.g. http://127.0.0.1:10808. Omitted, the
     script tries DoH directly and falls back to a local proxy it finds itself.
 
+.PARAMETER NoProxy
+    Resolve directly, and do not reach for a proxy even if one is running.
+    The default hunts for one the moment a direct lookup fails, which is the
+    right reflex at a terminal and the wrong answer to somebody who asked for
+    direct. This also gives up out loud rather than spending twenty seconds
+    per hostname finding out.
+
 .PARAMETER Resolver
     cloudflare (default) or google.
 
@@ -70,17 +77,18 @@
     exit that Cloudflare's own pages serve happily.
 
 .EXAMPLE
-    .\Resolve-OvpnRemote.ps1
-    .\Resolve-OvpnRemote.ps1 -Path .\configs -MaxIps 2
-    .\Resolve-OvpnRemote.ps1 -Proxy http://127.0.0.1:10808
-    .\Resolve-OvpnRemote.ps1 -CheckCloudflare
-    .\Resolve-OvpnRemote.ps1 -CheckCloudflare -Site chatgpt.com
+    .\windows\Resolve-OvpnRemote.ps1
+    .\windows\Resolve-OvpnRemote.ps1 -Path .\configs -MaxIps 2
+    .\windows\Resolve-OvpnRemote.ps1 -Proxy http://127.0.0.1:10808
+    .\windows\Resolve-OvpnRemote.ps1 -CheckCloudflare
+    .\windows\Resolve-OvpnRemote.ps1 -CheckCloudflare -Site chatgpt.com
 #>
 [CmdletBinding()]
 param(
     [string] $Path,
     [string] $OutDir,
     [string] $Proxy,
+    [switch] $NoProxy,
 
     [ValidateSet('cloudflare', 'google')]
     [string] $Resolver = 'cloudflare',
@@ -237,9 +245,27 @@ function Resolve-Doh {
 function Select-DohRoute {
     param([string] $Explicit)
 
+    if ($Explicit -and $NoProxy) {
+        throw '-Proxy and -NoProxy ask for opposite things. Pass one of them.'
+    }
+
     if ($Explicit) {
         Write-Info "using the proxy you named: $Explicit"
         return $Explicit
+    }
+
+    # Direct, and told so. Still probed once - not to decide anything, but so
+    # that a blocked line is one sentence here instead of a twenty second
+    # timeout per hostname and an empty folder at the end of it.
+    if ($NoProxy) {
+        try {
+            if (@(Resolve-Doh 'example.com' $null).Count -gt 0) {
+                Write-Ok 'DoH works directly - no proxy needed'
+                return $null
+            }
+        }
+        catch { }
+        throw 'DoH did not answer directly, and -NoProxy says not to look for a proxy. Nothing was resolved. Start your proxy and name it with -Proxy http://127.0.0.1:PORT.'
     }
 
     try {
@@ -360,7 +386,9 @@ function Write-Rows {
 }
 
 function Get-StateDir {
-    $d = Join-Path (Split-Path -Parent $PSCommandPath) '.state'
+    # This file is in the windows folder; .state belongs to the repo above
+    # it, shared with the Linux half rather than one per platform.
+    $d = Join-Path (Split-Path -Parent (Split-Path -Parent $PSCommandPath)) '.state'
     if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d | Out-Null }
     $d
 }
@@ -985,7 +1013,10 @@ try {
     Write-Host '  Resolve-OvpnRemote' -ForegroundColor White
     Write-Host '  pins the remote line of an OpenVPN config to a real IP, over DoH' -ForegroundColor DarkGray
 
-    $root = Split-Path -Parent $PSCommandPath
+    # The windows folder is where this file is. configs and pinned are a
+    # level up, beside it rather than inside it, because they are the same
+    # folders the Linux half reads and writes.
+    $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
     if (-not $Path)   { $Path   = Join-Path $root 'configs' }
     if (-not $OutDir) { $OutDir = Join-Path $root 'pinned' }
 
@@ -1162,7 +1193,7 @@ try {
     Write-Info 'addresses, and a pinned file cannot follow them.'
     Write-Host ''
     Write-Info 'Once connected, check whether that exit is one Cloudflare will serve:'
-    Write-Info "     .\$(Split-Path $PSCommandPath -Leaf) -CheckCloudflare"
+    Write-Info "     .\windows\$(Split-Path $PSCommandPath -Leaf) -CheckCloudflare"
     Write-Host ''
 }
 catch {

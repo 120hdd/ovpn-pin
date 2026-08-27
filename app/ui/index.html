@@ -18,45 +18,98 @@
 </head>
 <body>
 
+<!-- Lucide, ISC, vendored. One sprite rather than thirty files: pywebview
+     serves this over file://, where an external <use href="other.svg#id"> is
+     blocked outright and every extra request is another chance to be the one
+     that does not arrive. Licence beside this file. Stroke width, colour and
+     size are all CSS's - the symbols carry currentColor and nothing else. -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <symbol id="i-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 17H5" /> <path d="M19 7h-9" /> <circle cx="17" cy="17" r="3" /> <circle cx="7" cy="7" r="3" /></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z" /> <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" /></symbol>
+  <symbol id="i-route" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3" /> <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15" /> <circle cx="18" cy="5" r="3" /></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /></symbol>
+  <symbol id="i-gauge" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4" /> <path d="M3.34 19a10 10 0 1 1 17.32 0" /></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /> <path d="M12 16v-4" /> <path d="M12 8h.01" /></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" /> <circle cx="12" cy="12" r="3" /></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" /> <path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" /> <path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" /> <path d="m2 2 20 20" /></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34" /> <circle cx="11" cy="11" r="8" /></symbol>
+  <symbol id="i-tower" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9" /> <path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5" /> <circle cx="12" cy="9" r="2" /> <path d="M16.2 4.8c2 2 2.26 5.11.8 7.47" /> <path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1" /> <path d="M9.5 18h5" /> <path d="m8 22 4-11 4 11" /></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18" /> <path d="m6 6 12 12" /></symbol>
+  <symbol id="i-chev-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6" /></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /> <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /> <path d="M2 12h20" /></symbol>
+  <symbol id="i-building" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12h4" /> <path d="M10 8h4" /> <path d="M14 21v-3a2 2 0 0 0-4 0v3" /> <path d="M6 10H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-2" /> <path d="M6 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16" /></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5" /> <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" /></symbol>
+  <symbol id="i-socket" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 8v1" /> <path d="M14 8v1" /> <path d="M18 8v1" /> <path d="M6 8v1" /> <path d="M19 17a2 2 0 0 0-1.765 1.059l-.47.882A2 2 0 0 1 15 20H9a2 2 0 0 1-1.765-1.059l-.47-.882A2 2 0 0 0 5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2z" /></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" /> <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" /> <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" /></symbol>
+</svg>
+
 <main class="app">
 
   <header class="bar">
-    <span class="bar__mark">RELAY</span>
-    <button class="icon" id="settings" type="button" aria-label="Settings">
-      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-        <circle cx="8" cy="8" r="2.4" fill="none" stroke="currentColor" stroke-width="1.4"/>
-        <path d="M8 1.4v1.7M8 12.9v1.7M14.6 8h-1.7M3.1 8H1.4M12.7 3.3l-1.2 1.2M4.5 11.5l-1.2 1.2M12.7 12.7l-1.2-1.2M4.5 4.5 3.3 3.3"
-              stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-      </svg>
-    </button>
+    <span class="bar__mark">
+      <span class="bar__logo" aria-hidden="true">
+        <svg viewBox="0 0 22 22" width="18" height="18">
+          <path d="M6.4 17.2V4.8h4.7c3 0 4.8 1.5 4.8 3.8s-1.8 3.8-4.8 3.8H6.4m4.5 0 5.2 5"
+                fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="16.1" cy="17.4" r="1.55" fill="#4ae5c3"/>
+        </svg>
+      </span>
+      <span class="bar__name">RELAY</span>
+    </span>
+    <span class="bar__tools">
+      <span class="privacy"><i></i>PRIVATE</span>
+      <!-- Two sliders, not a cog. The hand-drawn one here was a circle with
+           rays coming off it, which at 15px is a sun - and a sun in the
+           corner of an app reads as a theme switch, which this is not. -->
+      <button class="icon" id="settings" type="button" aria-label="Settings">
+        <svg class="ico" aria-hidden="true"><use href="#i-settings"/></svg>
+      </button>
+    </span>
   </header>
 
   <!-- The two addresses, side by side. The whole product is the difference
        between them, so showing one without the other asks the user to
        remember what their own IP was. -->
-  <section class="swap" id="swap" data-state="off">
+  <section class="hero" id="hero" data-state="off" aria-label="Route overview">
+    <div class="blob-stage" aria-hidden="true">
+      <span class="blob__glow"></span>
+      <span class="blob__orbit blob__orbit--outer"><i></i></span>
+      <span class="blob__orbit blob__orbit--inner"><i></i></span>
+      <span class="blob__halo"></span>
+      <span class="blob__float">
+        <!-- WebGL2 core; app.js swaps this back to the DOM bead sphere when
+             the GPU is blocked (RDP, SwiftShader denylist). -->
+        <canvas class="blob__body" id="orbCanvas"></canvas>
+      </span>
+    </div>
+    <p class="route-label"><i></i><span id="routeLabel">READY TO RELAY</span></p>
+
+    <div class="swap" id="swap" data-state="off">
     <div class="side">
-      <p class="side__cap">Your address</p>
+      <p class="side__cap"><i></i>Your address</p>
       <p class="side__ip mono" id="realIp" title="Click to copy">…</p>
       <p class="side__place" id="realPlace">checking…</p>
     </div>
 
     <div class="arrow" aria-hidden="true">
-      <svg viewBox="0 0 24 12" width="24" height="12">
-        <path id="arrowPath" d="M1 6h20M17 2l4 4-4 4" fill="none"
+      <svg viewBox="0 0 30 14" width="30" height="14">
+        <path id="arrowPath" d="M1 7h26M22.5 2.5 27 7l-4.5 4.5" fill="none"
               stroke="currentColor" stroke-width="1.5"
               stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </div>
 
     <div class="side side--exit">
-      <p class="side__cap">Seen as</p>
+      <p class="side__cap">Seen as<i></i></p>
       <p class="side__ip mono" id="exitIp" title="Click to copy">—</p>
       <p class="side__place" id="exitPlace">not connected</p>
     </div>
+    </div>
   </section>
 
-  <section class="card" id="card">
+  <section class="card" id="card" data-state="off">
     <button class="icon card__more" id="more" type="button" hidden
             aria-label="Connection details" aria-expanded="false">
       <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
@@ -65,9 +118,15 @@
       </svg>
     </button>
 
-    <p class="status" id="status" role="status" data-state="off">DISCONNECTED</p>
-    <p class="status__where" id="statusWhere">&nbsp;</p>
-    <p class="status__host mono" id="statusHost">&nbsp;</p>
+    <p class="card__eyebrow">CONNECTION STATUS</p>
+    <div class="status-line">
+      <i class="status-dot" aria-hidden="true"></i>
+      <p class="status" id="status" role="status" data-state="off">DISCONNECTED</p>
+    </div>
+    <div class="status-meta">
+      <p class="status__where" id="statusWhere">&nbsp;</p>
+      <p class="status__host mono" id="statusHost">&nbsp;</p>
+    </div>
 
     <div class="details" id="details" hidden>
       <dl class="details__grid">
@@ -79,19 +138,33 @@
 
     <div class="stack">
       <button class="btn btn--quiet" id="pick" type="button">
-        <span class="pick__flag" id="pickFlag" aria-hidden="true"></span>
-        <span class="btn__label" id="pickLabel">Fastest available</span>
+        <span class="pick__flag" id="pickFlag" aria-hidden="true">
+          <svg viewBox="0 0 20 20" width="16" height="16">
+            <path d="M10 2.2a7.8 7.8 0 1 0 0 15.6 7.8 7.8 0 0 0 0-15.6Zm0 0c2 2.2 3 4.8 3 7.8s-1 5.6-3 7.8m0-15.6C8 4.4 7 7 7 10s1 5.6 3 7.8M2.5 10h15"
+                  fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <span class="pick__copy">
+          <span class="pick__cap">EXIT LOCATION</span>
+          <span class="btn__label" id="pickLabel">Fastest available</span>
+        </span>
         <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" class="btn__chev">
           <path d="M4.5 2.5 L8 6 L4.5 9.5" fill="none" stroke="currentColor"
                 stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
 
-      <button class="btn btn--go" id="act" type="button" data-mode="off">
-        <span class="btn__track">
-          <span class="btn__word" data-for="off">Connect</span>
-          <span class="btn__word" data-for="busy">Cancel</span>
-          <span class="btn__word" data-for="on">Disconnect</span>
+      <!-- Two blurred lights behind a dark face. They sit tucked into the top
+           right at rest and swing apart when the pointer is over it - and
+           connected, they stay apart, because the state the button describes
+           is the state it should look like. -->
+      <button class="go" id="act" type="button" data-mode="off">
+        <i class="go__near" aria-hidden="true"></i>
+        <i class="go__far" aria-hidden="true"></i>
+        <span class="go__track">
+          <span class="go__word" data-for="off">Connect</span>
+          <span class="go__word" data-for="busy">Cancel</span>
+          <span class="go__word" data-for="on">Disconnect</span>
         </span>
       </button>
     </div>
@@ -104,8 +177,10 @@
 
 <dialog class="sheet" id="picker">
   <header class="sheet__top">
-    <input class="sheet__search" id="search" type="text" placeholder="Search countries"
-           autocomplete="off" spellcheck="false" aria-label="Search countries">
+    <span class="sheet__heading">
+      <span class="sheet__kicker">RELAY NETWORK</span>
+      <span class="sheet__title">Choose an exit</span>
+    </span>
     <button class="icon" id="pickerClose" type="button" aria-label="Close">
       <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
         <path d="M3 3 L11 11 M11 3 L3 11" fill="none" stroke="currentColor"
@@ -113,56 +188,371 @@
       </svg>
     </button>
   </header>
+  <!-- A stack of blurred conic gradients behind one dark field. Each layer is
+       a different radius and blur, and each turns by a different amount, so
+       hovering and focusing rake a light around the border at slightly
+       different speeds rather than all sliding together. -->
+  <div class="rig" id="poda">
+    <div class="rig__glow"></div>
+    <div class="rig__dark"></div>
+    <div class="rig__pale"></div>
+    <div class="rig__edge"></div>
+    <div class="rig__main" id="searchMain">
+      <input class="rig__in" id="search" type="text" placeholder="Search countries"
+             autocomplete="off" spellcheck="false" aria-label="Search countries">
+      <span class="rig__fade" id="inputMask"></span>
+      <span class="rig__spark" id="inputSpark"></span>
+      <span class="rig__lens" aria-hidden="true">
+        <svg class="ico" aria-hidden="true"><use href="#i-search"/></svg>
+      </span>
+      <span class="rig__keyring"></span>
+      <span class="rig__key" aria-hidden="true">/</span>
+    </div>
+  </div>
   <div class="sheet__list" id="list"></div>
 </dialog>
 
-<dialog class="sheet" id="prefs">
+<dialog class="sheet sheet--prefs" id="prefs">
   <header class="sheet__top">
-    <h2 class="sheet__title">Settings</h2>
+    <span class="sheet__heading">
+      <span class="sheet__kicker">THIS COPY</span>
+      <span class="sheet__title">Settings</span>
+    </span>
     <button class="icon" id="prefsClose" type="button" aria-label="Close">
-      <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
-        <path d="M3 3 L11 11 M11 3 L3 11" fill="none" stroke="currentColor"
-              stroke-width="1.5" stroke-linecap="round"/>
-      </svg>
+      <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
     </button>
   </header>
 
-  <div class="sheet__body">
-    <div class="pref">
-      <div class="pref__text">
-        <p class="pref__name">Route all of Windows</p>
-        <p class="pref__why">Sets the Windows proxy so every program uses the
-          connection. Turn this off to route only what you point at
-          <span class="mono">127.0.0.1:8899</span> yourself.</p>
+  <!-- Five panes, deliberately not five of the same thing. The gate is a
+       card, routing is a single line, the folder is a strip, measuring is the
+       heavy one, and the paths at the bottom are a footnote. Sameness is what
+       made the old sheet read as a form to fill in rather than as somewhere
+       to make four unrelated decisions. -->
+  <div class="sheet__body" id="prefsBody">
+
+    <!-- 1 · the gate -->
+    <section class="pane pane--gate" id="prefAuth" style="--i:0">
+      <div class="pane__head">
+        <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-key"/></svg></span>
+        <h3 class="pane__title">Sign-in</h3>
+        <span class="pill" id="authPill" data-state="off">not set</span>
       </div>
+      <p class="pane__why">The Surfshark <b>service</b> username and password —
+        not the email you log in with. Both are on the manual-setup page,
+        beside the config files.</p>
+
+      <div class="pane__body">
+        <label class="field">
+          <span class="field__cap">Username</span>
+          <input class="field__in mono" id="authUser" type="text" placeholder="not set"
+                 autocomplete="off" autocapitalize="off" spellcheck="false">
+        </label>
+        <label class="field">
+          <span class="field__cap">Password</span>
+          <span class="field__pair">
+            <input class="field__in mono" id="authPass" type="password" placeholder="not set"
+                   autocomplete="off" spellcheck="false">
+            <button class="field__peek" id="authPeek" type="button"
+                    aria-pressed="false" aria-label="Show the password">
+              <svg class="ico" aria-hidden="true"><use href="#i-eye" id="authPeekIcon"/></svg>
+            </button>
+          </span>
+        </label>
+        <div class="pane__row">
+          <button class="btn btn--quiet btn--auto" id="authSave" type="button">Save</button>
+          <p class="note" id="authSaid"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2 · one line, no card. A switch is not a form. -->
+    <section class="pane pane--line" style="--i:1">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-route"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title">Route all of Windows</h3>
+        <p class="pane__why">Sets the Windows proxy so every program uses the
+          connection. Off, it serves on <span class="mono" id="routeAddr">127.0.0.1:8877</span>
+          and leaves the machine alone.</p>
+      </span>
       <button class="toggle" id="sysProxy" type="button"
               role="switch" aria-checked="true"><span></span></button>
-    </div>
+    </section>
 
-    <div class="pref pref--stack">
-      <div class="pref__text">
-        <p class="pref__name">Server folder</p>
-        <p class="pref__why">Where the <span class="mono">.ovpn</span> files
-          are read from.</p>
+    <!-- 3 · the number the rest of it hangs off, sitting under the switch
+         that decides who uses it. Editable in place rather than buried in an
+         advanced pane: on a machine that already runs a proxy, 8877 is taken,
+         and until this moves the app cannot connect at all.
+
+         The second paragraph is here rather than in a help page because it
+         is the difference between Telegram working and Telegram limping, and
+         nobody goes looking for a help page about a port number. -->
+    <section class="pane pane--line pane--stacked" id="prefPort" style="--i:2">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-socket"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title">The port it listens on</h3>
+        <p class="pane__why">The proxy serves here whether Windows is routed
+          or not. Move it if something else on this machine already holds
+          <span class="mono">8877</span>.</p>
+        <label class="port">
+          <span class="port__cap mono">127.0.0.1</span>
+          <input class="field__in mono" id="listenPort" type="text"
+                 inputmode="numeric" maxlength="5" placeholder="8877"
+                 autocomplete="off" spellcheck="false"
+                 aria-label="The port the proxy listens on">
+        </label>
+        <p class="note" id="portSaid"></p>
+
+        <p class="pane__why pane__why--after">This one port answers both
+          <span class="mono">HTTP</span> and <span class="mono">SOCKS5</span>
+          — whichever a program asks for, no second port and nothing to set
+          up. Browsers can use either.
+          <strong>In Telegram, choose SOCKS5.</strong> On HTTP it stops
+          tunnelling and sends a separate request per message, in the clear on
+          port 80; on SOCKS5 it keeps one connection and is measurably
+          quicker. No username or password — it only listens on this machine.</p>
+      </span>
+    </section>
+
+    <!-- 4 · a path and two verbs -->
+    <section class="pane pane--strip" style="--i:3">
+      <div class="pane__head">
+        <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg></span>
+        <h3 class="pane__title">Server folder</h3>
+        <span class="pill pill--quiet" id="folderCount"></span>
       </div>
-      <p class="pref__path mono" id="folderPath">—</p>
-      <div class="pref__row">
+      <p class="path mono" id="folderPath">—</p>
+      <div class="pane__row">
         <button class="btn btn--quiet btn--auto" id="chooseFolder" type="button">Choose folder…</button>
         <button class="btn btn--quiet btn--auto" id="resetFolder" type="button">Use default</button>
       </div>
-      <p class="pref__count" id="folderCount"></p>
-    </div>
+    </section>
 
-    <div class="pref pref--stack">
-      <div class="pref__text">
-        <p class="pref__name">This copy</p>
+    <!-- 5 · a folder in, a folder out, and the one decision in between.
+         Shaped as the route it describes rather than as another form: three
+         nodes on a line, which is what the operation is. -->
+    <section class="pane pane--pipe" id="prefPin" style="--i:4">
+      <div class="pane__head">
+        <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-pin"/></svg></span>
+        <h3 class="pane__title">Pin them to real addresses</h3>
+        <span class="pill pill--quiet" id="pinCount"></span>
       </div>
-      <p class="pref__path mono" id="aboutPaths">—</p>
-    </div>
+      <p class="pane__why">A config you download points at a <b>hostname</b>,
+        and on a censored line that is the weak link: the resolver answers
+        with an address on your own network, OpenVPN dials it, and nothing
+        ever leaves the building. This asks over DoH instead, throws away the
+        forged answers and writes the address into the file. A hostname with
+        four addresses gives you four files.</p>
+
+      <ol class="flow">
+        <li class="flow__step">
+          <span class="flow__cap">From</span>
+          <div class="pane__source">
+            <p class="path path--flush mono" id="pinFolder">—</p>
+            <button class="btn btn--quiet btn--auto" id="pinPick" type="button">Change…</button>
+          </div>
+        </li>
+
+        <li class="flow__step" id="pinRouteStep">
+          <span class="flow__cap">Over</span>
+          <div class="flow__body">
+            <!-- Two answers, and the app always gives one of them. Left to
+                 itself the resolver tries direct and then goes hunting for a
+                 proxy, which is a third answer to a question asked as two. -->
+            <div class="seg" id="pinRoute" data-route="proxy">
+              <i class="seg__slide" aria-hidden="true"></i>
+              <button class="seg__opt" type="button" data-route="proxy"
+                      aria-pressed="true">Through a proxy</button>
+              <button class="seg__opt" type="button" data-route="direct"
+                      aria-pressed="false">Straight out</button>
+            </div>
+            <label class="port" id="pinPortWrap">
+              <span class="port__cap mono">127.0.0.1</span>
+              <input class="field__in mono" id="pinPort" type="text"
+                     inputmode="numeric" maxlength="5" placeholder="10808"
+                     autocomplete="off" spellcheck="false" aria-label="Proxy port">
+            </label>
+            <p class="note" id="pinRouteSaid"></p>
+          </div>
+        </li>
+
+        <li class="flow__step">
+          <span class="flow__cap">Into</span>
+          <div class="pane__source">
+            <p class="path path--flush mono" id="pinOut">—</p>
+            <button class="btn btn--quiet btn--auto" id="pinOutPick" type="button">Change…</button>
+          </div>
+        </li>
+      </ol>
+
+      <div class="pane__go">
+        <div class="btn-shell">
+          <button class="spark spark--pin" id="pinGo" type="button" data-mode="idle">
+            <span class="spark__track">
+              <span class="spark__word" data-for="idle"
+                    ><b>P</b><b>i</b><b>n</b></span>
+              <span class="spark__word" data-for="running"
+                    ><b>P</b><b>i</b><b>n</b><b>n</b><b>i</b><b>n</b><b>g</b></span>
+              <span class="spark__word" data-for="stop"
+                    ><b>S</b><b>t</b><b>o</b><b>p</b></span>
+            </span>
+          </button>
+        </div>
+        <span class="cap-field">
+          <span class="cap-field__cap">addresses each</span>
+          <span class="stepper">
+            <input class="field__in mono" id="pinMax" type="number"
+                   min="1" max="32" step="1" inputmode="numeric"
+                   aria-label="How many addresses to keep per config">
+            <span class="stepper__keys">
+              <button class="stepper__key" id="pinMaxUp" type="button"
+                      aria-label="One more">
+                <svg class="ico" aria-hidden="true"><use href="#i-chev-down"/></svg>
+              </button>
+              <button class="stepper__key" id="pinMaxDown" type="button"
+                      aria-label="One fewer">
+                <svg class="ico" aria-hidden="true"><use href="#i-chev-down"/></svg>
+              </button>
+            </span>
+          </span>
+        </span>
+      </div>
+
+      <!-- A footnote to the button rather than a section of its own: it
+           changes what the run costs, not what it produces. -->
+      <div class="pane__aside">
+        <p class="pane__why pane__why--tight">Knock on each address once it is
+          written, so a dead one is marked here rather than found later. UDP
+          cannot be knocked on and says so.</p>
+        <button class="toggle toggle--sm" id="pinTest" type="button"
+                role="switch" aria-checked="true"><span></span></button>
+      </div>
+
+      <p class="note" id="pinSaid"></p>
+      <div class="meter" id="pinMeter" hidden><i id="pinBar"></i></div>
+      <ol class="tally" id="pinTally" hidden></ol>
+      <ul class="chips" id="pinUse" hidden></ul>
+    </section>
+
+    <!-- 6 · the heavy one -->
+    <section class="pane pane--major" id="prefSweep" style="--i:5">
+      <div class="pane__head">
+        <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg></span>
+        <h3 class="pane__title">Time the servers properly</h3>
+      </div>
+      <p class="pane__why">Connects to each one for real, writes how long its
+        handshake took on the front of its name, and drops it again. That is the
+        number the list is ordered by, and the only way to know it. Your
+        connection goes down and up once per server, so reckon in minutes.</p>
+      <!-- The folder and the way to change it, together. It says which
+           servers are about to be measured, so the verb that changes it
+           belongs beside it and not down beside Start, which is about the
+           run rather than about the subject of it. -->
+      <div class="pane__source">
+        <p class="path path--flush mono" id="sweepFolder">—</p>
+        <button class="btn btn--quiet btn--auto" id="sweepPick" type="button">Another folder…</button>
+      </div>
+
+      <!-- The counts are the decision, so they sit on the choices rather than
+           in a sentence underneath them. -->
+      <p class="lede"><svg class="ico ico--sm" aria-hidden="true"><use href="#i-layers"/></svg>How many of them</p>
+      <ul class="scope" id="sweepScope">
+        <li><button class="scope__row" type="button" data-scope="all" aria-pressed="true">
+          <span class="scope__name">Every address</span>
+          <span class="scope__why">the whole folder</span>
+          <span class="scope__count">—</span></button></li>
+        <li><button class="scope__row" type="button" data-scope="location" aria-pressed="false">
+          <span class="scope__name">One per location</span>
+          <span class="scope__why">a hostname resolves to several, and you got a file for each</span>
+          <span class="scope__count">—</span></button></li>
+        <li><button class="scope__row" type="button" data-scope="company-location" aria-pressed="false">
+          <span class="scope__name">One per company, per location</span>
+          <span class="scope__why">HostRoyale in Paris says nothing about HostRoyale in Lisbon</span>
+          <span class="scope__count">—</span></button></li>
+        <li><button class="scope__row" type="button" data-scope="company" aria-pressed="false">
+          <span class="scope__name">One per company</span>
+          <span class="scope__why">the quickest answer to whose addresses still work</span>
+          <span class="scope__count">—</span></button></li>
+      </ul>
+
+      <p class="lede"><svg class="ico ico--sm" aria-hidden="true"><use href="#i-building"/></svg>Who they are rented from</p>
+      <p class="pane__why pane__why--tight">Being blocked is mostly a property
+        of the company rather than of the address — a site that refuses the
+        first M247 address usually refuses the rest. Pick none and all of them
+        are swept.</p>
+      <ul class="chips" id="sweepLords"></ul>
+      <p class="note" id="lordsSaid"></p>
+      <div class="pane__row" id="lookUpRow" hidden>
+        <button class="btn btn--quiet btn--auto" id="lookUpOwners" type="button">
+          <svg class="ico ico--sm" aria-hidden="true"><use href="#i-tower"/></svg>Look the rest up</button>
+      </div>
+
+      <p class="lede"><svg class="ico ico--sm" aria-hidden="true"><use href="#i-globe"/></svg>Sites to check from each exit</p>
+      <label class="field">
+        <input class="field__in mono" id="sweepSites" type="text"
+               placeholder="chatgpt.com, youtube.com"
+               autocomplete="off" autocapitalize="off" spellcheck="false">
+      </label>
+      <p class="pane__why pane__why--tight">Cloudflare's rules are set per
+        customer, so <i>clean</i> is a statement about Cloudflare and not about
+        the web — an exit that serves it happily can still hand you a challenge
+        page on the one site you opened this for. Each name here gets a folder
+        of the servers that really served it.</p>
+      <ul class="chips" id="siteFolders" hidden></ul>
+
+      <div class="pane__go">
+        <div class="btn-shell">
+          <button class="spark" id="sweepGo" type="button" data-mode="idle">
+            <span class="spark__track">
+              <span class="spark__word" data-for="idle"
+                    ><b>S</b><b>t</b><b>a</b><b>r</b><b>t</b></span>
+              <span class="spark__word" data-for="running"
+                    ><b>T</b><b>e</b><b>s</b><b>t</b><b>i</b><b>n</b><b>g</b></span>
+              <!-- Running, this is also the way to stop, and a button that
+                   only ever says what it is doing never says that. Reaching
+                   for it is the moment to tell you. -->
+              <span class="spark__word" data-for="stop"
+                    ><b>S</b><b>t</b><b>o</b><b>p</b></span>
+            </span>
+          </button>
+        </div>
+        <!-- The browser's own number spinner is two grey nubs the size of a
+             thumbnail, drawn to its own taste and none of this page's. It is
+             turned off in the stylesheet and these two take its place. -->
+        <span class="cap-field">
+          <span class="cap-field__cap">stop after</span>
+          <span class="stepper">
+            <input class="field__in mono" id="sweepFirst" type="number"
+                   min="0" step="1" placeholder="all" inputmode="numeric"
+                   aria-label="Stop after this many servers">
+            <span class="stepper__keys">
+              <button class="stepper__key" id="sweepFirstUp" type="button"
+                      aria-label="One more">
+                <svg class="ico" aria-hidden="true"><use href="#i-chev-down"/></svg>
+              </button>
+              <button class="stepper__key" id="sweepFirstDown" type="button"
+                      aria-label="One fewer">
+                <svg class="ico" aria-hidden="true"><use href="#i-chev-down"/></svg>
+              </button>
+            </span>
+          </span>
+        </span>
+      </div>
+
+      <p class="note" id="sweepSaid"></p>
+      <div class="meter" id="sweepMeter" hidden><i id="sweepBar"></i></div>
+      <ol class="tally" id="sweepTally" hidden></ol>
+    </section>
+
+    <!-- 7 · a footnote, and shaped like one -->
+    <section class="pane pane--foot" style="--i:6">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-info"/></svg></span>
+      <p class="path path--bare mono" id="aboutPaths">—</p>
+    </section>
   </div>
 </dialog>
 
 <script src="fuse.js"></script>
+<script src="sphere.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

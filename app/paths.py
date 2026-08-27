@@ -34,7 +34,7 @@ else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
     RES_DIR = APP_DIR
     DATA_DIR = os.path.dirname(APP_DIR)
-    PROXY_PY = os.path.join(DATA_DIR, 'ovpn-proxy.py')
+    PROXY_PY = os.path.join(DATA_DIR, 'core', 'ovpn-proxy.py')
 
 UI_DIR = os.path.join(RES_DIR, 'ui')
 ICON = os.path.join(RES_DIR, 'assets', 'app.ico')
@@ -42,6 +42,13 @@ ICON_PNG = os.path.join(RES_DIR, 'assets', 'app.png')
 STATE_DIR = os.path.join(DATA_DIR, '.state')
 AUTH_FILE = os.path.join(DATA_DIR, '.ovpn-auth')
 SAVED_PROXY = os.path.join(STATE_DIR, 'system-proxy-before.json')
+
+# The PowerShell half. In the repo it is in windows/, with the rest of the
+# Windows side. The build copies both scripts out of there and puts them
+# beside the exe rather than inside _internal - Sweep-OvpnExits.ps1 looks for
+# its library next to itself and writes its results next to itself too - so
+# once frozen they are simply in DATA_DIR.
+SCRIPTS_DIR = DATA_DIR if FROZEN else os.path.join(DATA_DIR, 'windows')
 
 # servers/ first, because that is what a shipped copy is meant to carry. The
 # other two are what the repo calls them, so a developer running from source
@@ -75,7 +82,7 @@ def point_proxy_module_at_data(px):
     _internal, which is read-only in spirit and unwritable under Program
     Files, and holds none of the user's things.
 
-    Its HERE is what its argument defaults are built from, so moving that
+    Its ROOT is what its argument defaults are built from, so moving that
     fixes the credentials file and the servers folder together. The state and
     log paths were already computed when the module was imported, so those
     are set again by hand.
@@ -85,7 +92,7 @@ def point_proxy_module_at_data(px):
     proxy it had just started, and would report that nothing came up.
     """
     os.makedirs(STATE_DIR, exist_ok=True)
-    px.HERE = DATA_DIR
+    px.ROOT = DATA_DIR
     px.AUTH_DEFAULT = AUTH_FILE
     px.STATE_PATH = os.path.join(STATE_DIR, 'proxy.state')
     px.LOG_PATH = os.path.join(STATE_DIR, 'proxy.log')

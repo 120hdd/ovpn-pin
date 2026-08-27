@@ -50,6 +50,66 @@ px = load_proxy_module()
 # long that exit took to answer: "01.8s-no-osl.prod.surfshark.com_tcp_1.2.3.4"
 CONFIG = re.compile(r'^(?:(\d+\.\d+)s-)?([a-z]{2})-([a-z]{3})\.prod\.', re.I)
 
+# The port the proxy sits on. 8877 rather than 8899, which is what the command
+# line half of this repo uses for a second proxy beside somebody's own: the two
+# are meant to be able to run at the same time, and sharing a number meant that
+# starting the app while a terminal proxy was up failed with "address already
+# in use" and no obvious cause.
+DEFAULT_PORT = 8877
+
+
+def clean_port(value):
+    """A port or a sentence saying why not.
+
+    Refused out loud rather than snapped quietly back to 8877: this number is
+    typed by a person who has a reason for it - something else already holds
+    the default - and a field that accepts 88999 and silently keeps 8877 is a
+    field that lies about where the app is listening.
+    """
+    text = str(value if value is not None else '').strip()
+    if not text:
+        # An empty field means "whatever it was meant to be", not "port
+        # nothing" - which is what makes clearing it the way back to 8877.
+        return DEFAULT_PORT
+    try:
+        port = int(text)
+    except ValueError:
+        raise RuntimeError('That is not a port. Type a number '
+                           'between 1024 and 65535.')
+    if port > 65535:
+        raise RuntimeError('Ports stop at 65535.')
+    if port < 1:
+        raise RuntimeError('That is not a port. Type a number '
+                           'between 1024 and 65535.')
+    if port < 1024:
+        # Not forbidden by Windows, but every one of them belongs to something
+        # that expects to be found there, and a browser pointed at a proxy on
+        # 80 is a confusion nobody debugs on the first day.
+        raise RuntimeError('Anything below 1024 already belongs to something '
+                           'else. Pick a port from 1024 up.')
+    return port
+
+
+def port_holder(port, host='127.0.0.1'):
+    """Whether anything already has that port, and our own record of it if
+    the thing holding it is one of ours.
+
+    A bind rather than a connect: something that has the port but is not
+    accepting - a half-dead worker, a socket in the wrong state - refuses a
+    connect and would read as free, and then the move onto it fails with
+    nothing on screen to explain it. SO_REUSEADDR is deliberately not set;
+    on Windows it makes a bind succeed over a port already in use, which is
+    the one answer this must never give.
+    """
+    sock = socket.socket()
+    try:
+        sock.bind((host, int(port)))
+        return None
+    except OSError:
+        return px.read_state(port) or {}
+    finally:
+        sock.close()
+
 
 class Server:
     __slots__ = ('path', 'file', 'seconds', 'country', 'city')
@@ -62,16 +122,22 @@ class Server:
 class Engine:
     """One connection at a time, and always able to say what state it is in."""
 
-    PORT = 8899
-
     def __init__(self, sysproxy, folder=None, auth_file=None,
-                 set_system_proxy=True):
+                 set_system_proxy=True, port=None):
         self.sysproxy = sysproxy
         self.folder = folder or paths.servers_dir()
         self.auth_file = auth_file or paths.AUTH_FILE
+        # Where it listens. Settable because 8877 is only free until it is
+        # not - a second copy of this, a proxy the person already runs, a
+        # corporate agent - and a fixed port turns that into an app that
+        # cannot connect and cannot say why.
+        try:
+            self.port = clean_port(port)
+        except RuntimeError:
+            self.port = DEFAULT_PORT
         # Off, this serves the proxy and leaves Windows alone - for someone
-        # who would rather point one browser at 127.0.0.1:8899 by hand than
-        # have every program on the machine moved at once.
+        # who would rather point one browser at the port by hand than have
+        # every program on the machine moved at once.
         self.set_system_proxy = set_system_proxy
         self.child = None
         self.exit_info = None
@@ -134,6 +200,125 @@ class Engine:
             raise RuntimeError('no-credentials')
         except OSError:
             raise RuntimeError('no-credentials')
+
+    def username(self):
+        """The name on file, for showing back. The password is never returned
+        anywhere - a field that arrives pre-filled with a password is a
+        password on screen, and the only thing that buys is the ability to
+        read it over somebody's shoulder."""
+        try:
+            return self.credentials()[0]
+        except Exception:
+            return None
+
+    def save_credentials(self, user, password):
+        """Two lines, written where every half of this repo already looks.
+
+        Not the login email. Surfshark issues a separate service username and
+        password for manual setups, and the account one is refused by every
+        exit with the same silence as a wrong password - which reads as "no
+        server accepted just now" and sends people looking at their servers
+        folder. Hence the shape check below: an address in this field is
+        wrong often enough to be worth naming.
+        """
+        user = (user or '').strip()
+        password = (password or '').strip()
+        if not user or not password:
+            raise RuntimeError('Both the username and the password are needed.')
+        if '\n' in user or '\n' in password:
+            raise RuntimeError('One line each - no line breaks.')
+        if '@' in user:
+            raise RuntimeError(
+                'That looks like your login email. Surfshark issues a separate '
+                'service username for manual setups - it is on the same page '
+                'as the config files.')
+
+        os.makedirs(os.path.dirname(self.auth_file) or '.', exist_ok=True)
+        tmp = self.auth_file + '.tmp'
+        # Written and moved into place rather than truncated and filled: a
+        # crash between the two would otherwise leave an empty credentials
+        # file, and the app cannot tell that apart from never having had one.
+        with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(f'{user}\n{password}\n')
+        os.replace(tmp, self.auth_file)
+        self._lock_down(self.auth_file)
+
+        # .env is the side the shell and PowerShell halves edit, and where
+        # they disagree with .ovpn-auth, .env wins - Sync-CachedAuthFile
+        # rewrites the auth file from it on the next sweep. So a password set
+        # here and not set there would come back changed, hours later,
+        # blaming the server. Only touched when it already carries a value:
+        # an empty OVPN_USER is a file nobody is using.
+        return {'env': self._sync_env(user, password)}
+
+    ENV_LINE = re.compile(r'^(\s*)(OVPN_USER|OVPN_PASS)(\s*=\s*)(.*)$')
+
+    def _sync_env(self, user, password):
+        """Only when .env already carries a value, and only when that value
+        has stopped being true. An OVPN_USER nobody has filled in is a file
+        nobody is using, and rewriting it would be this app leaving marks on
+        something it was not asked about."""
+        path = os.path.join(ROOT, '.env')
+        try:
+            with open(path, 'rb') as f:
+                raw = f.read()
+        except OSError:
+            return False
+        # Whatever this file already ends its lines with, it keeps. The shell
+        # half of the repo is read by bash, where a stray \r turns a password
+        # into a different password.
+        ending = '\r\n' if b'\r\n' in raw else '\n'
+        text = raw.decode('utf-8', 'replace')
+
+        changed, out = False, []
+        for line in text.split('\n'):
+            bare = line.rstrip('\r')
+            m = self.ENV_LINE.match(bare)
+            if not m or not m.group(4).strip():
+                out.append(bare)
+                continue
+            want = user if m.group(2) == 'OVPN_USER' else password
+            if m.group(4).strip().strip('\'"') != want:
+                changed = True
+            out.append(f'{m.group(1)}{m.group(2)}{m.group(3)}{want}')
+        if not changed:
+            return False
+
+        while out and not out[-1]:
+            out.pop()
+        try:
+            with open(path, 'w', encoding='utf-8', newline='') as f:
+                f.write(ending.join(out) + ending)
+        except OSError:
+            return False
+        return True
+
+    @staticmethod
+    def _lock_down(path):
+        """Take the inherited permissions off a file holding a password.
+
+        chmod is not a thing here - on NTFS it returns success and changes
+        nothing, which is worse than failing. The repo has already been caught
+        out by this once: a group had Read on the folder with the inherit
+        flags set, so every file underneath picked it up and nothing said so.
+        Best effort; a file that could not be locked down is still better than
+        no credentials at all.
+        """
+        if os.name != 'nt':
+            return False
+        me = os.environ.get('USERNAME')
+        if not me:
+            return False
+        try:
+            subprocess.run(['icacls', path, '/inheritance:r',
+                            '/grant:r', f'{me}:F',
+                            '/grant:r', 'SYSTEM:F',
+                            '/grant:r', 'Administrators:F'],
+                           capture_output=True, timeout=20,
+                           creationflags=0x08000000)
+            return True
+        except (OSError, subprocess.SubprocessError):
+            return False
 
     # -- choosing one ------------------------------------------------------
 
@@ -243,9 +428,9 @@ class Engine:
         it. Keeping it out of this one means a wedged connection cannot take
         the window down with it, and the window closing does not have to be
         the thing that stops it."""
-        out_path = os.path.join(paths.STATE_DIR, f'proxy-{self.PORT}.out')
+        out_path = os.path.join(paths.STATE_DIR, f'proxy-{self.port}.out')
         os.makedirs(paths.STATE_DIR, exist_ok=True)
-        argv = paths.worker_argv(ip, host, self.PORT, self.auth_file)
+        argv = paths.worker_argv(ip, host, self.port, self.auth_file)
         flags = 0x08 | 0x200 if os.name == 'nt' else 0   # DETACHED, NEW_GROUP
         with open(out_path, 'w', encoding='utf-8') as out:
             return subprocess.Popen(
@@ -254,7 +439,7 @@ class Engine:
 
     def _wait_listening(self, child, out_path, seconds=20):
         for _ in range(seconds * 4):
-            rec = px.read_state(self.PORT)
+            rec = px.read_state(self.port)
             if rec and rec['pid'] == child.pid:
                 return rec
             if child.poll() is not None:
@@ -286,7 +471,7 @@ class Engine:
 
             if self.set_system_proxy:
                 progress({'phase': 'routing'})
-                self.sysproxy.engage('127.0.0.1', self.PORT)
+                self.sysproxy.engage('127.0.0.1', self.port)
 
             self.exit_info = {'ip': ip, 'host': host, 'country': server.country,
                               'city': server.city, 'answered': round(took, 2),
@@ -308,7 +493,7 @@ class Engine:
         in between, it leaves it failing for good.
         """
         self.sysproxy.restore()
-        rec = px.read_state(self.PORT)
+        rec = px.read_state(self.port)
         if rec:
             try:
                 px.kill(rec['pid'])
@@ -318,6 +503,69 @@ class Engine:
         self.exit_info = None
         if not quiet:
             return self.status()
+
+    # -- moving it ---------------------------------------------------------
+
+    def set_port(self, port):
+        """Listen somewhere else, and take a live connection with you.
+
+        Applied now rather than at the next connect. The alternative is a
+        field reading 9050 while Windows is still pointed at 8877, and the
+        one thing this window cannot do is show a number that has stopped
+        being true - it is the only evidence anyone has that the app is doing
+        what it says.
+
+        So while something is up, this is a move: the machine goes back, the
+        worker is stopped, and the same exit is dialled again on the new port.
+        The exit is not re-chosen. It was raced for and accepted the
+        credentials, and throwing that away to change a port number would
+        cost the several seconds of probing that finding it took.
+        """
+        port = clean_port(port)
+        if port == self.port:
+            return {'moved': False, 'busy': False, **self.status()}
+
+        with self.lock:
+            rec = self.running()
+            if not rec:
+                # Nothing is up, so this is only a number to remember. A port
+                # somebody else holds is still allowed: whatever has it may
+                # well be gone by the time anyone presses Connect. Said, not
+                # refused - the caller passes the warning on.
+                self.port = port
+                return {'moved': False, 'busy': port_holder(port) is not None,
+                        **self.status()}
+
+            # exit_info is empty when this window did not start the proxy -
+            # closing it leaves the connection up on purpose, and the next
+            # launch adopts it. The state file knows which exit it is, and a
+            # move that skipped this case would change the number while
+            # leaving the old worker running and the machine pointed at it.
+            info = self.exit_info or {'ip': rec['ip'], 'host': rec['name']}
+
+            # Connected, the same tolerance would be a working connection
+            # traded for one that cannot come up. Checked before anything is
+            # torn down, so a refusal costs nothing.
+            held = port_holder(port)
+            if held is not None:
+                raise RuntimeError(
+                    f'Something is already on 127.0.0.1:{port}'
+                    + (f' - our own proxy to {held["name"]}, pid {held["pid"]}.'
+                       if held.get('pid') else
+                       ', and it is not ours. Pick another port.'))
+
+            self.disconnect(quiet=True)
+            self.port = port
+            child, out_path = self._spawn(info['ip'], info['host'])
+            self._wait_listening(child, out_path)
+            self.child = child
+            if self.set_system_proxy:
+                self.sysproxy.engage('127.0.0.1', self.port)
+            # Everything already known about this exit survives the move -
+            # the country, how fast it answered, and the address Cloudflare
+            # confirmed. Only the process is new.
+            self.exit_info = {**info, 'pid': child.pid}
+            return {'moved': True, 'busy': False, **self.status()}
 
     # -- is it actually working -------------------------------------------
 
@@ -334,7 +582,7 @@ class Engine:
         what it claims, so it cannot be built on something that says no when
         it is busy.
         """
-        proxy = f'http://127.0.0.1:{self.PORT}'
+        proxy = f'http://127.0.0.1:{self.port}'
         opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({'http': proxy, 'https': proxy}))
         req = urllib.request.Request(
@@ -369,12 +617,12 @@ class Engine:
     # -- what state are we in ---------------------------------------------
 
     def running(self):
-        rec = px.read_state(self.PORT)
+        rec = px.read_state(self.port)
         return rec if rec and px.alive(rec['pid']) else None
 
     def status(self):
         rec = self.running()
-        engaged = self.sysproxy.engaged_for(self.PORT)
+        engaged = self.sysproxy.engaged_for(self.port)
         state = 'off'
         if rec and (engaged or not self.set_system_proxy):
             state = 'on'
@@ -383,7 +631,7 @@ class Engine:
             # "connected" here would be a lie the user pays for in failed
             # page loads.
             state = 'broken'
-        out = {'state': state, 'port': self.PORT,
+        out = {'state': state, 'port': self.port,
                'folder': self.folder,
                'systemProxy': self.set_system_proxy,
                'owed_restore': bool(self.sysproxy.stashed())}

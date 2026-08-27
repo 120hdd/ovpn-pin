@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "universal-icons": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "mcp-universal-icons"],
+      "env": {}
+    }
+  }
+}

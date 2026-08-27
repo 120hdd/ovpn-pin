@@ -182,10 +182,10 @@
         exist on that side.
 
 .EXAMPLE
-    .\Sweep-OvpnExits.ps1 -OnePer -First 10
-    .\Sweep-OvpnExits.ps1 -Name de- -Site chatgpt.com,github.com
-    .\Sweep-OvpnExits.ps1 -OnePer -Pick
-    .\Sweep-OvpnExits.ps1 -Wsl -Name de-fra
+    .\windows\Sweep-OvpnExits.ps1 -OnePer -First 10
+    .\windows\Sweep-OvpnExits.ps1 -Name de- -Site chatgpt.com,github.com
+    .\windows\Sweep-OvpnExits.ps1 -OnePer -Pick
+    .\windows\Sweep-OvpnExits.ps1 -Wsl -Name de-fra
 #>
 [CmdletBinding()]
 param(
@@ -226,7 +226,13 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$root = Split-Path -Parent $PSCommandPath
+# Two questions, and one name for both is how a sweep ends up writing its
+# results into the windows folder. $here is that folder, where
+# Resolve-OvpnRemote.ps1 is; $root is the repo above it, holding .env, the
+# credentials, pinned, success and .state - the same ones the Linux half
+# uses.
+$here = Split-Path -Parent $PSCommandPath
+$root = Split-Path -Parent $here
 
 # The probes, the verdict vocabulary and the [ ok ] / [fail] writers all live
 # in the pinner already. Copying them here would mean two things to keep in
@@ -237,7 +243,7 @@ $root = Split-Path -Parent $PSCommandPath
 # $Site is one of them, and -Site had been quietly dying here: bound, wiped a
 # few lines later, and never passed to a single probe. Held across the call.
 $sweepSite = $Site
-. (Join-Path $root 'Resolve-OvpnRemote.ps1') -AsLibrary
+. (Join-Path $here 'Resolve-OvpnRemote.ps1') -AsLibrary
 $Site = $sweepSite
 
 
@@ -985,7 +991,7 @@ function Invoke-WslSweep {
     # accepted, printed in the plan, and then quietly dropped at the border -
     # and what ran in there was the whole pinned folder. That is the difference
     # between twenty minutes and the rest of the day, and nothing said so.
-    $cmd = "cd '$lin' && bash ./ovpn-connect.sh --sweep"
+    $cmd = "cd '$lin' && bash ./linux/ovpn-connect.sh --sweep"
     if ($Filter)       { $cmd += " '$Filter'" }
     if ($Retest)       { $cmd += ' --retest' }
     if ($OnePer)         { $cmd += ' --one-per' }
@@ -1079,7 +1085,7 @@ try {
         Write-Host ''
         Write-Info 'Or, without installing anything on Windows:'
         Write-Host ''
-        Write-Host '         .\Sweep-OvpnExits.ps1 -Wsl' -ForegroundColor White
+        Write-Host '         .\windows\Sweep-OvpnExits.ps1 -Wsl' -ForegroundColor White
         Write-Host ''
         exit 2
     }

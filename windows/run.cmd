@@ -14,7 +14,14 @@ rem      run.cmd -h
 rem ---------------------------------------------------------------------------
 
 setlocal
-cd /d "%~dp0"
+rem  Two places now, where they used to be one. The two .ps1 files are
+rem  beside this one in windows\; configs\, pinned\ and success\ are a
+rem  level up, beside the windows folder rather than inside it. Everything
+rem  relative below means the second, so that is what to stand in - and
+rem  %CD% after the cd is the repo without a ".." left in it to show a
+rem  reader.
+cd /d "%~dp0.."
+set "REPO=%CD%"
 
 set "SCRIPT=%~dp0Resolve-OvpnRemote.ps1"
 set "SWEEP=%~dp0Sweep-OvpnExits.ps1"
@@ -22,7 +29,7 @@ set "SWEEP=%~dp0Sweep-OvpnExits.ps1"
 if not exist "%SCRIPT%" (
     echo.
     echo   [fail] Resolve-OvpnRemote.ps1 is not next to this file.
-    echo          Keep run.cmd in the ovpn-pin folder.
+    echo          Keep run.cmd in the windows folder of the repo.
     echo.
     pause
     exit /b 1
@@ -162,7 +169,7 @@ echo.
 set "swdir="
 set /p "swdir=  folder [1]: "
 set "swdirarg="
-if "%swdir%"=="2" set "swdirarg=-PinnedDir "%~dp0success""
+if "%swdir%"=="2" set "swdirarg=-PinnedDir "%REPO%\success""
 echo.
 echo   Three ways to answer the next question:
 echo.
@@ -251,8 +258,8 @@ call :run -WhoIs
 goto :again
 
 :openpinned
-if exist "%~dp0pinned" (
-    start "" explorer "%~dp0pinned"
+if exist "%REPO%\pinned" (
+    start "" explorer "%REPO%\pinned"
 ) else (
     echo.
     echo   [warn] no pinned folder yet - run 1 first.
@@ -344,7 +351,7 @@ echo     -NoAuth            supply no credentials at all
 echo     -Force             skip the "this will take a while" question
 echo     -Wsl               run the Linux sweep inside WSL instead
 echo.
-echo     powershell -ExecutionPolicy Bypass -File Sweep-OvpnExits.ps1 -OnePer
+echo     powershell -ExecutionPolicy Bypass -File windows\Sweep-OvpnExits.ps1 -OnePer
 exit /b 0
 
 rem ------------------------------------------------------------------ plumbing

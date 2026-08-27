@@ -27,12 +27,18 @@
 set -uo pipefail
 
 VERSION=1.2.0
-ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# HERE is linux/, where ovpn-lib.sh and the other scripts are. ROOT is the
+# repo above it, where the reader's own things are - configs/, pinned/,
+# success/, .env, the credentials - beside the platform folders rather than
+# inside either one. Answering both questions with one name is how a script
+# ends up writing pinned configs into linux/ and saying nothing about it.
+HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+ROOT=$(cd -- "$HERE/.." && pwd)
 SELF=$(basename -- "${BASH_SOURCE[0]}")
 
 # shellcheck source=ovpn-lib.sh
-. "$ROOT/ovpn-lib.sh" 2>/dev/null || {
-    printf '\n  [fail] ovpn-lib.sh is missing from %s\n\n' "$ROOT" >&2
+. "$HERE/ovpn-lib.sh" 2>/dev/null || {
+    printf '\n  [fail] ovpn-lib.sh is missing from %s\n\n' "$HERE" >&2
     exit 1
 }
 
@@ -359,7 +365,7 @@ print_configs() {
     age=$(pin_age_days "${CFG_FILE[0]}" 2>/dev/null) || return 0
     if [ -n "$age" ] && [ "$age" -ge 7 ]; then
         printf '\n'
-        info "these were pinned $age days ago - ./resolve-ovpn-remote.sh --sync for fresh addresses"
+        info "these were pinned $age days ago - ./linux/resolve-ovpn-remote.sh --sync for fresh addresses"
     fi
 }
 
@@ -457,7 +463,7 @@ show_alternatives() {
     done
     if [ "$found" -eq 0 ]; then
         bad 'none of the pinned addresses answer directly.'
-        info 'Either they have gone stale - re-run ./resolve-ovpn-remote.sh -'
+        info 'Either they have gone stale - re-run ./linux/resolve-ovpn-remote.sh -'
         info 'or your line blocks the addresses themselves and not just DNS,'
         info "in which case the tunnel has to ride the proxy: ./$SELF --via-proxy"
     fi
@@ -606,7 +612,7 @@ wait_for_up() {
             *AUTH_FAILED*)
                 bad 'the server refused the username and password.'
                 info "Check OVPN_USER and OVPN_PASS in $ROOT/.env, then run"
-                info './resolve-ovpn-remote.sh again to rewrite the auth file.'
+                info './linux/resolve-ovpn-remote.sh again to rewrite the auth file.'
                 return 1 ;;
             *'TLS Error: TLS key negotiation failed'*|*'TLS handshake failed'*)
                 bad 'no TLS answer from the server.'
@@ -616,7 +622,7 @@ wait_for_up() {
                 return 1 ;;
             *'Connection refused'*|*'Network is unreachable'*|*'No route to host'*)
                 bad 'the address is not answering any more.'
-                info 'Re-run ./resolve-ovpn-remote.sh - providers move addresses.'
+                info 'Re-run ./linux/resolve-ovpn-remote.sh - providers move addresses.'
                 return 1 ;;
         esac
 
@@ -675,7 +681,7 @@ report_up() {
 
     printf '\n'
     info 'Is this exit one Cloudflare will actually serve?'
-    info '     ./resolve-ovpn-remote.sh --check-cloudflare'
+    info '     ./linux/resolve-ovpn-remote.sh --check-cloudflare'
     info "Switch, or put everything back:"
     info "     ./$SELF --switch <config>     ./$SELF --stop"
     printf '\n'
@@ -842,8 +848,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=$ROOT/$SELF $cfg --supervise --fallback stop
-ExecStop=$ROOT/$SELF --stop
+ExecStart=$HERE/$SELF $cfg --supervise --fallback stop
+ExecStop=$HERE/$SELF --stop
 Restart=always
 RestartSec=10
 
@@ -1515,7 +1521,7 @@ do_sweep() {
     printf '\n'
     if [ -z "$best" ]; then
         bad 'not one of these exits is served by Cloudflare.'
-        info 'Re-pin for fresh addresses (./resolve-ovpn-remote.sh --sync) or get'
+        info 'Re-pin for fresh addresses (./linux/resolve-ovpn-remote.sh --sync) or get'
         info 'configs for other servers from your provider.'
         printf '\n'
         return 1
@@ -1764,7 +1770,7 @@ if ! list_configs; then
     if [ "$RETESTING" -eq 1 ]; then
         die "nothing in $OUT_DIR yet - nothing has been found to work so far. Sweep the pinned folder first; whatever connects lands in there."
     fi
-    die "no pinned configs in $OUT_DIR. Run ./resolve-ovpn-remote.sh first."
+    die "no pinned configs in $OUT_DIR. Run ./linux/resolve-ovpn-remote.sh first."
 fi
 
 if [ "$ACTION" = service ]; then
@@ -1838,7 +1844,7 @@ else
         dead)
             info 'the proxy cannot reach it either, so it is not your line - that'
             info 'server has stopped answering. Fresh addresses:'
-            info '     ./resolve-ovpn-remote.sh --sync' ;;
+            info '     ./linux/resolve-ovpn-remote.sh --sync' ;;
         *)
             info 'So this one cannot be dialled without help, and a tunnel that is'
             info 'dialled through the proxy stays on the proxy for its whole life -'
@@ -1870,7 +1876,7 @@ else
                 ok "using ${CFG_NAME[$SEL_IDX]}  ${CFG_IP[$SEL_IDX]}:${CFG_PORT[$SEL_IDX]}"
             else
                 printf '\n'
-                die 'none of the other pinned files answer directly either. Re-run ./resolve-ovpn-remote.sh --sync, or connect through the proxy with --via-proxy.'
+                die 'none of the other pinned files answer directly either. Re-run ./linux/resolve-ovpn-remote.sh --sync, or connect through the proxy with --via-proxy.'
             fi ;;
         *)
             printf '\n'

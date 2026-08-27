@@ -29,17 +29,26 @@ The name is proved, it is just never announced.
 What the browser sees is an ordinary proxy on 127.0.0.1 - no certificate to
 approve, no password prompt, nothing to explain to it.
 
-    ovpn-proxy.py uk-man              # enough of a pinned config's name
-    ovpn-proxy.py 139.28.176.165 --host uk-man.prod.surfshark.com
-    ovpn-proxy.py uk-man --port 8080
+    core/ovpn-proxy.py uk-man              # enough of a pinned config's name
+    core/ovpn-proxy.py 139.28.176.165 --host uk-man.prod.surfshark.com
+    core/ovpn-proxy.py uk-man --port 8080
 
-This carries HTTP and HTTPS, which is what a browser asks of a proxy. It is
-not a tunnel: nothing else on the machine goes through it, and neither does
-anything that is not HTTP.
+This carries HTTP, HTTPS and SOCKS5, all on the one port - the first byte a
+client sends decides which, so 0x05 is SOCKS5 and a letter is HTTP. All three
+leave as the same CONNECT at the exit.
+
+SOCKS5 is there for clients that will not tunnel over an HTTP proxy. Telegram
+is the one that matters: told its proxy is HTTP it sets useTcp false and stops
+tunnelling entirely, turning every MTProto packet into its own POST to port 80
+in the clear. Pointed at SOCKS5 it keeps one connection instead.
+
+It is not a tunnel: nothing else on the machine goes through it, and neither
+does UDP, ICMP, or anything that ignores the proxy setting it was given.
 """
 
 import argparse
 import base64
+import collections
 import concurrent.futures as cf
 import os
 import re
@@ -47,12 +56,21 @@ import select
 import shutil
 import socket
 import ssl
+import struct
 import sys
 import threading
 import time
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-AUTH_DEFAULT = os.path.join(HERE, '.ovpn-auth')
+# This file lives in core/, and every path built from here is one of the
+# reader's own things - the credentials, the pinned configs, .state - which
+# sit one level up beside the platform folders rather than inside either of
+# them. So it is the parent that is wanted, not the folder this file is in.
+#
+# Frozen into the app none of that holds: the file is unpacked into
+# _internal and the data is beside the exe. paths.point_proxy_module_at_data
+# sets ROOT again for that case, which is why the name is worth having.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+AUTH_DEFAULT = os.path.join(ROOT, '.ovpn-auth')
 
 # A scripted user agent gets challenged on its own merits, and would frame a
 # clean exit as a dirty one. Same reasoning, same string, as the tunnel sweep.
@@ -78,7 +96,13 @@ SWEEP_CAP = 40
 # explain what just went wrong.
 def _colours(stream=None):
     stream = stream or sys.stdout
-    if os.environ.get('NO_COLOR') or not stream.isatty():
+    # There may be no stdout at all. A --noconsole build has none, and this
+    # runs at import time - so the app, which imports this file for its
+    # protocol code rather than to print anything, died on an AttributeError
+    # here before its window could open. Nowhere to write is not a terminal,
+    # which is the answer the plain-text branch below already wants.
+    if (os.environ.get('NO_COLOR') or stream is None
+            or not stream.isatty()):
         return {k: '' for k in
                 ('off', 'head', 'ok', 'warn', 'fail', 'dim', 'bold')}
     if os.name == 'nt':
@@ -97,7 +121,7 @@ def _colours(stream=None):
 
 
 C = _colours()
-LOG_PATH = os.path.join(HERE, '.state', 'proxy.log')
+LOG_PATH = os.path.join(ROOT, '.state', 'proxy.log')
 
 # Where the lines meant for a person go. stdout everywhere except `env`,
 # whose stdout belongs to a shell that is about to eval it - a stray "folder:
@@ -114,8 +138,8 @@ OUT = sys.stdout
 # The dispatcher says so itself rather than being guessed at, so a Linux box
 # where the script is called directly gets the honest form too.
 CMD = ('ovpn proxy' if os.environ.get('OVPN_DISPATCHER')
-       else ('python ovpn-proxy.py' if os.name == 'nt'
-             else 'python3 ovpn-proxy.py'))
+       else ('python core/ovpn-proxy.py' if os.name == 'nt'
+             else 'python3 core/ovpn-proxy.py'))
 
 # px comes from ovpn-shell.sh, so it exists in bash and zsh and nowhere else.
 # No sense offering it to a PowerShell prompt.
@@ -283,14 +307,48 @@ def name_matches(cert, host):
     return False
 
 
+# How many connections to the exit are opened before anyone asks for one.
+#
+# Every accepted connection used to pay TCP, TLS and CONNECT to another
+# country before a byte moved - measured here at 516 ms, and 1024 ms when six
+# start together. That second number is the one that mattered: Telegram
+# rebuilds any connection that takes longer than a second to establish, so a
+# burst put the proxy the wrong side of its own client's patience. With two
+# held ready the same burst measured 797-851 ms, none of them over the line.
+#
+# Two rather than eight, deliberately. The win is concentrated in serial
+# short-lived connections - a chat client reconnecting, the first request of
+# a page - where the refill finishes long before the next one arrives.
+# Chasing a parallel burst would mean six or eight per exit, which is exactly
+# the connection rate note.md records an account being locked for.
+WARM_DEFAULT = 2
+WARM_MAX = 4
+# A connection held longer than this is dropped rather than offered. Measured
+# on these exits: an idle one was still good after 240 s, so this is well
+# inside what they tolerate.
+WARM_TTL = 120
+# Outbound handshakes in flight at once, pool fills included. Six tabs
+# opening together must not become six simultaneous dials at the exit.
+OUT_MAX = 8
+
+
 class Exit:
-    def __init__(self, ip, port, host, user, password, bind=None):
+    def __init__(self, ip, port, host, user, password, bind=None, warm=0):
         self.ip, self.port, self.host, self.bind = ip, port, host, bind
         self.auth = base64.b64encode(f'{user}:{password}'.encode()).decode()
         self.ctx = ssl.create_default_context()
         # The chain is still verified - only the name check is taken over
         # below, because doing it in OpenSSL would mean sending the name.
         self.ctx.check_hostname = False
+        # Off unless a caller asks. Everything that sweeps builds one of
+        # these per exit, and pre-opening connections there would multiply
+        # a 500-config run by the pool size - straight into the rate limit
+        # that note.md spent a week failing to characterise.
+        self.warm = max(0, min(warm, WARM_MAX))
+        self._pool = collections.deque()
+        self._plock = threading.Lock()
+        self._gate = threading.Semaphore(OUT_MAX)
+        self.tally = collections.Counter()
 
     def connect(self):
         raw = socket.create_connection(
@@ -318,6 +376,108 @@ class Exit:
             raise ssl.SSLCertVerificationError(
                 f'the certificate at {self.ip} does not serve {self.host}')
         return tls
+
+    # ---- connections opened before anyone asked ----------------------------
+    #
+    # connect() above is left exactly as it was on purpose: it is the method
+    # the tests stub out, and all of this is built on top of it rather than
+    # inside it, so the suite keeps covering the part that reaches the exit.
+    #
+    # A CONNECT tunnel consumes its connection. Once the exit answers 200
+    # there is no framing to go back to, so nothing can ever be handed back
+    # and reused - "pooling" here means connections already opened and not
+    # yet spoken on, which is a different thing and worth saying plainly.
+
+    def _dial(self):
+        """connect(), but never more than OUT_MAX at once."""
+        self._gate.acquire()
+        try:
+            return self.connect()
+        finally:
+            self._gate.release()
+
+    @staticmethod
+    def _spent(tls):
+        """Has the exit hung up on one that was sitting idle?
+
+        Nothing has been asked of it, so it should have nothing to say:
+        anything readable is EOF or noise and either way it is no longer
+        worth offering. MSG_PEEK is not allowed on an SSLSocket, so this is
+        select() and nothing finer - which catches an orderly close and
+        misses an abortive one. That is why taking one still licenses a
+        retry rather than being treated as proof of life.
+        """
+        try:
+            if tls.pending():
+                return True
+            readable, _, failed = select.select([tls], [], [tls], 0)
+        except (OSError, ValueError):
+            return True
+        return bool(readable or failed)
+
+    def take(self):
+        """A connection to the exit, warm if one is ready.
+
+        Returns (tls, was_warm). was_warm is the caller's licence to try once
+        more: an idle connection can have died without saying so, and at this
+        point nothing has been sent and nothing has reached the client.
+        """
+        now = time.monotonic()
+        while True:
+            with self._plock:
+                if not self._pool:
+                    break
+                tls, born = self._pool.popleft()
+            if now - born > WARM_TTL or self._spent(tls):
+                self.tally['stale'] += 1
+                try:
+                    tls.close()
+                except OSError:
+                    pass
+                continue
+            self.tally['warm'] += 1
+            threading.Thread(target=self._fill, daemon=True).start()
+            return tls, True
+        self.tally['cold'] += 1
+        return self._dial(), False
+
+    def _fill(self):
+        """Top up by one, if there is room and the exit is not already being
+        dialled as hard as we allow. Never waits for the gate: under load,
+        one more connection nobody asked for is the last thing it needs."""
+        with self._plock:
+            if len(self._pool) >= self.warm:
+                return
+        if not self._gate.acquire(blocking=False):
+            return
+        try:
+            tls = self.connect()
+        except (OSError, ssl.SSLError) as e:
+            log('WARN', f'could not open one ahead of time: {e}')
+            return
+        finally:
+            self._gate.release()
+        with self._plock:
+            if len(self._pool) < self.warm:
+                self._pool.append((tls, time.monotonic()))
+                return
+        try:
+            tls.close()                     # raced with another fill
+        except OSError:
+            pass
+
+    def prewarm(self):
+        for _ in range(self.warm):
+            threading.Thread(target=self._fill, daemon=True).start()
+
+    def drain(self):
+        with self._plock:
+            pool, self._pool = list(self._pool), collections.deque()
+        for tls, _ in pool:
+            try:
+                tls.close()
+            except OSError:
+                pass
 
 
 #-------------------------------------------------------------------- probing
@@ -679,16 +839,27 @@ def relay(a, b):
     ends = [a, b]
     try:
         while True:
-            readable, _, failed = select.select(ends, [], ends, 300)
-            if failed or not readable:
-                return
+            # Anything OpenSSL has already decrypted is invisible to
+            # select(): it lives in the SSL buffer, not the kernel queue. Ask
+            # first, or a short read anywhere upstream of here strands bytes
+            # until the next record happens to arrive - and when both ends
+            # are waiting on each other, that is never.
+            readable = [s for s in ends if getattr(s, 'pending', lambda: 0)()]
+            if not readable:
+                readable, _, failed = select.select(ends, [], ends, IDLE)
+                if failed:
+                    log('WARN', 'tunnel reported failed by select')
+                    return
+                if not readable:
+                    log('WARN', f'tunnel idle {IDLE}s - closing')
+                    return
             for s in readable:
                 chunk = s.recv(65536)
                 if not chunk:
                     return
                 (b if s is a else a).sendall(chunk)
-    except OSError:
-        pass
+    except (OSError, ssl.SSLError) as e:
+        log('WARN', f'tunnel ended: {e.__class__.__name__}: {e}')
     finally:
         for s in ends:
             try:
@@ -697,48 +868,526 @@ def relay(a, b):
                 pass
 
 
-def serve_one(client, exit_, quiet):
-    client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+HEAD_END = b'\r\n\r\n'
 
-    head = b''
+# Longer than any request head has business being, and the point at which a
+# client that is never going to send a blank line is dropped rather than read
+# forever.
+MAX_HEAD = 65536
+
+# How long a kept-alive connection may sit with nothing on it before both ends
+# are let go. The same 300 seconds relay() waits with, and it has to be set by
+# hand on both sockets here: the one to the exit comes back from
+# create_connection with a 20-second timeout, which is the right budget for
+# reaching a server and much too short a leash for a connection that has been
+# opened and is waiting for something to happen on it. relay() never noticed
+# because select() does not consult the socket timeout; reading straight from
+# the socket does, and a client long-polling - which is exactly what a chat
+# client does between messages - would have been cut off every 20 seconds.
+IDLE = 300
+
+# body_size's third answer, told apart from a real length and from the None
+# that means chunked. A sentinel object rather than -1, so that a caller who
+# forgets to check it fails loudly instead of slicing by a negative number.
+CANNOT_TELL = object()
+
+
+def read_head(sock, buf=b'', who='client'):
+    """Everything up to the blank line, plus whatever was read past it.
+
+    Returns (head, rest), or (None, rest) when the connection ended before a
+    head arrived or the head grew past MAX_HEAD.
+
+    All three of those failures used to leave by the same silent return, so a
+    reset, a timeout and a client that simply finished were indistinguishable
+    to the caller and invisible afterwards. They are still one return - the
+    caller has nothing different to do about them - but each says which it
+    was on the way out. `who` is what to call this end in the log.
+    """
+    while HEAD_END not in buf:
+        try:
+            chunk = sock.recv(4096)
+        except (OSError, ssl.SSLError) as e:
+            log('WARN', f'{who}: {e.__class__.__name__}: {e}')
+            return None, buf
+        if not chunk:
+            # An empty buffer means it finished between requests, which is
+            # how keep-alive is supposed to end. Anything else is a head cut
+            # in half.
+            if buf:
+                log('WARN', f'{who}: ended part-way through a request head')
+            return None, buf
+        buf += chunk
+        if len(buf) > MAX_HEAD:
+            log('WARN', f'{who}: head grew past {MAX_HEAD} bytes')
+            return None, buf
+    head, _, rest = buf.partition(HEAD_END)
+    return head, rest
+
+
+def with_our_auth(head, exit_):
+    """Whatever the client had in mind for credentials, ours are the ones the
+    exit will accept. Right after the request line, where a proxy looks."""
+    lines = [l for l in head.split(b'\r\n')
+             if not l.lower().startswith(b'proxy-authorization:')]
+    # After the request line, wherever that turns out to be. A client is
+    # allowed to send a blank line before it, and inserting at 1 regardless
+    # would put the credentials where the request line should be.
+    at = next((i for i, l in enumerate(lines) if l.strip()), 0) + 1
+    lines.insert(at, b'Proxy-Authorization: Basic ' + exit_.auth.encode())
+    return b'\r\n'.join(lines) + HEAD_END
+
+
+def body_size(head):
+    """How many bytes of body follow this request head.
+
+    None means chunked, which the caller forwards frame by frame. CANNOT_TELL
+    means the framing does not parse and there is nothing safe to do but
+    stop - two Content-Lengths that disagree are refused rather than guessed
+    at, both because RFC 7230 says so and because guessing is what makes a
+    proxy a request-smuggling primitive.
+    """
+    size, seen = 0, False
+    for line in head.split(b'\r\n')[1:]:
+        name, _, value = line.partition(b':')
+        name, value = name.strip().lower(), value.strip().lower()
+        if name == b'transfer-encoding' and value not in (b'', b'identity'):
+            return None
+        if name == b'content-length':
+            try:
+                got = int(value)
+            except ValueError:
+                return CANNOT_TELL
+            if seen and got != size:
+                return CANNOT_TELL
+            size, seen = got, True
+    return size
+
+
+def pump_bytes(src, dst, watch_for_407=False):
+    """One direction, untouched, until the source is done.
+
+    With watch_for_407 the bytes are still forwarded verbatim, but the status
+    lines going past are looked at. A 407 in the response direction is the
+    exit refusing us, not the client refusing anything - and a client pointed
+    at a local proxy it was given no credentials for can only drop the
+    connection and open another. It is the one failure that must never leave
+    looking like "the connection just closed".
+    """
+    tail = b''
     try:
-        while b'\r\n\r\n' not in head:
-            chunk = client.recv(4096)
+        while True:
+            chunk = src.recv(65536)
             if not chunk:
-                client.close()
                 return
-            head += chunk
-            if len(head) > 65536:
-                client.close()
+            dst.sendall(chunk)              # forward first, look afterwards
+            if watch_for_407:
+                tail = (tail + chunk)[-2048:]
+                for line in tail.split(b'\r\n'):
+                    if line.startswith(b'HTTP/1.') and b' 407 ' in line:
+                        log('WARN', 'the exit answered 407 mid-connection')
+                        tail = b''
+                        break
+    except (OSError, ssl.SSLError) as e:
+        log('WARN', f'relay stopped: {e.__class__.__name__}: {e}')
+    finally:
+        # The other half of this connection is blocked on a read. Without
+        # this it stays blocked with nothing left at the far end to answer it.
+        #
+        # SHUT_WR, never SHUT_RDWR. Shutting the read half of a socket the
+        # other thread is still reading throws away the reply in flight; and
+        # a peer that keeps sending into a half we have stopped acknowledging
+        # gets the connection reset, which loses whatever was still queued to
+        # go out. Closing our writing end says the same thing without either.
+        try:
+            dst.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+
+
+def forward_chunked(client, upstream, pending):
+    """A chunked body, frame by frame, stopping after the zero chunk.
+
+    Nothing is rewritten - the frames go across exactly as they arrive. The
+    only reason to read them at all is to know where the body ends, so that
+    the next request head can be found and given credentials of its own.
+
+    Returns whatever was read past the end of the body, or None if the
+    framing ran out before the zero chunk did.
+    """
+    while True:
+        while b'\r\n' not in pending:
+            chunk = client.recv(65536)
+            if not chunk:
+                return None
+            pending += chunk
+        line, _, pending = pending.partition(b'\r\n')
+        upstream.sendall(line + b'\r\n')
+        try:
+            n = int(line.split(b';')[0].strip(), 16)
+        except ValueError:
+            log('WARN', f'chunk length {line[:32]!r} is not a number')
+            return None
+        need = n + 2                        # the chunk, and then its CRLF
+        while need:
+            if not pending:
+                pending = client.recv(65536)
+                if not pending:
+                    return None
+            take, pending = pending[:need], pending[need:]
+            upstream.sendall(take)
+            need -= len(take)
+        if n == 0:
+            return pending                  # trailers, then the next head
+
+
+def pump_requests(client, upstream, exit_, head, pending):
+    """Every request this connection carries, each one with our credentials -
+    not just the first.
+
+    This is the difference between a browser and a chat client, and it is why
+    Telegram dropped and reconnected about once a second while a browser on
+    the same proxy was fine. A browser asking for HTTPS sends one CONNECT and
+    everything after it is an opaque tunnel, so the credentials go out once
+    and the question never comes up again. Something speaking plain HTTP down
+    a kept-alive connection asks again and again - and an exit that
+    authenticates every request, which is every real proxy, answers 407 to
+    the second one. The client's only move then is to drop the connection and
+    open another, which buys it exactly one more request.
+
+    Returns when the client is done or the framing runs out; the caller closes
+    both ends.
+    """
+    while True:
+        size = body_size(head)
+        if size is CANNOT_TELL:
+            log('WARN', 'refusing a request whose framing does not parse')
+            return
+
+        if size is None:
+            # Chunked. This used to hand the rest of the connection over as a
+            # plain pipe, which is right for this request and wrong for every
+            # one after it: none of those gets a Proxy-Authorization again,
+            # the exit answers 407 to the next, and the connection is back to
+            # the behaviour the per-request auth above exists to prevent.
+            # Following the frames costs a few lines and keeps the loop.
+            upstream.sendall(with_our_auth(head, exit_))
+            pending = forward_chunked(client, upstream, pending)
+            if pending is None:
                 return
+        else:
+            body, pending = pending[:size], pending[size:]
+            # One write, so one TLS record and one segment. A chat client's
+            # messages are a few hundred bytes each, and sending the head and
+            # the body separately doubled the packets on the hot path for no
+            # gain - and handed the line's DPI two small flights to look at
+            # where there could have been one.
+            upstream.sendall(with_our_auth(head, exit_) + body)
+            left = size - len(body)
+            while left > 0:
+                chunk = client.recv(min(65536, left))
+                if not chunk:
+                    return
+                upstream.sendall(chunk)
+                left -= len(chunk)
+
+        head, pending = read_head(client, pending)
+        if head is None:
+            return
+
+
+def recv_exactly(sock, n):
+    buf = b''
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            raise OSError('the client went away part-way through SOCKS5')
+        buf += chunk
+    return buf
+
+
+def socks_target(client):
+    """The SOCKS5 greeting and request, as far as the address being asked for.
+
+    No authentication is offered or wanted: this listens on the loopback, and
+    a password between a program and a proxy on the same machine protects
+    nothing that the machine itself does not already.
+
+    A name stays a name. Whatever the client sends goes into the CONNECT
+    untouched and the exit resolves it - which is what the socks5h form of
+    the scheme means, and is the only behaviour on offer here. Nothing is
+    ever resolved locally, which is the whole point on a line whose resolver
+    lies.
+    """
+    ver, nmethods = struct.unpack('!BB', recv_exactly(client, 2))
+    if ver != 5:
+        raise OSError(f'not SOCKS5 (version byte {ver:#04x})')
+    recv_exactly(client, nmethods)
+    client.sendall(b'\x05\x00')
+
+    ver, cmd, _, atyp = struct.unpack('!BBBB', recv_exactly(client, 4))
+    if ver != 5:
+        raise OSError(f'bad request version {ver:#04x}')
+    if cmd != 1:
+        # BIND and UDP ASSOCIATE cannot be carried over a CONNECT, and
+        # nothing that reaches this proxy asks for them.
+        socks_refuse(client, 7)
+        raise OSError(f'only CONNECT is supported, got command {cmd}')
+
+    if atyp == 1:
+        host = socket.inet_ntoa(recv_exactly(client, 4))
+    elif atyp == 3:
+        n = recv_exactly(client, 1)[0]
+        host = recv_exactly(client, n).decode('idna')
+    elif atyp == 4:
+        host = '[' + socket.inet_ntop(socket.AF_INET6,
+                                      recv_exactly(client, 16)) + ']'
+    else:
+        socks_refuse(client, 8)
+        raise OSError(f'address type {atyp} is not supported')
+    port = struct.unpack('!H', recv_exactly(client, 2))[0]
+    return host, port
+
+
+def socks_refuse(client, code=5):
+    """A SOCKS5 failure reply. 5 is "connection refused", which is the
+    honest answer for every way the exit can let us down."""
+    try:
+        client.sendall(bytes([5, code, 0, 1]) + b'\x00' * 6)
     except OSError:
+        pass
+
+
+def shut(*socks):
+    for s in socks:
+        try:
+            s.close()
+        except OSError:
+            pass
+
+
+def open_tunnel(exit_, target, head=None):
+    """A tunnel to `target` through the exit, from the pool where one is warm.
+
+    Returns (upstream, reply, spare). One retry, and only for a connection
+    that came out of the pool: it may have died while it sat there, nothing
+    has reached the client yet, and a CONNECT that was never answered left no
+    state behind to confuse. That is the same idempotent-retry rule keep-alive
+    has always relied on.
+    """
+    if head is None:
+        head = (f'CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n'
+                f'Proxy-Authorization: Basic {exit_.auth}\r\n\r\n').encode()
+
+    upstream, warm = exit_.take()
+    for attempt in (1, 2):
+        try:
+            upstream.sendall(head)
+            reply, spare = read_head(upstream, who='exit')
+            if reply is None:
+                raise OSError('the exit closed the connection on CONNECT')
+            return upstream, reply, spare
+        except (OSError, ssl.SSLError) as e:
+            shut(upstream)
+            if attempt == 2 or not warm:
+                raise
+            log('WARN', f'a connection held ready had died ({e}) - dialling')
+            upstream, warm = exit_._dial(), False
+
+
+def serve_socks(client, exit_, quiet):
+    """SOCKS5 in, CONNECT out.
+
+    Here because of what Telegram does with the alternative. tdesktop sets
+    useTcp = (proxyType != Type::Http), so choosing HTTP in its settings
+    turns the TCP transport off altogether and every MTProto packet becomes
+    its own POST to port 80 in the clear. Choosing SOCKS5 leaves MTProto over
+    TCP intact, which is one long-lived connection instead of a request per
+    message - and the exit still only ever sees a CONNECT.
+    """
+    try:
+        host, port = socks_target(client)
+    except (OSError, ValueError, UnicodeError) as e:
+        log('FAIL', f'socks5 handshake: {e}')
+        if not quiet:
+            print(f'  socks5   {e}', file=sys.stderr, flush=True)
         client.close()
         return
 
-    headers, _, body = head.partition(b'\r\n\r\n')
-    lines = headers.split(b'\r\n')
-    request = lines[0].decode('latin-1', 'replace')
+    target = f'{host}:{port}'
+    try:
+        upstream, reply, spare = open_tunnel(exit_, target)
+    except (OSError, ssl.SSLError) as e:
+        log('FAIL', f'socks5 {target}: {e}')
+        if not quiet:
+            print(f'  socks5   {target}  {e}', file=sys.stderr, flush=True)
+        socks_refuse(client)
+        client.close()
+        return
 
-    # Whatever the client had in mind for credentials, ours are the ones the
-    # exit will accept. Right after the request line, where a proxy looks.
-    lines = [l for l in lines if not l.lower().startswith(b'proxy-authorization:')]
-    lines.insert(1, b'Proxy-Authorization: Basic ' + exit_.auth.encode())
+    said = reply.split(b'\r\n', 1)[0].decode('latin-1', 'replace')
+    if not (said.split(' ') + [''])[1].startswith('2'):
+        log('FAIL', f'socks5 {target}: the exit said {said}')
+        if not quiet:
+            print(f'  socks5   {target}  the exit said {said}',
+                  file=sys.stderr, flush=True)
+        socks_refuse(client)
+        shut(client, upstream)
+        return
+
+    # The bound address in the reply is a formality - nothing reads it.
+    client.sendall(b'\x05\x00\x00\x01' + b'\x00' * 6)
+    if spare:
+        # Anything the exit pipelined behind its 200 is tunnel content.
+        client.sendall(spare)
+    relay(client, upstream)
+
+
+def serve_http(client, exit_, quiet, first):
+    head, rest = read_head(client, first)
+    if head is None:
+        client.close()
+        return
+    verb = head.split(b'\r\n', 1)[0].decode('latin-1', 'replace').split(' ')[0].upper()
+
+    if verb == 'CONNECT':
+        target = head.split(b'\r\n', 1)[0].decode('latin-1', 'replace').split(' ')[1]
+        # The exit's answer is read here rather than relayed blind, because
+        # anything the client pipelined behind its CONNECT belongs inside the
+        # tunnel and not to the proxy. Sent before the 200 arrives, a refusal
+        # would leave those bytes in front of the exit's parser to be read as
+        # a second request.
+        try:
+            upstream, reply, spare = open_tunnel(
+                exit_, target, with_our_auth(head, exit_))
+        except (OSError, ssl.SSLError) as e:
+            log('FAIL', f'CONNECT {target}: {e}')
+            if not quiet:
+                print(f'  CONNECT  {e}', file=sys.stderr, flush=True)
+            try:
+                client.sendall(b'HTTP/1.1 502 Bad Gateway\r\n'
+                               b'Connection: close\r\n'
+                               b'Content-Length: 0\r\n\r\n')
+            except OSError:
+                pass
+            client.close()
+            return
+        try:
+            client.sendall(reply + HEAD_END + spare)
+            said = reply.split(b'\r\n', 1)[0].decode('latin-1', 'replace')
+            if not (said.split(' ') + [''])[1].startswith('2'):
+                log('FAIL', f'CONNECT {target}: the exit said {said}')
+                if not quiet:
+                    print(f'  CONNECT  the exit said {said}',
+                          file=sys.stderr, flush=True)
+                shut(client, upstream)
+                return
+            if rest:
+                upstream.sendall(rest)
+        except (OSError, ssl.SSLError) as e:
+            log('FAIL', f'CONNECT {target}: {e}')
+            if not quiet:
+                print(f'  CONNECT  {e}', file=sys.stderr, flush=True)
+            shut(client, upstream)
+            return
+        relay(client, upstream)
+        return
 
     try:
-        upstream = exit_.connect()
-        upstream.sendall(b'\r\n'.join(lines) + b'\r\n\r\n' + body)
+        upstream, _ = exit_.take()
     except (OSError, ssl.SSLError) as e:
+        log('FAIL', f'{verb}: {e}')
         if not quiet:
-            print(f'  {request.split(chr(32))[0]:<8} {e}', file=sys.stderr, flush=True)
+            print(f'  {verb:<8} {e}', file=sys.stderr, flush=True)
         try:
             client.sendall(b'HTTP/1.1 502 Bad Gateway\r\n'
+                           b'Connection: close\r\n'
                            b'Content-Length: 0\r\n\r\n')
         except OSError:
             pass
         client.close()
         return
 
-    relay(client, upstream)
+    for sock in (client, upstream):
+        try:
+            sock.settimeout(IDLE)
+        except OSError:
+            pass
+
+    back = threading.Thread(target=pump_bytes,
+                            args=(upstream, client, True), daemon=True)
+    back.start()
+    try:
+        pump_requests(client, upstream, exit_, head, rest)
+    except (OSError, ssl.SSLError) as e:
+        log('WARN', f'{verb}: {e.__class__.__name__}: {e}')
+        if not quiet:
+            print(f'  {verb:<8} {e}', file=sys.stderr, flush=True)
+
+    # The client has stopped sending. The exit may still owe a reply, and
+    # MTProto's HTTP transport parks a poll for up to 25 seconds - so wait on
+    # the response side itself rather than on a stopwatch. This was two
+    # seconds, which is shorter than a long poll is allowed to be and threw
+    # away the answer whenever one was outstanding. The socket timeouts set
+    # above already bound how long the wait can be.
+    try:
+        client.shutdown(socket.SHUT_WR)
+    except OSError:
+        pass
+    back.join(IDLE)
+    shut(client, upstream)
+
+
+class Pushback:
+    """A socket with one byte put back in front of it.
+
+    Reading one byte is how the protocol is decided, and whichever parser
+    wins then wants that byte. MSG_PEEK would avoid the wrapper but is not
+    allowed on every socket this may be handed, so the byte is simply
+    returned by the first read and the wrapper is transparent after that.
+    """
+
+    def __init__(self, sock, head):
+        self._sock, self._head = sock, head
+
+    def recv(self, n, *a, **kw):
+        if self._head:
+            out, self._head = self._head[:n], self._head[n:]
+            return out
+        return self._sock.recv(n, *a, **kw)
+
+    def __getattr__(self, name):
+        return getattr(self._sock, name)
+
+
+def serve_one(client, exit_, quiet):
+    client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    # Before the first read, not after it. This used to be set only on the
+    # plain-HTTP path, below the branch that returns, so a client that
+    # connected and then said nothing held a thread for as long as the proxy
+    # ran - not for IDLE, but forever.
+    try:
+        client.settimeout(IDLE)
+    except OSError:
+        pass
+
+    # One byte decides which protocol this is. SOCKS5 opens with its version,
+    # 0x05; every HTTP verb opens with a letter. So both fit on one port and
+    # a client can be pointed at either without anything being reconfigured.
+    try:
+        first = client.recv(1)
+    except (OSError, ssl.SSLError) as e:
+        log('WARN', f'client: {e.__class__.__name__}: {e}')
+        client.close()
+        return
+    if not first:
+        client.close()
+        return
+
+    if first[0] == 5:
+        serve_socks(Pushback(client, first), exit_, quiet)
+    else:
+        serve_http(client, exit_, quiet, first)
 
 
 #--------------------------------------------------------------- what is up
@@ -753,7 +1402,7 @@ def serve_one(client, exit_, quiet):
 # and that nothing should disturb. Keyed by port, since a port is what a
 # client is actually pointed at - the pid is bookkeeping, the port is the
 # address someone typed into a settings box.
-STATE_PATH = os.path.join(HERE, '.state', 'proxy.state')
+STATE_PATH = os.path.join(ROOT, '.state', 'proxy.state')
 
 
 def read_states():
@@ -1225,7 +1874,7 @@ def do_detach(args, exit_):
     """
     import subprocess
 
-    out_path = os.path.join(HERE, '.state', f'proxy-{args.port}.out')
+    out_path = os.path.join(ROOT, '.state', f'proxy-{args.port}.out')
     try:
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         out = open(out_path, 'w', encoding='utf-8')
@@ -1235,7 +1884,7 @@ def do_detach(args, exit_):
     argv = [sys.executable, os.path.abspath(__file__), exit_.ip,
             '--host', exit_.host, '--port', str(args.port),
             '--exit-port', str(exit_.port), '--listen', args.listen,
-            '--auth', args.auth]
+            '--auth', args.auth, '--warm', str(exit_.warm)]
     if exit_.bind:
         argv += ['--bind', exit_.bind]
     if args.quiet:
@@ -1434,11 +2083,26 @@ def serve(listen_host, listen_port, exit_, quiet):
     for r in read_states():
         if str(r['port']) != str(listen_port):
             field('also up', f'port {r["port"]}   {r["name"]}   left alone')
+    if exit_.warm:
+        field('held ready', f'{exit_.warm} connection'
+                            f'{"" if exit_.warm == 1 else "s"} to the exit, '
+                            f'opened before they are asked for')
     print()
     print(f'  {C["head"]}In the browser, set BOTH the HTTP and the HTTPS '
           f'proxy to{C["off"]}')
     print(f'      {C["bold"]}{listen_host}{C["off"]}   port '
           f'{C["bold"]}{listen_port}{C["off"]}')
+    print()
+    # Worth its own line rather than a footnote. Telegram over an HTTP proxy
+    # does not tunnel at all - it turns every message into its own request to
+    # port 80 - and the only way to tell it not to is to offer it SOCKS5.
+    print(f'  {C["head"]}In Telegram, choose SOCKS5 rather than HTTP{C["off"]}')
+    print(f'      {C["bold"]}{listen_host}{C["off"]}   port '
+          f'{C["bold"]}{listen_port}{C["off"]}   no username, no password')
+    print(f'      {C["dim"]}Same port. On HTTP it sends a request per message;'
+          f'{C["off"]}')
+    print(f'      {C["dim"]}on SOCKS5 it keeps one connection and is quicker.'
+          f'{C["off"]}')
     print()
     note('Ctrl-C ends it. Nothing on this machine is changed while it runs -')
     note('no routes, no DNS, no system proxy setting, nothing to put back.')
@@ -1447,6 +2111,7 @@ def serve(listen_host, listen_port, exit_, quiet):
 
     write_state(listen_host, listen_port, exit_)
     log('START', f'{listen_host}:{listen_port} -> {exit_.ip} ({exit_.host})')
+    exit_.prewarm()
 
     # `ovpn proxy stop` sends a TERM, which would otherwise take the process
     # down without running any of the tidying below - no line in the log, and
@@ -1477,7 +2142,10 @@ def serve(listen_host, listen_port, exit_, quiet):
         ok(f'stopped after {served} connection{"" if served == 1 else "s"}')
         print()
     finally:
-        log('STOP', f'after {served} connections')
+        t = exit_.tally
+        log('STOP', f'after {served} connections; {t["warm"]} started from one '
+                    f'held ready, {t["cold"]} dialled, {t["stale"]} discarded')
+        exit_.drain()
         clear_state()
         try:
             srv.close()
@@ -1507,7 +2175,8 @@ def do_help():
         What is running, and through which exit. Starts nothing.
 
     {b}ovpn proxy connect{o} [name]
-        Serve a proxy on 127.0.0.1:8888 for the browser to point at.
+        Serve a proxy on 127.0.0.1:8888. {d}HTTP and SOCKS5 both, on the one
+        port - the first byte a client sends decides which.{o}
 
         With no name it asks around 140 exits which will take the
         credentials and serves the quickest that will. {d}That is the way to
@@ -1515,6 +2184,21 @@ def do_help():
         config says which.{o} Naming one works when you want a particular
         country - it asks before it listens, rather than coming up looking
         healthy and answering 502 to everything.
+
+  {h}{b}Telegram wants SOCKS5, not HTTP{o}
+
+    Told its proxy is HTTP, Telegram Desktop stops tunnelling altogether -
+    {d}useTcp = (proxyType != Type::Http){o} in its own source - and turns
+    every MTProto packet into its own POST to port 80 in the clear. No
+    setting changes that. On SOCKS5 it keeps one connection instead, which
+    is what the Windows system proxy was quietly doing all along.
+
+        {d}Connection type - Custom - SOCKS5{o}
+        {b}127.0.0.1{o}   the port this is on   {d}no username, no password{o}
+
+    The exit sees none of it: a SOCKS5 request becomes the same CONNECT it
+    was always sent. Names are forwarded rather than resolved here, so no
+    local resolver is given the chance to answer for one.
 
     {b}ovpn proxy sweep{o}
         Ask a folder of exits what they serve, and rank them.
@@ -1564,7 +2248,7 @@ def do_help():
     it in, and nothing run as a child can do that to its parent. {d}ovpn
     install{o} adds the line that defines it - or add it by hand:
 
-        {b}. /path/to/ovpn-pin/ovpn-shell.sh{o}
+        {b}. /path/to/ovpn-pin/linux/ovpn-shell.sh{o}
 
     With more than one proxy up, say which port, or name it once in the rc
     file and stop thinking about it:
@@ -1589,6 +2273,10 @@ def do_help():
     {b}--host{o} NAME       the name the certificate must serve {d}(read from
                       the config's pin comment when you do not say){o}
     {b}--auth{o} FILE       credentials, one per line {d}(.ovpn-auth){o}
+    {b}--warm{o} N          connections to the exit opened before they are
+                      asked for {d}(2, at most 4, 0 turns it off). Takes two
+                      round trips off every new connection: 343 ms down to
+                      140 ms, one at a time. Every sweep runs at 0{o}
     {b}--quiet{o}           do not report failed connections
 
     {d}sweep only:{o}
@@ -1601,11 +2289,18 @@ def do_help():
 
   {h}{b}What it does and does not carry{o}
 
-    HTTP and HTTPS, which is what a browser asks of a proxy. HTTPS goes
-    through as CONNECT, and CONNECT carries whatever the two ends put in
-    it, so anything speaking TCP on 443 - a chat client, say - travels the
-    same way. Not UDP, not ICMP, and nothing that ignores the proxy setting
-    it was given; for those you would still want a tunnel.
+    HTTP, HTTPS and SOCKS5, on the one port. {d}The first byte a client
+    sends decides: 0x05 is SOCKS5, a letter is HTTP.{o} All three end up as
+    the same CONNECT at the exit, and CONNECT carries whatever the two ends
+    put in it, so anything speaking TCP travels the same way. Not UDP, not
+    ICMP, and nothing that ignores the proxy setting it was given; for
+    those you would still want a tunnel.
+
+    SOCKS5 is here for one reason: a client that will not tunnel over an
+    HTTP proxy. {d}Telegram is the one that matters - see above.{o} It is
+    offered without authentication because it listens on the loopback, and
+    a password between two programs on one machine protects nothing the
+    machine does not already.
 
     Nothing else on the machine goes through it. That is the point rather
     than a shortcoming: it is why a second one on another port can serve a
@@ -1655,7 +2350,7 @@ def main():
     p.add_argument('--sweep', action='store_true',
                    help='ask every config in the folder what its exit serves, '
                         'all at once, and rank them by how quickly it answered')
-    p.add_argument('--out', default=os.path.join(HERE, 'proxy-ok'),
+    p.add_argument('--out', default=os.path.join(ROOT, 'proxy-ok'),
                    help='where --sweep copies what served (proxy-ok/)')
     p.add_argument('--site', action='append', default=[],
                    help='also ask each exit for this host. Repeatable, or comma '
@@ -1679,7 +2374,7 @@ def main():
                                   'the config when not given')
     p.add_argument('--exit-port', type=int, default=443,
                    help="the exit's proxy port (443)")
-    p.add_argument('--auth', default=os.path.join(HERE, '.ovpn-auth'),
+    p.add_argument('--auth', default=os.path.join(ROOT, '.ovpn-auth'),
                    help='file holding username and password, one per line')
     # OVPN_OUT_DIR is how the rest of the repo is told which folder to act on
     # - ovpn-connect.sh and resolve-ovpn-remote.sh both read it, falling back
@@ -1693,7 +2388,7 @@ def main():
     # is also what the wrapper calls.
     p.add_argument('--dir',
                    default=os.environ.get('OVPN_OUT_DIR')
-                   or os.path.join(HERE, 'pinned'),
+                   or os.path.join(ROOT, 'pinned'),
                    help='where to look for configs by name. Defaults to '
                         '$OVPN_OUT_DIR, or pinned/')
     p.add_argument('--bind', help='source address for the connection out. Only '
@@ -1701,6 +2396,10 @@ def main():
                                   'and this would otherwise go through it')
     p.add_argument('--listen', default='127.0.0.1',
                    help='address to listen on (127.0.0.1)')
+    p.add_argument('--warm', type=int, default=WARM_DEFAULT,
+                   help=f'connections to the exit opened before they are '
+                        f'asked for ({WARM_DEFAULT}, at most {WARM_MAX}). '
+                        f'0 turns it off, which is what every sweep uses')
     p.add_argument('--quiet', action='store_true', help='do not report failed connections')
     p.add_argument('--status', action='store_true',
                    help='say whether a proxy is running, and through what')
@@ -1760,7 +2459,7 @@ def main():
                 'Drop one of the two: --connect-only for speed, --site for the\n'
                 'question of whether that exit is served the page.')
         do_sweep(args.dir, args.out, sites, args.timeout, args.jobs,
-                 args.first, args.one_per, os.path.join(HERE, '.state'),
+                 args.first, args.one_per, os.path.join(ROOT, '.state'),
                  args.auth, args.connect_only, args.bind)
         return
 
@@ -1794,7 +2493,8 @@ def main():
             'A pinned config carries one in its pin comment; a bare address\n'
             'does not. Pass --host uk-man.prod.surfshark.com or similar.')
 
-    exit_ = Exit(ip, args.exit_port, host, user, password, args.bind)
+    exit_ = Exit(ip, args.exit_port, host, user, password, args.bind,
+                 warm=args.warm)
 
     # Ask once before listening. Without this the proxy comes up looking
     # healthy and answers 502 to everything, which sends you hunting through

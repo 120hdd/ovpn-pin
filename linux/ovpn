@@ -13,7 +13,7 @@
 # name of, standing in a folder full of .ovpn files, is a different case. So
 # the convenience lives here, in the wrapper, and the scripts stay literal.
 #
-# Install it with `./ovpn install`, which drops a symlink in ~/.local/bin.
+# Install it with `./linux/ovpn install`, which drops a symlink in ~/.local/bin.
 
 set -uo pipefail
 
@@ -22,12 +22,18 @@ set -uo pipefail
 # lives. readlink -f follows the link back to the repo.
 SELF_PATH=$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null)
 [ -n "$SELF_PATH" ] || SELF_PATH=${BASH_SOURCE[0]}
-ROOT=$(cd -- "$(dirname -- "$SELF_PATH")" && pwd)
+HERE=$(cd -- "$(dirname -- "$SELF_PATH")" && pwd)
 
-CON=$ROOT/ovpn-connect.sh
-PIN=$ROOT/resolve-ovpn-remote.sh
-MENU=$ROOT/run.sh
-PRX=$ROOT/ovpn-proxy.py
+# Two answers, and one name for both is how this ends up reading configs out
+# of linux/ and finding none. HERE is linux/, where the other three scripts
+# are; ROOT is the repo above it, where configs/, pinned/, success/, .env and
+# the credentials live - beside the platform folders, not inside one of them.
+ROOT=$(cd -- "$HERE/.." && pwd)
+
+CON=$HERE/ovpn-connect.sh
+PIN=$HERE/resolve-ovpn-remote.sh
+MENU=$HERE/run.sh
+PRX=$ROOT/core/ovpn-proxy.py
 
 if [ -t 1 ]; then
     # 37m rather than 90m for the asides. "Bright black" on a black terminal
@@ -44,9 +50,9 @@ warn() { printf '  %s[warn]%s %s\n' "$C_YELLOW" "$C_OFF" "$*"; }
 die()  { printf '\n  %s[fail]%s %s\n\n' "$C_RED" "$C_OFF" "$*" >&2; exit 1; }
 
 for f in "$CON" "$PIN" "$MENU"; do
-    [ -f "$f" ] || die "$(basename -- "$f") is missing from $ROOT.
+    [ -f "$f" ] || die "$(basename -- "$f") is missing from $HERE.
          The symlink points at a copy of the repo that has moved or been
-         deleted. Re-run ./ovpn install from wherever the repo is now."
+         deleted. Re-run ./linux/ovpn install from wherever the repo is now."
 done
 
 # --------------------------------------------------------------- the folder
@@ -74,9 +80,10 @@ cwd_folder() {
         *' --retest '*|*' --success-dir '*|*' --sitetest-dir '*) return 1 ;;
     esac
 
-    # The repo root holds scripts, not configs. Running `ovpn connect` from
-    # there means pinned/, which is what the script does by itself.
-    [ "$PWD" = "$ROOT" ] && return 1
+    # The repo root and linux/ hold folders and scripts, not configs. Running
+    # `ovpn connect` from either means pinned/, which is what the script does
+    # by itself.
+    if [ "$PWD" = "$ROOT" ] || [ "$PWD" = "$HERE" ]; then return 1; fi
 
     # A folder with no .ovpn in it is not a config folder, and pretending it
     # is would turn `ovpn stop` typed in your home directory into an error
@@ -175,7 +182,7 @@ add_to_path() {
 # that to its parent. So the rc file has to source the file that defines it.
 add_shell_function() {
     local rc line
-    line=". \"$ROOT/ovpn-shell.sh\""
+    line=". \"$HERE/ovpn-shell.sh\""
 
     case ${SHELL##*/} in
         zsh)  rc=$HOME/.zshrc ;;
@@ -215,7 +222,7 @@ do_install() {
 
     # The executable bit does not survive a zip, and a tree cloned on Windows
     # never had one to record. Everything here is run through `bash` anyway,
-    # so this is only so that ./ovpn-connect.sh keeps working by hand.
+    # so this is only so that ./linux/ovpn-connect.sh keeps working by hand.
     chmod +x -- "$SELF_PATH" "$CON" "$PIN" "$MENU" 2>/dev/null || true
 
     printf '\n'
@@ -360,7 +367,7 @@ usage() {
         that to its parent. \`ovpn install\` adds the line that defines it.
         By hand, in ~/.bashrc:
 
-          . $ROOT/ovpn-shell.sh
+          . $HERE/ovpn-shell.sh
 
         With more than one proxy up it wants to be told which - or name one
         once, in the same rc file, and stop thinking about it:
@@ -383,11 +390,45 @@ usage() {
           --bind ADDR     which address to leave from. Needed only when a
                           tunnel owns the default route, or this goes out
                           through the very thing it exists to avoid
+          --warm N        connections to the exit opened before they are
+                          asked for. Two by default, four at most, 0 off.
+                          Removes two round trips from every new connection:
+                          measured 343 ms down to 140 ms, one at a time
 
-        Carries HTTP and HTTPS, which is what a browser asks of a proxy.
-        Nothing else on the machine goes through it. Ctrl-C ends it, and
-        there is nothing to put back - it changes no routes, no DNS and no
-        system setting while it runs.
+        Carries HTTP and SOCKS5, on the one port, decided by the first byte
+        a client sends - 0x05 is SOCKS5, a letter is HTTP. Nothing has to be
+        configured to get both and there is no second port. Nothing else on
+        the machine goes through it. Ctrl-C ends it, and there is nothing to
+        put back - it changes no routes, no DNS and no system setting while
+        it runs.
+
+    ${C_CYAN}Telegram must be set to SOCKS5, not HTTP${C_OFF}
+
+        Told its proxy is HTTP, Telegram Desktop turns its TCP transport off
+        altogether:
+
+          const auto useTcp = (proxyType != ProxyData::Type::Http);
+
+        After that it never tunnels. Every MTProto packet becomes its own
+        POST to port 80 in the clear, one request per message, and no
+        setting changes it - the branch has no exception in it. On SOCKS5 it
+        keeps one long-lived connection instead, which is what the Windows
+        system proxy was quietly doing all along and why that always felt
+        quicker than pointing Telegram at this by hand.
+
+        So, in Connection type - Custom - SOCKS5:
+
+          127.0.0.1   the port this is on   no username, no password
+
+        No password because it listens on the loopback only, and one between
+        two programs on the same machine protects nothing the machine does
+        not already. The exit sees none of this: a SOCKS5 request becomes
+        the same CONNECT it has always been sent, so Surfshark's own SOCKS5
+        being discontinued has no bearing on it.
+
+        A name asked for over SOCKS5 is forwarded rather than resolved here
+        - the socks5h behaviour - so no local resolver is given the chance
+        to answer for it. Telegram asks by address anyway.
 
         Two things stay off the wire so it survives the path: the address,
         which is read out of the pinned config rather than looked up again,
@@ -596,7 +637,7 @@ find_python() {
 # by hand along the way. Neither bash nor curl will do that.
 prx() {
     local py
-    [ -f "$PRX" ] || die "ovpn-proxy.py is missing from $ROOT.
+    [ -f "$PRX" ] || die "ovpn-proxy.py is missing from $ROOT/core.
          It ships with the repo - this copy is older than the command."
     py=$(find_python) || die 'ovpn proxy needs python 3, and neither python3
          nor python on your PATH is it. Nothing else in this repo needs it,

@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SPHERE LAB — twisted core</title>
+<style>
+  /* A bench for sphere.js, nothing else. It rebuilds just enough of the app -
+     the .hero palette variables, the 210px stage, the glow and orbit rings -
+     for the core to sit in the same light it will sit in for real. Open it
+     directly in Edge; no server, no build. */
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    color-scheme: dark;
+    --bg: #111113;
+    --text: #EDEEF0;
+    --text-muted: #B0B4BA;
+    --text-off: #777B84;
+    --border: #43484E;
+  }
+
+  html, body { height: 100%; overflow: hidden; }
+
+  body {
+    background:
+      radial-gradient(120% 90% at 76% 22%, #17171b 0%, var(--bg) 62%);
+    color: var(--text);
+    font-family: 'Segoe UI Variable Display', 'Segoe UI Variable',
+                 'Segoe UI', system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 20px;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+    display: grid;
+    grid-template-columns: 264px 1fr;
+  }
+
+  .mono {
+    font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ------------------------------------------------------------- the rail */
+
+  .rail {
+    border-right: 1px solid rgba(255, 255, 255, 0.055);
+    padding: 34px 0 22px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .rail h1 {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.19em;
+    color: var(--text-off);
+    padding: 0 26px;
+    margin-bottom: 3px;
+  }
+
+  .rail p.sub {
+    font-size: 12.5px;
+    line-height: 18px;
+    color: var(--text-off);
+    padding: 0 26px;
+    max-width: 30ch;
+    margin-bottom: 30px;
+  }
+
+  .states { display: flex; flex-direction: column; }
+
+  /* Each state is a row, not a pill in a row of pills: the palette is the
+     point, so it gets the width to show three swatches and a name. */
+  .states button {
+    display: grid;
+    grid-template-columns: 44px 1fr;
+    align-items: center;
+    gap: 14px;
+    padding: 11px 26px;
+    border: 0;
+    border-left: 2px solid transparent;
+    background: none;
+    color: var(--text-muted);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 120ms linear, color 120ms linear;
+  }
+
+  .states button:hover { background: rgba(255, 255, 255, 0.032); color: var(--text); }
+
+  .states button[aria-pressed='true'] {
+    color: var(--text);
+    border-left-color: var(--sw-a);
+    background: rgba(255, 255, 255, 0.045);
+  }
+
+  .swatch { display: flex; height: 14px; border-radius: 2px; overflow: hidden; }
+  .swatch i { flex: 1; }
+  .swatch i:nth-child(1) { background: var(--sw-a); }
+  .swatch i:nth-child(2) { background: var(--sw-b); }
+  .swatch i:nth-child(3) { background: var(--sw-c); }
+
+  .states button small {
+    display: block;
+    font-size: 11px;
+    line-height: 15px;
+    color: var(--text-off);
+  }
+
+  .readout {
+    margin-top: auto;
+    padding: 18px 26px 0;
+    font-size: 11.5px;
+    line-height: 18px;
+    color: var(--text-off);
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  .readout b { color: var(--text-muted); font-weight: 500; }
+
+  /* ------------------------------------------------------------ the stage */
+
+  .bench {
+    position: relative;
+    display: grid;
+    place-items: center;
+    /* the stage sits above centre - a ball parked dead-centre in a big empty
+       box reads as a placeholder */
+    padding-bottom: 84px;
+  }
+
+  .grid {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.021) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.021) 1px, transparent 1px);
+    background-size: 46px 46px;
+    mask-image: radial-gradient(60% 55% at 50% 44%, #000 0%, transparent 78%);
+  }
+
+  .caption {
+    position: absolute;
+    left: 46px;
+    bottom: 38px;
+    max-width: 46ch;
+    font-size: 12.5px;
+    line-height: 19px;
+    color: var(--text-off);
+  }
+  .caption a { color: var(--text-muted); }
+
+  /* ----------------------------------------------- lifted from app.css */
+
+  .hero {
+    --blob-a: #9c8cff;
+    --blob-b: #4ce2d2;
+    --blob-c: #483ac2;
+    --blob-glow: rgba(102, 90, 231, 0.48);
+    --state-accent: #8c82ff;
+    position: relative;
+  }
+  .hero[data-state='busy'] {
+    --blob-a: #ffcb67; --blob-b: #ff778e; --blob-c: #9b4bda;
+    --blob-glow: rgba(255, 156, 83, 0.42); --state-accent: #FFCA16;
+  }
+  .hero[data-state='on'] {
+    --blob-a: #71f1bd; --blob-b: #3dd4ee; --blob-c: #087e6a;
+    --blob-glow: rgba(48, 218, 171, 0.42); --state-accent: #1FD8A4;
+  }
+  .hero[data-state='fail'] {
+    --blob-a: #ff8495; --blob-b: #b968e7; --blob-c: #8b2849;
+    --blob-glow: rgba(223, 70, 106, 0.36); --state-accent: #FF9592;
+  }
+
+  .blob-stage {
+    width: 210px; height: 210px;
+    display: grid; place-items: center;
+    pointer-events: none;
+  }
+  .blob__glow, .blob__orbit, .blob__halo, .blob__float { position: absolute; display: block; }
+
+  .blob__glow {
+    width: 150px; height: 150px; border-radius: 50%;
+    background: var(--blob-glow);
+    filter: blur(38px); opacity: 0.86;
+    animation: blob-breathe 5.8s ease-in-out infinite;
+  }
+  .blob-stage:has(canvas) .blob__glow { opacity: 0.5; filter: blur(46px); }
+
+  .blob__orbit {
+    border: 1px solid rgba(255, 255, 255, 0.105);
+    border-radius: 49% 51% 53% 47% / 45% 52% 48% 55%;
+    animation: orbit-spin 18s linear infinite;
+  }
+  .blob__orbit i {
+    position: absolute; top: -3px; left: 50%;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--state-accent); box-shadow: 0 0 12px var(--state-accent);
+  }
+  .blob__orbit--outer { width: 190px; height: 184px; transform: rotate(-12deg); }
+  .blob__orbit--inner {
+    width: 163px; height: 170px; opacity: 0.62;
+    animation-duration: 13s; animation-direction: reverse;
+  }
+  .blob__orbit--inner i { width: 4px; height: 4px; }
+
+  .blob__halo {
+    width: 145px; height: 145px; border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    animation: halo-pulse 4.2s ease-out infinite;
+  }
+  .blob__float { width: 132px; height: 132px; }
+
+  canvas.blob__body {
+    position: absolute; left: 50%; top: 50%;
+    width: 159.1%; height: 159.1%;
+    transform: translate(-50%, -50%);
+    background: transparent;
+    filter: drop-shadow(3px 9px 16px color-mix(in srgb, var(--blob-glow), transparent 42%));
+  }
+
+  @keyframes blob-breathe {
+    0%, 100% { transform: scale(0.88); opacity: 0.68; }
+    50%      { transform: scale(1.13); opacity: 0.96; }
+  }
+  @keyframes orbit-spin { to { transform: rotate(348deg); } }
+  @keyframes halo-pulse {
+    0%   { transform: scale(0.82); opacity: 0; }
+    30%  { opacity: 0.3; }
+    100% { transform: scale(1.3); opacity: 0; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="rail">
+  <h1>SPHERE LAB</h1>
+  <p class="sub">sphere.js against the four connection states, in the app&rsquo;s own stage.</p>
+
+  <div class="states">
+    <button type="button" data-state="off" aria-pressed="true"
+            style="--sw-a:#9c8cff;--sw-b:#4ce2d2;--sw-c:#483ac2">
+      <span class="swatch"><i></i><i></i><i></i></span>
+      <span>idle<small>slow knead, wide twist</small></span>
+    </button>
+    <button type="button" data-state="busy" aria-pressed="false"
+            style="--sw-a:#ffcb67;--sw-b:#ff778e;--sw-c:#9b4bda">
+      <span class="swatch"><i></i><i></i><i></i></span>
+      <span>negotiating<small>wrung tight, spinning</small></span>
+    </button>
+    <button type="button" data-state="on" aria-pressed="false"
+            style="--sw-a:#71f1bd;--sw-b:#3dd4ee;--sw-c:#087e6a">
+      <span class="swatch"><i></i><i></i><i></i></span>
+      <span>connected<small>settled, smooth turn</small></span>
+    </button>
+    <button type="button" data-state="fail" aria-pressed="false"
+            style="--sw-a:#ff8495;--sw-b:#b968e7;--sw-c:#8b2849">
+      <span class="swatch"><i></i><i></i><i></i></span>
+      <span>failed<small>slack, nearly stopped</small></span>
+    </button>
+  </div>
+
+  <p class="readout mono">
+    <b id="fps">—</b> fps · <b id="tris">—</b> tris<br>
+    <b id="size">—</b> of sphere.js
+  </p>
+</nav>
+
+<div class="bench">
+  <span class="grid"></span>
+
+  <section class="hero" id="hero" data-state="off">
+    <div class="blob-stage">
+      <span class="blob__glow"></span>
+      <span class="blob__orbit blob__orbit--outer"><i></i></span>
+      <span class="blob__orbit blob__orbit--inner"><i></i></span>
+      <span class="blob__halo"></span>
+      <span class="blob__float">
+        <canvas class="blob__body" id="orbCanvas"></canvas>
+      </span>
+    </div>
+  </section>
+
+  <p class="caption">
+    Noise displacement along the normals, a sine twist travelling up Y, and the
+    same distortion read back through a cosine palette &mdash; after
+    <a href="https://tympanus.net/codrops/2021/01/26/twisted-colorful-spheres-with-three-js/">Twisted
+    Colorful Spheres with Three.js</a>, rebuilt on raw WebGL2 so nothing has to ship.
+    Shape and pace live in the <span class="mono">STATES</span> table at the
+    bottom of sphere.js.
+  </p>
+</div>
+
+<script src="sphere.js"></script>
+<script>
+  const hero = document.getElementById('hero');
+  const buttons = [...document.querySelectorAll('.states button')];
+
+  const show = (state) => {
+    const button = buttons.find(b => b.dataset.state === state);
+    if (!button) return;
+    hero.dataset.state = state;
+    for (const other of buttons)
+      other.setAttribute('aria-pressed', String(other === button));
+  };
+
+  for (const button of buttons)
+    button.addEventListener('click', () => show(button.dataset.state));
+
+  /* #busy, #on, #fail - so a state can be linked to, and so a screenshot
+     tool can ask for one without knowing how to click. */
+  addEventListener('hashchange', () => show(location.hash.slice(1)));
+  if (location.hash) show(location.hash.slice(1));
+
+  if (!window.OrbCore.init(document.getElementById('orbCanvas')))
+    document.querySelector('.caption').textContent = 'No WebGL2 on this context.';
+
+  /* Counted the same way the app would feel it: frames actually presented. */
+  let frames = 0, mark = performance.now();
+  (function tick(now) {
+    requestAnimationFrame(tick);
+    frames++;
+    if (now - mark < 500) return;
+    document.getElementById('fps').textContent = Math.round(frames * 1000 / (now - mark));
+    frames = 0; mark = now;
+  })(mark);
+
+  document.getElementById('tris').textContent = (20 * 4 ** 4).toLocaleString();
+  fetch('sphere.js').then(r => r.blob())
+    .then(b => { document.getElementById('size').textContent = (b.size / 1024).toFixed(1) + ' KB'; })
+    .catch(() => { document.getElementById('size').textContent = 'n/a'; });
+</script>
+</body>
+</html>
