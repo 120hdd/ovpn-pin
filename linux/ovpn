@@ -196,8 +196,26 @@ add_shell_function() {
         return 0
     fi
 
-    if [ -f "$rc" ] && grep -qsF 'ovpn-shell.sh' "$rc"; then
+    if [ -f "$rc" ] && grep -qsF "$line" "$rc"; then
         note "$rc already sources ovpn-shell.sh"
+        return 0
+    fi
+
+    # A line that names ovpn-shell.sh but is not this one is an older install
+    # pointing where the file used to be. Worth repairing rather than adding
+    # beside, and worth noticing at all: a `.` on a path that is gone fails
+    # that one startup line and the shell carries straight on, so the only
+    # symptom is px quietly not existing.
+    if [ -f "$rc" ] && grep -qsE '^[[:space:]]*\..*ovpn-shell\.sh' "$rc"; then
+        if sed -i.ovpn-bak "s|^[[:space:]]*\..*ovpn-shell\.sh.*$|$line|" "$rc" 2>/dev/null
+        then
+            ok "pointed $rc at this copy of ovpn-shell.sh"
+            note "     the line it replaced is in $rc.ovpn-bak"
+        else
+            warn "$rc sources ovpn-shell.sh from somewhere else, and could not"
+            note "       be rewritten. Change that line by hand to:"
+            note "     $line"
+        fi
         return 0
     fi
 
