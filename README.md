@@ -525,6 +525,37 @@ can only fail at the bind, and that is waited for too — a detached proxy that
 died quietly would leave `stop` finding nothing while `connect` found the port
 taken.
 
+Each also keeps count of what it carries. Beside the state file, every proxy
+writes `.state/traffic-<port>.json` once a second — bytes out, bytes back, and
+the rate over the last second — and deletes it when it stops. The counting
+happens where the bytes are forwarded, so it is this proxy's traffic and not
+the machine's, and the two directions are told apart rather than summed. It is
+there for the Windows app's meter to read, and it is plain JSON, so `cat` or
+`jq` will do as well:
+
+```
+$ jq . .state/traffic-8899.json
+{ "pid": 486367, "port": 8899, "up": 1840244, "down": 58221097,
+  "up_bps": 12480.0, "down_bps": 984320.0, "since": ..., "at": ... }
+```
+
+Beside it, `.state/hosts-<port>.json` every other second: the same bytes split
+by where they went and — on Windows — which program asked, looked up from the
+source port in the machine's own TCP table. Five hundred rows are kept and the
+busiest hundred written, with `total` saying how many there were.
+
+```
+$ jq '.rows[0]' .state/hosts-8899.json
+{ "host": "cdn.jsdelivr.net", "app": "msedge.exe", "pid": 21440,
+  "up": 205312, "down": 24117248, "hits": 42, "live": 2,
+  "first": ..., "last": ... }
+```
+
+A file left behind by a proxy that was killed outright is stale by definition,
+so `at` is written with every reading and anything reading this should check
+it. Nothing in the CLI does — the numbers are only ever asked for by something
+that already knows the proxy is up.
+
 They know nothing of each other. Starting, stopping or reconnecting one
 leaves the other serving, because there is no shared state to disturb — no
 routes, no DNS, no system proxy setting. Measured on one line, both up at

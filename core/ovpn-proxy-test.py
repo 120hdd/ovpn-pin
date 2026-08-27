@@ -24,6 +24,7 @@ forwarding path and the failure is silent everywhere a browser can see.
 import importlib.util
 import os
 import socket
+import sys
 import threading
 import time
 
@@ -180,8 +181,12 @@ def start_proxy(up_port, exit_timeout=5):
 
     def loop():
         while True:
-            conn, _ = s.accept()
-            threading.Thread(target=px.serve_one, args=(conn, exit_, True),
+            conn, who = s.accept()
+            # The source port too, exactly as serve() hands it over - it is
+            # what the ledger looks the calling program up by, and a harness
+            # that dropped it would test a path the real one does not take.
+            threading.Thread(target=px.serve_one,
+                             args=(conn, exit_, True, who[1]),
                              daemon=True).start()
     threading.Thread(target=loop, daemon=True).start()
     return s.getsockname()[1]
@@ -392,10 +397,122 @@ def test_socks5_refused():
     c.close()
 
 
+def test_meter():
+    print('\nthe meter under a tunnel')
+    # Reset rather than read as a delta: everything above ran through the
+    # same module-level counter, and a test that only checked it went up
+    # would pass on a meter that counted the same byte twice.
+    px.METER['up'] = px.METER['down'] = 0
+    port = start_proxy(start_upstream())
+    c = socket.create_connection(('127.0.0.1', port), timeout=5)
+    c.settimeout(5)
+    c.sendall(b'CONNECT example.com:443 HTTP/1.1\r\n'
+              b'Host: example.com:443\r\n\r\n')
+    time.sleep(0.4)
+    c.recv(4096)
+    # Past the 200 the tunnel is opaque and every byte in it is countable.
+    # The head and the exit's answer are not counted - they are the proxy
+    # talking to the exit on its own account, not traffic being carried.
+    c.sendall(b'x' * 4000)
+    time.sleep(0.4)
+    back = c.recv(65536)
+    check('what went out is counted, and only once',
+          px.METER['up'], 4000)
+    # The upstream stub answers b'echo:' + what it was sent.
+    check('and what came back is counted the other way',
+          px.METER['down'], len(back))
+    check('the two directions are told apart',
+          px.METER['down'] == 4005 and px.METER['up'] == 4000, True)
+    c.close()
+
+    # And the reading a window would actually read.
+    stop = threading.Event()
+    threading.Thread(target=px.meter_writer, args=(port, stop),
+                     daemon=True).start()
+    time.sleep(1.3)
+    got = px.read_traffic(port)
+    stop.set()
+    check('the file says what the counter says',
+          got and (got['up'], got['down']) == (4000, 4005), True)
+    check('and says which process is claiming it',
+          got and got['pid'] == os.getpid(), True)
+    px.clear_traffic(port)
+    check('and goes when the proxy does', px.read_traffic(port), None)
+
+
+def test_ledger():
+    print('\nthe ledger: where it went, and who asked')
+    px.METER['up'] = px.METER['down'] = 0
+    px.LEDGER.rows.clear()
+    port = start_proxy(start_upstream())
+
+    # A tunnel, and plain HTTP to somewhere else down a second connection.
+    c = socket.create_connection(('127.0.0.1', port), timeout=5)
+    c.settimeout(5)
+    c.sendall(b'CONNECT news.example.com:443 HTTP/1.1\r\n'
+              b'Host: news.example.com:443\r\n\r\n')
+    time.sleep(0.4)
+    c.recv(4096)
+    c.sendall(b'x' * 3000)
+    time.sleep(0.3)
+    c.recv(65536)
+
+    d = socket.create_connection(('127.0.0.1', port), timeout=5)
+    d.settimeout(5)
+    d.sendall(b'GET http://plain.example.org/a HTTP/1.1\r\n'
+              b'Host: plain.example.org\r\n\r\n')
+    time.sleep(0.4)
+    d.recv(65536)
+
+    rows, total = px.LEDGER.snapshot(20)
+    by = {r['host']: r for r in rows}
+    check('both destinations are listed, and only those',
+          sorted(by), ['news.example.com', 'plain.example.org'])
+    check('the port is not part of the name', total, 2)
+    check('the tunnel is credited what crossed it',
+          by['news.example.com']['up'], 3000)
+    check('and the plain request the other way',
+          by['plain.example.org']['down'] > 0, True)
+    check('the ledger adds up to the meter',
+          sum(r['up'] + r['down'] for r in rows),
+          px.METER['up'] + px.METER['down'])
+
+    # This test opened both connections, so the program it names is this one.
+    # Only on Windows: nothing else has a table to look the port up in.
+    if os.name == 'nt':
+        check('and names the program that opened it',
+              by['news.example.com']['app'], os.path.basename(sys.executable))
+        check('with its pid', by['news.example.com']['pid'], os.getpid())
+
+    check('open connections are marked live',
+          by['news.example.com']['live'], 1)
+    c.close()
+    d.close()
+    time.sleep(0.5)
+    after = {r['host']: r for r in px.LEDGER.snapshot(20)[0]}
+    # The tunnel only. A kept-alive plain-HTTP connection stays live until
+    # the exit lets go of its end too - serve_http waits on the response pump
+    # after the client has gone - and while that socket is open the row
+    # saying so is the truth, not a leak.
+    check('and stop being once they close',
+          after['news.example.com']['live'], 0)
+    check('but what they moved is still on the books',
+          after['news.example.com']['up'], 3000)
+
+    # The file the window reads.
+    px.write_hosts(port, *px.LEDGER.snapshot(20), time.time())
+    got = px.read_hosts(port)
+    check('the file carries the rows', len(got['rows']), 2)
+    check('and says whose they are', got['pid'], os.getpid())
+    px.clear_hosts(port)
+    check('and goes when the proxy does', px.read_hosts(port), None)
+
+
 def main():
     for test in (test_keepalive, test_body, test_pipelining, test_connect,
                  test_connect_refused, test_long_poll, test_dead_exit,
-                 test_chunked, test_socks5, test_socks5_refused):
+                 test_chunked, test_socks5, test_socks5_refused, test_meter,
+                 test_ledger):
         test()
     print()
     if failed:

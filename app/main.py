@@ -401,6 +401,58 @@ class Api:
             except Exception:
                 pass
 
+    def traffic(self):
+        """What the meter says right now, for a page that has just loaded.
+
+        The push below is what keeps it moving; this exists so that a window
+        reopened onto a connection that was already up does not have to sit
+        with an empty meter until the next tick.
+        """
+        try:
+            return self._engine.traffic() or {'live': False}
+        except Exception:
+            return {'live': False}
+
+    def hosts(self):
+        """The log sheet's list, pulled while it is open.
+
+        Pulled rather than pushed, unlike the meter. The meter is four numbers
+        and is on screen whenever a route is up; this is a hundred rows and is
+        on screen only while somebody is looking at it, and pushing it every
+        second into a window with the sheet closed would be several kilobytes
+        of JSON a second spent on nothing.
+        """
+        try:
+            return self._engine.hosts() or {'live': False, 'rows': []}
+        except Exception:
+            return {'live': False, 'rows': []}
+
+    def _watch_traffic(self):
+        """Once a second while something is up, and once more when it stops.
+
+        A second is what the worker writes at, so asking more often would
+        only re-read the same file. It is also slow enough that the page has
+        to do the smoothing - which it should, because a counter that steps
+        once a second looks like it is measuring in steps, and bytes do not
+        arrive that way.
+
+        Nothing is sent while disconnected. The page is told once, so it can
+        put the meter away, and then left alone - an idle window should not
+        be evaluating a script every second for the rest of the afternoon.
+        """
+        quiet = True
+        while not self._stop.wait(1.0):
+            try:
+                reading = self._engine.traffic()
+            except Exception:
+                reading = None
+            if reading:
+                quiet = False
+                self._emit('Traffic', reading)
+            elif not quiet:
+                quiet = True
+                self._emit('Traffic', {'live': False})
+
     def setSystemProxy(self, on):
         """Whether connecting should move the whole machine or just serve.
 
@@ -1389,6 +1441,8 @@ def main():
         # no diagnostic. Which is exactly what one of them did.
         for step in (tray.start, dress_window,
                      lambda: threading.Thread(target=api._watch_self,
+                                              daemon=True).start(),
+                     lambda: threading.Thread(target=api._watch_traffic,
                                               daemon=True).start()):
             try:
                 step()

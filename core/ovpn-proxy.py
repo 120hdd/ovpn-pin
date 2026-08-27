@@ -50,6 +50,7 @@ import argparse
 import base64
 import collections
 import concurrent.futures as cf
+import json
 import os
 import re
 import select
@@ -830,13 +831,281 @@ def do_sweep(folder, out_dir, sites, timeout, jobs, first, one_per,
         print('\n  ovpn proxy\n')
 
 
-#-------------------------------------------------------------------- serving
+#---------------------------------------------------------------- the meter
 
-def relay(a, b):
+# How much has gone each way since this proxy came up, in bytes.
+#
+# Counted here rather than read off a network adapter, because this process
+# is the only thing on the path that sees both directions and can tell them
+# apart. An adapter counter would fold in every other program on the machine,
+# and the exit's own numbers - if it published any - would be the sum of
+# everyone using it.
+#
+# "Up" is what left this machine towards the exit and "down" is what came
+# back. The credentials this proxy adds to every plain-HTTP request are
+# counted up with the request they ride on: they did cross the wire, and the
+# honest number here is what was actually sent, not what the browser handed
+# us to send.
+METER = {'up': 0, 'down': 0}
+
+# A lock on a hot path is worth a word. It is taken once per 64KB chunk -
+# a few hundred times a second on a fast line - and += on a dict value is
+# a read and a write with a bytecode boundary in between, so two relay
+# threads finishing at once really can lose a chunk. A meter that quietly
+# undercounts is worse than one that costs a lock.
+METER_LOCK = threading.Lock()
+
+
+def meter(direction, n):
+    if n:
+        with METER_LOCK:
+            METER[direction] += n
+
+
+#--------------------------------------------------------------- the ledger
+
+# The same bytes, split by where they went and who asked for them.
+#
+# METER above answers "how much"; this answers "what is using it". They are
+# counted at the same moment and under the same lock, so the two can never
+# disagree about a chunk - a ledger that summed to a different number than
+# the meter beside it would be worse than no ledger.
+#
+# Keyed by destination and program together, not by one or the other. Grouped
+# only by host, a browser and a backup client both talking to the same CDN
+# become one line and the question "what is using my connection" has no
+# answer. Grouped only by program, "where did the requests go" has none.
+# Keeping the pair lets the window group it either way, which is what it does.
+
+
+class Ledger:
+    # Enough that nothing anyone actually runs hits it - a browser with fifty
+    # tabs open touches a few hundred hosts in an hour - and small enough
+    # that a machine talking to a different name every second cannot grow
+    # this without limit. Over the line, the quietest and oldest rows go.
+    LIMIT = 500
+
+    def __init__(self):
+        self.rows = {}
+
+    def find(self, host, app, pid):
+        """The row for this pair, opening one if it is new. Called under
+        METER_LOCK by the caller, which is also what makes the counting in
+        `Carried.moved` a single atomic step."""
+        key = (host, app)
+        row = self.rows.get(key)
+        if row is None:
+            if len(self.rows) >= self.LIMIT:
+                self.prune()
+            now = time.time()
+            row = self.rows[key] = {'host': host, 'app': app, 'pid': pid,
+                                    'up': 0, 'down': 0, 'hits': 0, 'live': 0,
+                                    'first': now, 'last': now}
+        return row
+
+    def prune(self):
+        """A quarter of the table, cheapest first: nothing open, least moved,
+        longest ago. Dropping the single oldest row each time would spend the
+        rest of the run doing this on every new host."""
+        cold = sorted(self.rows.items(),
+                      key=lambda kv: (kv[1]['live'] > 0,
+                                      kv[1]['up'] + kv[1]['down'],
+                                      kv[1]['last']))
+        for key, _ in cold[:max(1, self.LIMIT // 4)]:
+            del self.rows[key]
+
+    def snapshot(self, top):
+        """The busiest rows, newest reading of each, for whatever is drawing
+        them. Copied under the lock - handing the live dicts out would let a
+        writer mutate them halfway through being serialised."""
+        with METER_LOCK:
+            rows = [dict(r) for r in self.rows.values()]
+            total = len(self.rows)
+        rows.sort(key=lambda r: r['up'] + r['down'], reverse=True)
+        return rows[:top], total
+
+
+LEDGER = Ledger()
+
+
+class Carried:
+    """One client connection: who opened it, where it asked to go, and how
+    much crossed it.
+
+    A connection can change its mind about the destination - a kept-alive
+    plain-HTTP connection carries requests to whatever host each one names -
+    so the row is looked up again whenever the target changes rather than
+    fixed when the connection was accepted.
+    """
+
+    __slots__ = ('app', 'pid', 'host', 'row')
+
+    def __init__(self, app=None, pid=0):
+        self.app, self.pid = app, pid
+        self.host, self.row = None, None
+
+    def going_to(self, target):
+        """`example.com:443`, `[::1]:80`, or a bare host. The port is dropped:
+        a list that says example.com twice because one request went to 80 and
+        the next to 443 is a list nobody can read."""
+        if not target:
+            return
+        host = target.rsplit(':', 1)[0] if ':' in target.rsplit(']', 1)[-1] \
+            else target
+        host = host.strip('[]').lower() or target.lower()
+        if host == self.host:
+            return
+        self.leave()
+        self.host = host
+        with METER_LOCK:
+            self.row = LEDGER.find(host, self.app, self.pid)
+            self.row['hits'] += 1
+            self.row['live'] += 1
+            self.row['last'] = time.time()
+
+    def moved(self, direction, n):
+        """The one place bytes are counted. Both totals move together under
+        one lock, so the ledger always adds up to the meter."""
+        if not n:
+            return
+        with METER_LOCK:
+            METER[direction] += n
+            if self.row is not None:
+                self.row[direction] += n
+                self.row['last'] = time.time()
+
+    def leave(self):
+        """This connection is no longer on that host. `live` is what puts the
+        dot beside a row in the window, and a count that is only ever
+        incremented would light every row that had ever been used."""
+        if self.row is None:
+            return
+        with METER_LOCK:
+            self.row['live'] = max(0, self.row['live'] - 1)
+            self.row['last'] = time.time()
+        self.row = None
+
+
+#------------------------------------------------------------ who asked for it
+
+# Which program opened the connection, on Windows, by looking its source port
+# up in the machine's own TCP table.
+#
+# Worth the ctypes because it is the difference between "something on this
+# machine sent 400MB to a CDN" and "your backup client did". Nothing else the
+# proxy can see says which program it is talking to: everything arrives from
+# 127.0.0.1 and the only thing telling one client apart from another is the
+# port it came from.
+#
+# Best effort, everywhere. A connection can be gone from the table before it
+# is asked about, the process can be one this one is not allowed to open, and
+# on anything but Windows there is no table here at all - all of which end as
+# a row with no program against it rather than as a failure.
+
+_OWNERS = {'at': 0.0, 'ports': {}}
+_NAMES = {}
+
+# One reader at a time. A browser opening thirty connections at once puts
+# thirty threads through opened_by() in the same millisecond, and without
+# this every one of them finds the table stale and goes off to read it -
+# thirty passes over the machine's whole TCP table to answer one question.
+_OWNERS_LOCK = threading.Lock()
+
+# How stale the table may be. A connection accepted within this of the last
+# read is looked up in what is already in hand; anything older reads it
+# again. Short enough that a program starting up is named correctly, long
+# enough that a burst of fifty connections reads the table once.
+OWNERS_FRESH = 0.7
+
+
+def _read_tcp_table():
+    """Every IPv4 TCP endpoint on the machine and the pid that owns it."""
+    import ctypes
+    from ctypes import wintypes
+
+    class ROW(ctypes.Structure):
+        _fields_ = [('state', wintypes.DWORD), ('local_addr', wintypes.DWORD),
+                    ('local_port', wintypes.DWORD), ('remote_addr', wintypes.DWORD),
+                    ('remote_port', wintypes.DWORD), ('pid', wintypes.DWORD)]
+
+    size = wintypes.DWORD(0)
+    iphlpapi = ctypes.windll.iphlpapi
+    # AF_INET, TCP_TABLE_OWNER_PID_ALL. Asked once for the size it wants and
+    # once for the table, which is the documented shape of this call.
+    iphlpapi.GetExtendedTcpTable(None, ctypes.byref(size), False, 2, 5, 0)
+    buf = ctypes.create_string_buffer(size.value)
+    if iphlpapi.GetExtendedTcpTable(buf, ctypes.byref(size), False, 2, 5, 0) != 0:
+        return {}
+    count = ctypes.cast(buf, ctypes.POINTER(wintypes.DWORD))[0]
+    rows = ctypes.cast(ctypes.byref(buf, ctypes.sizeof(wintypes.DWORD)),
+                       ctypes.POINTER(ROW))
+    out = {}
+    for i in range(count):
+        r = rows[i]
+        # The port sits in the low half in network order, which is the one
+        # detail that makes this call look like it is returning nonsense.
+        out[socket.ntohs(r.local_port & 0xFFFF)] = r.pid
+    return out
+
+
+def _process_name(pid):
+    """chrome.exe, Telegram.exe. The full path is not wanted: it is long
+    enough to push everything else off a 400px row and says nothing the
+    filename does not."""
+    if pid in _NAMES:
+        return _NAMES[pid]
+    name = None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        # PROCESS_QUERY_LIMITED_INFORMATION: the one right that works against
+        # a process running as somebody else without being an administrator.
+        h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        if h:
+            try:
+                buf = ctypes.create_unicode_buffer(512)
+                n = wintypes.DWORD(512)
+                if ctypes.windll.kernel32.QueryFullProcessImageNameW(
+                        h, 0, buf, ctypes.byref(n)):
+                    name = os.path.basename(buf.value)
+            finally:
+                ctypes.windll.kernel32.CloseHandle(h)
+    except Exception:
+        name = None
+    if len(_NAMES) > 512:
+        _NAMES.clear()
+    _NAMES[pid] = name
+    return name
+
+
+def opened_by(source_port):
+    """(program, pid) for whatever holds that local port, or (None, 0)."""
+    if os.name != 'nt' or not source_port:
+        return None, 0
+    pid = _OWNERS['ports'].get(source_port)
+    if pid is None:
+        with _OWNERS_LOCK:
+            # Asked again inside the lock: whoever held it may have been
+            # reading the table this call was about to read.
+            pid = _OWNERS['ports'].get(source_port)
+            if pid is None and time.time() - _OWNERS['at'] > OWNERS_FRESH:
+                try:
+                    _OWNERS['ports'] = _read_tcp_table()
+                except Exception:
+                    _OWNERS['ports'] = {}
+                _OWNERS['at'] = time.time()
+                pid = _OWNERS['ports'].get(source_port)
+    if not pid:
+        return None, 0
+    return _process_name(pid), pid
+
+
+def relay(a, b, note=None):
     """Bytes both ways until either end is done. Past the proxy's 200 this
     connection is opaque - the browser's own TLS to the site it asked for
     runs inside it, and neither we nor the exit can read that."""
     ends = [a, b]
+    note = note or Carried()
     try:
         while True:
             # Anything OpenSSL has already decrypted is invisible to
@@ -858,9 +1127,13 @@ def relay(a, b):
                 if not chunk:
                     return
                 (b if s is a else a).sendall(chunk)
+                # a is the client, b is the exit: read from a is on its way
+                # out, read from b is on its way back.
+                note.moved('up' if s is a else 'down', len(chunk))
     except (OSError, ssl.SSLError) as e:
         log('WARN', f'tunnel ended: {e.__class__.__name__}: {e}')
     finally:
+        note.leave()
         for s in ends:
             try:
                 s.close()
@@ -964,7 +1237,31 @@ def body_size(head):
     return size
 
 
-def pump_bytes(src, dst, watch_for_407=False):
+def head_host(head):
+    """Where a plain-HTTP request is addressed.
+
+    The request line first, because a request to a proxy carries the whole
+    URL - `GET http://example.com/x HTTP/1.1` - and that is the one the exit
+    will act on. The Host header second, for the rare client that sends a
+    relative path anyway. Nothing is trusted from either beyond being written
+    into a list: whatever a program puts in a header is that program's text,
+    not ours.
+    """
+    try:
+        line = head.split(b'\r\n', 1)[0].decode('latin-1', 'replace')
+        target = line.split(' ')[1]
+    except (IndexError, AttributeError):
+        target = ''
+    if '://' in target:
+        rest = target.split('://', 1)[1]
+        return rest.split('/', 1)[0]
+    for raw in head.split(b'\r\n')[1:]:
+        if raw[:5].lower() == b'host:':
+            return raw[5:].decode('latin-1', 'replace').strip()
+    return target.split('/', 1)[0] if target and not target.startswith('/') else ''
+
+
+def pump_bytes(src, dst, direction=None, watch_for_407=False, note=None):
     """One direction, untouched, until the source is done.
 
     With watch_for_407 the bytes are still forwarded verbatim, but the status
@@ -981,6 +1278,8 @@ def pump_bytes(src, dst, watch_for_407=False):
             if not chunk:
                 return
             dst.sendall(chunk)              # forward first, look afterwards
+            if direction and note:
+                note.moved(direction, len(chunk))
             if watch_for_407:
                 tail = (tail + chunk)[-2048:]
                 for line in tail.split(b'\r\n'):
@@ -1005,7 +1304,7 @@ def pump_bytes(src, dst, watch_for_407=False):
             pass
 
 
-def forward_chunked(client, upstream, pending):
+def forward_chunked(client, upstream, pending, note):
     """A chunked body, frame by frame, stopping after the zero chunk.
 
     Nothing is rewritten - the frames go across exactly as they arrive. The
@@ -1023,6 +1322,7 @@ def forward_chunked(client, upstream, pending):
             pending += chunk
         line, _, pending = pending.partition(b'\r\n')
         upstream.sendall(line + b'\r\n')
+        note.moved('up', len(line) + 2)
         try:
             n = int(line.split(b';')[0].strip(), 16)
         except ValueError:
@@ -1036,12 +1336,13 @@ def forward_chunked(client, upstream, pending):
                     return None
             take, pending = pending[:need], pending[need:]
             upstream.sendall(take)
+            note.moved('up', len(take))
             need -= len(take)
         if n == 0:
             return pending                  # trailers, then the next head
 
 
-def pump_requests(client, upstream, exit_, head, pending):
+def pump_requests(client, upstream, exit_, head, pending, note):
     """Every request this connection carries, each one with our credentials -
     not just the first.
 
@@ -1059,6 +1360,9 @@ def pump_requests(client, upstream, exit_, head, pending):
     both ends.
     """
     while True:
+        # Each request names its own host on a kept-alive connection, so
+        # where this is going is asked again rather than remembered.
+        note.going_to(head_host(head))
         size = body_size(head)
         if size is CANNOT_TELL:
             log('WARN', 'refusing a request whose framing does not parse')
@@ -1071,8 +1375,10 @@ def pump_requests(client, upstream, exit_, head, pending):
             # the exit answers 407 to the next, and the connection is back to
             # the behaviour the per-request auth above exists to prevent.
             # Following the frames costs a few lines and keeps the loop.
-            upstream.sendall(with_our_auth(head, exit_))
-            pending = forward_chunked(client, upstream, pending)
+            authed = with_our_auth(head, exit_)
+            upstream.sendall(authed)
+            note.moved('up', len(authed))
+            pending = forward_chunked(client, upstream, pending, note)
             if pending is None:
                 return
         else:
@@ -1082,13 +1388,16 @@ def pump_requests(client, upstream, exit_, head, pending):
             # the body separately doubled the packets on the hot path for no
             # gain - and handed the line's DPI two small flights to look at
             # where there could have been one.
-            upstream.sendall(with_our_auth(head, exit_) + body)
+            out = with_our_auth(head, exit_) + body
+            upstream.sendall(out)
+            note.moved('up', len(out))
             left = size - len(body)
             while left > 0:
                 chunk = client.recv(min(65536, left))
                 if not chunk:
                     return
                 upstream.sendall(chunk)
+                note.moved('up', len(chunk))
                 left -= len(chunk)
 
         head, pending = read_head(client, pending)
@@ -1195,7 +1504,7 @@ def open_tunnel(exit_, target, head=None):
             upstream, warm = exit_._dial(), False
 
 
-def serve_socks(client, exit_, quiet):
+def serve_socks(client, exit_, quiet, note):
     """SOCKS5 in, CONNECT out.
 
     Here because of what Telegram does with the alternative. tdesktop sets
@@ -1215,6 +1524,7 @@ def serve_socks(client, exit_, quiet):
         return
 
     target = f'{host}:{port}'
+    note.going_to(target)
     try:
         upstream, reply, spare = open_tunnel(exit_, target)
     except (OSError, ssl.SSLError) as e:
@@ -1240,10 +1550,10 @@ def serve_socks(client, exit_, quiet):
     if spare:
         # Anything the exit pipelined behind its 200 is tunnel content.
         client.sendall(spare)
-    relay(client, upstream)
+    relay(client, upstream, note)
 
 
-def serve_http(client, exit_, quiet, first):
+def serve_http(client, exit_, quiet, first, note):
     head, rest = read_head(client, first)
     if head is None:
         client.close()
@@ -1252,6 +1562,7 @@ def serve_http(client, exit_, quiet, first):
 
     if verb == 'CONNECT':
         target = head.split(b'\r\n', 1)[0].decode('latin-1', 'replace').split(' ')[1]
+        note.going_to(target)
         # The exit's answer is read here rather than relayed blind, because
         # anything the client pipelined behind its CONNECT belongs inside the
         # tunnel and not to the proxy. Sent before the 200 arrives, a refusal
@@ -1284,13 +1595,14 @@ def serve_http(client, exit_, quiet, first):
                 return
             if rest:
                 upstream.sendall(rest)
+                note.moved('up', len(rest))
         except (OSError, ssl.SSLError) as e:
             log('FAIL', f'CONNECT {target}: {e}')
             if not quiet:
                 print(f'  CONNECT  {e}', file=sys.stderr, flush=True)
             shut(client, upstream)
             return
-        relay(client, upstream)
+        relay(client, upstream, note)
         return
 
     try:
@@ -1315,10 +1627,11 @@ def serve_http(client, exit_, quiet, first):
             pass
 
     back = threading.Thread(target=pump_bytes,
-                            args=(upstream, client, True), daemon=True)
+                            args=(upstream, client, 'down', True, note),
+                            daemon=True)
     back.start()
     try:
-        pump_requests(client, upstream, exit_, head, rest)
+        pump_requests(client, upstream, exit_, head, rest, note)
     except (OSError, ssl.SSLError) as e:
         log('WARN', f'{verb}: {e.__class__.__name__}: {e}')
         if not quiet:
@@ -1335,6 +1648,7 @@ def serve_http(client, exit_, quiet, first):
     except OSError:
         pass
     back.join(IDLE)
+    note.leave()
     shut(client, upstream)
 
 
@@ -1360,7 +1674,12 @@ class Pushback:
         return getattr(self._sock, name)
 
 
-def serve_one(client, exit_, quiet):
+def serve_one(client, exit_, quiet, source_port=0):
+    # Asked once, here, and never again for this connection. The machine's
+    # TCP table still has the row while the connection is being set up; by
+    # the time it closes the row may be gone, and a program that is named at
+    # the end of a download is named too late to have been worth asking.
+    note = Carried(*opened_by(source_port))
     client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     # Before the first read, not after it. This used to be set only on the
     # plain-HTTP path, below the branch that returns, so a client that
@@ -1384,10 +1703,17 @@ def serve_one(client, exit_, quiet):
         client.close()
         return
 
-    if first[0] == 5:
-        serve_socks(Pushback(client, first), exit_, quiet)
-    else:
-        serve_http(client, exit_, quiet, first)
+    try:
+        if first[0] == 5:
+            serve_socks(Pushback(client, first), exit_, quiet, note)
+        else:
+            serve_http(client, exit_, quiet, first, note)
+    finally:
+        # Whatever happened, this connection is no longer on that host. Left
+        # undone by any path out of here, the row keeps its dot for the rest
+        # of the run and the window shows a connection that closed hours ago
+        # as live.
+        note.leave()
 
 
 #--------------------------------------------------------------- what is up
@@ -1477,6 +1803,149 @@ def clear_state(port=None):
     put_states([r for r in read_states()
                 if r['pid'] != me
                 and (port is None or str(r['port']) != str(port))])
+
+
+# -- and how much has gone through it -----------------------------------
+
+# Beside the state file rather than in it. The state file changes twice in a
+# proxy's life, when it starts and when it stops, and is read by a person
+# with `cat`; this changes every second and is read by a program. Putting a
+# number that moves into a file that does not would mean rewriting every
+# proxy's line once a second to keep one of them current.
+#
+# One file per port, keyed the same way as the state lines, so two proxies
+# running at once each have their own and neither has to parse past the
+# other's.
+
+
+def traffic_path(port):
+    return os.path.join(os.path.dirname(STATE_PATH), f'traffic-{port}.json')
+
+
+def read_traffic(port):
+    """What the proxy on that port has moved, or nothing if it is not saying.
+
+    The reading carries the time it was taken, deliberately. A proxy that has
+    been killed leaves its last file behind, and a caller that trusts it
+    blindly paints a number that has stopped moving as if it were live - so
+    the caller is given `at` and is expected to decide how old is too old.
+    """
+    try:
+        with open(traffic_path(port), encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def write_traffic(port, up, down, up_bps, down_bps, since):
+    """To one side and then moved into place, like the state file - a reader
+    that catches this half-written gets a JSON error rather than a number."""
+    path = traffic_path(port)
+    tmp = f'{path}.{os.getpid()}'
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump({'pid': os.getpid(), 'port': int(port),
+                       'up': up, 'down': down,
+                       'up_bps': round(up_bps, 1),
+                       'down_bps': round(down_bps, 1),
+                       'since': since, 'at': time.time()}, f)
+        os.replace(tmp, path)
+    except (OSError, ValueError):
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def clear_traffic(port):
+    try:
+        os.remove(traffic_path(port))
+    except OSError:
+        pass
+
+
+# How many rows the file carries. The window shows a list somebody scrolls,
+# not a database - past a hundred lines nobody is reading, they are searching,
+# and the busiest hundred is what a search would have found anyway.
+LEDGER_ROWS = 100
+
+# Rewritten every other second rather than every second. It is twenty times
+# the size of the meter file and it is only read while a window has the log
+# open, so half the writes for the same answer.
+LEDGER_EVERY = 2.0
+
+
+def hosts_path(port):
+    return os.path.join(os.path.dirname(STATE_PATH), f'hosts-{port}.json')
+
+
+def read_hosts(port):
+    try:
+        with open(hosts_path(port), encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def write_hosts(port, rows, total, since):
+    path = hosts_path(port)
+    tmp = f'{path}.{os.getpid()}'
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump({'pid': os.getpid(), 'port': int(port), 'rows': rows,
+                       'total': total, 'since': since, 'at': time.time()},
+                      f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except (OSError, ValueError):
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def clear_hosts(port):
+    try:
+        os.remove(hosts_path(port))
+    except OSError:
+        pass
+
+
+def meter_writer(port, stop):
+    """A reading a second, on disk, for whatever wants to draw it.
+
+    A file rather than a socket or a pipe, because the reader is a separate
+    process that comes and goes. The window can be closed and reopened while
+    this carries on serving, and when it comes back it should find the
+    numbers where it left them rather than have to arrange a handshake for
+    them - and `--detach` means there is often no parent left to pipe to at
+    all.
+
+    Both the running totals and the rate over the last second are written.
+    The rate could be worked out by a reader differencing two readings, but
+    only if it reads on a reliable clock; this thread already has one, and a
+    window that polls when it feels like it should not have to own the
+    arithmetic that decides whether the line looks smooth.
+    """
+    since = time.time()
+    was_up = was_down = 0
+    was_at = since
+    listed = 0.0
+    write_traffic(port, 0, 0, 0, 0, since)
+    write_hosts(port, [], 0, since)
+    while not stop.wait(1.0):
+        now = time.time()
+        with METER_LOCK:
+            up, down = METER['up'], METER['down']
+        span = max(now - was_at, 1e-3)
+        write_traffic(port, up, down,
+                      (up - was_up) / span, (down - was_down) / span, since)
+        was_up, was_down, was_at = up, down, now
+        if now - listed >= LEDGER_EVERY:
+            listed = now
+            rows, total = LEDGER.snapshot(LEDGER_ROWS)
+            write_hosts(port, rows, total, since)
 
 
 def alive(pid):
@@ -2113,6 +2582,14 @@ def serve(listen_host, listen_port, exit_, quiet):
     log('START', f'{listen_host}:{listen_port} -> {exit_.ip} ({exit_.host})')
     exit_.prewarm()
 
+    # Started before the first connection is accepted, so the file exists
+    # from the moment the proxy is up. A window that connects and then finds
+    # nothing to read has to guess whether the meter is broken or the line
+    # is simply quiet, and those two should never look alike.
+    metering = threading.Event()
+    threading.Thread(target=meter_writer, args=(listen_port, metering),
+                     daemon=True).start()
+
     # `ovpn proxy stop` sends a TERM, which would otherwise take the process
     # down without running any of the tidying below - no line in the log, and
     # a state file left claiming a proxy that is gone. Turning it into the
@@ -2126,7 +2603,7 @@ def serve(listen_host, listen_port, exit_, quiet):
     try:
         while True:
             try:
-                client, _ = srv.accept()
+                client, who = srv.accept()
             except KeyboardInterrupt:
                 raise
             except OSError as e:
@@ -2135,7 +2612,8 @@ def serve(listen_host, listen_port, exit_, quiet):
                 warn('could not accept a connection', str(e))
                 continue
             served += 1
-            threading.Thread(target=serve_one, args=(client, exit_, quiet),
+            threading.Thread(target=serve_one,
+                             args=(client, exit_, quiet, who[1]),
                              daemon=True).start()
     except KeyboardInterrupt:
         print()
@@ -2145,7 +2623,14 @@ def serve(listen_host, listen_port, exit_, quiet):
         t = exit_.tally
         log('STOP', f'after {served} connections; {t["warm"]} started from one '
                     f'held ready, {t["cold"]} dialled, {t["stale"]} discarded')
+        log('MOVED', f'{METER["up"]} bytes out, {METER["down"]} bytes back')
         exit_.drain()
+        # The file goes with the proxy. Leaving the last reading behind is
+        # how a window comes back up and paints a meter for a connection
+        # that ended hours ago.
+        metering.set()
+        clear_traffic(listen_port)
+        clear_hosts(listen_port)
         clear_state()
         try:
             srv.close()

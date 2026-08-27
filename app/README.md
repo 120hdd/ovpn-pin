@@ -381,6 +381,92 @@ SNI, the CONNECT probe are all that file's. The one thing not reused is
 `pick_live()`, which prints to stdout and calls `die()`; correct for a command
 line, useless behind a window that has to stay up and explain itself.
 
+### The meter counts bytes, it does not estimate them
+
+Under the core, once a route is up, is how much has gone each way and how
+fast it is going. Every figure there was counted by the worker process at the
+point where it forwards the bytes — `relay()` for a tunnel, `pump_bytes()`
+and `pump_requests()` for plain HTTP — because that process is the only thing
+on the path that sees both directions and can tell them apart. A per-adapter
+number would have folded in every other program on the machine, and the
+exit's own figures, if it published any, would be everybody's at once.
+
+The worker writes `.state/traffic-<port>.json` once a second and deletes it
+on the way out. `engine.traffic()` reads it, checks the pid against the state
+file and the timestamp against the clock, and returns nothing at all when
+either says the reading is not this proxy's — a killed worker leaves its last
+file behind, and a new proxy on the same port would otherwise inherit the old
+one's totals for a second and a half.
+
+The page never adds anything up. The totals it shows are the worker's own
+running count, read fresh, so a window closed and reopened onto a live
+connection shows the same figures it would have shown had it never been away.
+What the page does own is the smoothing: readings land once a second and
+bytes do not arrive in once-a-second lumps, so the figures are walked toward
+each new reading over the second that follows it rather than dropped onto it.
+
+Two things beside the numbers are driven by the same reading. The wave under
+the core is a strip chart, download rising off a hairline and upload hanging
+below it, each half scaled to its own peak — shared, upload would be a flat
+line under every download that ever happened, which is true and useless to
+have drawn.
+
+The line is one point per reading and not one more. A first attempt drew ten
+points a second by interpolating between readings and then rolled a
+travelling sine over the result to keep it moving; it looked like the sea,
+which was exactly what was wrong with it — every crest on screen was
+something the page had invented, and a meter that decorates its own line has
+stopped being a meter. What it does instead is three ordinary things, each
+doing one job: an exponential moving average over the readings, so the line
+is calm; monotone cubic interpolation — Fritsch and Carlson's — so it is
+smooth without ever bulging past a reading the way a Catmull-Rom would; and a
+sub-pixel scroll off the clock, so it glides between readings that arrive
+once a second. Nothing on it moves that the connection did not move. And the two satellites orbiting the core swell and burn harder
+the harder the line is working, which is the one thing in this app that
+reports a quantity without printing one.
+
+Kilobytes are 1024 here. This is the app whose numbers a person will hold up
+next to Explorer's and Task Manager's, and being right by the standard while
+disagreeing with everything they can compare against is a way of being wrong.
+
+### The log says which program, not just which host
+
+The pulse beside the cog opens a list of what has actually gone through, and
+it answers two questions rather than one. Grouped by destination it says
+where the traffic went; grouped by program it says what sent it. Both come
+out of one table because the worker keys its ledger by the pair — host *and*
+program — rather than by either alone. Keyed by host, a browser and a backup
+client talking to the same CDN collapse into one line and "what is using my
+connection" has no answer; keyed by program, "where did it go" has none.
+
+Knowing the program at all is the part that takes work. Everything reaches
+the proxy from `127.0.0.1`, and the only thing telling one client apart from
+another is the source port it came from — so on Windows the worker looks that
+port up in the machine's own TCP table (`GetExtendedTcpTable`) at the moment
+it accepts the connection, and turns the pid into a filename with
+`QueryFullProcessImageNameW`. It is asked once per connection and never
+again: the table still has the row while a connection is being set up, and a
+program named at the end of a download was named too late to be worth asking.
+The table is cached for 700ms behind a lock, because a browser opening thirty
+connections at once would otherwise walk the whole table thirty times.
+
+All of it is best effort and all of it fails to *not identified* rather than
+to an error — a connection can be gone from the table before it is asked
+about, the process may be one this one is not allowed to open, and on
+anything but Windows there is no table here at all.
+
+The ledger counts the same bytes the meter counts, at the same moment and
+under the same lock, so the two can never disagree about a chunk. It is
+written to `.state/hosts-<port>.json` every other second — twenty times the
+size of the meter file and only read while somebody has the sheet open, so
+half the writes for the same answer — and the window pulls it rather than
+having it pushed, for the same reason. Five hundred rows are kept and the
+busiest hundred are written; when the list is longer than what was written,
+the sheet says how many were left out rather than looking complete.
+
+Hostnames and program names are whatever a program on this machine asked for.
+They go into the page as text nodes, never as markup.
+
 ### It shows the country it measured, not the one on the label
 
 A server named `mk-skp` came out in Croatia. One named `eg-cai` came out in

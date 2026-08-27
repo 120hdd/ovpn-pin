@@ -213,6 +213,10 @@ function render() {
   })[visualState];
   $('pick').disabled = state.mode === 'busy';
   $('more').hidden = state.mode !== 'on';
+  // Put away the moment the route goes, rather than left showing the last
+  // figures it had. It opens again on its own when a reading arrives - which
+  // is the only thing that proves there is anything to meter.
+  if (state.mode !== 'on') flux.stop();
   if (state.mode !== 'on') {
     $('details').hidden = true;
     $('more').setAttribute('aria-expanded', 'false');
@@ -429,6 +433,10 @@ window.onConnected = (status) => {
             ? 'Everything on this PC now goes through this connection.'
             : `Serving on 127.0.0.1:${state.port}. Windows was left alone, so point what you want at it.`)));
   render();
+  // The push comes once a second; this is so a window opened onto a
+  // connection that was already up does not sit with an empty meter for the
+  // first of those seconds.
+  window.pywebview.api.traffic().then(window.onTraffic, () => {});
 };
 
 window.onFailed = (err) => {
@@ -468,6 +476,650 @@ window.onRealIp = (info) => {
   setIp($('realIp'), (info && info.ip) || 'unknown', true);
   $('realPlace').textContent = (info && info.country)
     ? nameOf(info.country) : 'could not check';
+};
+
+/* ----------------------------------------------------------------- flux */
+
+/* The meter under the core: how much has gone each way, and how fast it is
+   going right now.
+
+   Every number here came from the worker process, which counts the bytes it
+   forwards. Nothing on this page adds anything up - the totals are read, not
+   accumulated - so a window closed and reopened onto a live connection shows
+   the same figures it would have shown had it never been away.
+
+   Kilobytes are 1024 here, not 1000. This is the one app on the machine
+   whose numbers a person will hold up next to Explorer's and Task Manager's,
+   and being right by the standard while disagreeing with everything they can
+   compare against is a way of being wrong. */
+
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
+
+/* Three significant figures, always - 4.82 MB, 48.2 MB, 482 MB - so the
+   figure stays the same width as it grows and the eye is not dragged sideways
+   once a minute by a column that got longer. Bytes are whole: there is no
+   such thing as 4.82 bytes. */
+function splitBytes(n) {
+  let value = Math.max(0, n || 0);
+  let unit = 0;
+  while (value >= 1024 && unit < BYTE_UNITS.length - 1) { value /= 1024; unit += 1; }
+  const digits = unit === 0 ? 0 : (value >= 100 ? 0 : (value >= 10 ? 1 : 2));
+  return [value.toFixed(digits), BYTE_UNITS[unit]];
+}
+
+/* Under half a kilobyte a second is a connection with nothing on it - a
+   keep-alive, a clock sync - and printing "0 KB/s" for it invites the reader
+   to wonder what broke. It did not break; nothing is being asked of it. */
+function rateWords(bps) {
+  if (!(bps > 512)) return 'idle';
+  const [value, unit] = splitBytes(bps);
+  return `${value} ${unit}/s`;
+}
+
+const flux = {
+  el: $('flux'),
+  canvas: $('fluxWave'),
+  ctx: null,
+  legs: null,
+  live: false,
+
+  /* One point per reading and not one more. An earlier version of this drew
+     ten points a second by interpolating between readings and then rolled a
+     travelling sine over the result to keep it moving. It looked like the
+     sea, which is exactly what was wrong with it: every crest on screen was
+     something this file had invented, and a meter that decorates its own
+     line has stopped being a meter.
+
+     So the structure here is the plain one, done properly. Three things,
+     each doing one job:
+
+       - a filter, so the line is calm. An exponential moving average over
+         the readings, which is what every throughput graph worth reading
+         uses and which is a statement about the data rather than an effect
+         laid over it.
+       - an interpolation, so the line is smooth. Monotone cubic - Fritsch
+         and Carlson's - which passes through every point exactly and cannot
+         overshoot between them. A Catmull-Rom or a plain quadratic will
+         invent a bump wherever the data turns sharply, and an invented bump
+         is the same lie as the sine was, just quieter.
+       - a scroll, so the line is alive. Sub-pixel, from the clock, so it
+         glides continuously between readings that arrive once a second.
+
+     Nothing moves that the connection did not move. */
+  span: 60,                  /* a minute of readings, at one a second */
+  every: 1000,               /* how far apart they are meant to be */
+  pts: [],                   /* the filtered readings, newest last */
+  at: 0,                     /* when the newest one landed */
+
+  /* How much of each new reading to believe at once. Two thirds: enough that
+     a real change shows up inside two seconds, little enough that the
+     second-to-second jitter of a download does not shake the line. */
+  SMOOTH: 0.66,
+
+  /* What is on screen against what was last reported. Readings land once a
+     second and bytes do not arrive in once-a-second lumps, so the figures
+     are walked toward the truth rather than dropped onto it. */
+  shown: { down: 0, up: 0, downRate: 0, upRate: 0 },
+  want: { down: 0, up: 0, downRate: 0, upRate: 0 },
+
+  /* Each half of the band is scaled to its own peak. Shared, upload would be
+     a flat line under every download that ever happened - true, and useless
+     to have drawn. The two totals beside it are what carry the magnitudes;
+     the wave carries the shape. */
+  peak: { down: 32768, up: 8192 },
+  floor: { down: 32768, up: 8192 },
+
+  frame: null,
+  said: {},
+  box: { w: 0, h: 0 },
+  ink: null,
+  drawn: 0,
+
+  arm() {
+    if (!this.legs) {
+      this.legs = {
+        down: this.dress('fluxDownSum'),
+        up: this.dress('fluxUpSum'),
+        downRate: $('fluxDownRate'),
+        upRate: $('fluxUpRate'),
+      };
+      this.ctx = this.canvas.getContext('2d');
+      // Both of these are layout reads, and the loop below writes text on
+      // the way past. Reading the canvas's size and the palette inside the
+      // frame meant a forced reflow every frame to learn two things that
+      // change when the window is resized and never otherwise. The observer
+      // reports the size when it changes; the palette is read once.
+      const skin = getComputedStyle(this.el);
+      this.ink = {
+        down: skin.getPropertyValue('--flux-down').trim() || '#61efbf',
+        up: skin.getPropertyValue('--flux-up').trim() || '#9c8cff',
+      };
+      new ResizeObserver((seen) => {
+        const r = seen[0].contentRect;
+        this.box = { w: Math.round(r.width), h: Math.round(r.height) };
+      }).observe(this.canvas);
+      const now = this.canvas.getBoundingClientRect();
+      this.box = { w: Math.round(now.width), h: Math.round(now.height) };
+    }
+    if (this.live) return;
+    this.live = true;
+    // Filled with silence rather than started empty. An empty buffer draws a
+    // stub of a line in the right-hand corner and nothing else for the first
+    // minute, which looks like an instrument that has not warmed up. Zeroes
+    // are also the truth: the route came up a moment ago and nothing had
+    // gone through it before that.
+    this.pts = Array.from({ length: this.span }, () => ({ d: 0, u: 0 }));
+    this.at = performance.now();
+    this.shown = { down: 0, up: 0, downRate: 0, upRate: 0 };
+    this.want = { down: 0, up: 0, downRate: 0, upRate: 0 };
+    this.peak = { down: this.floor.down, up: this.floor.up };
+    this.said = {};
+    this.el.dataset.live = 'true';
+    this.paint();
+    this.run();
+  },
+
+  /* The digits and the unit are separate elements so the unit can be set
+     smaller without the number being set in two sizes. Built once here
+     rather than written into the page as markup on every reading - a
+     figure that changes once a second is not a place to be reparsing HTML. */
+  dress(id) {
+    const host = $(id);
+    host.textContent = '';
+    const digits = document.createElement('span');
+    const unit = document.createElement('i');
+    unit.className = 'flux__unit';
+    host.append(digits, unit);
+    return { digits, unit };
+  },
+
+  stop() {
+    if (!this.live) return;
+    this.live = false;
+    this.el.dataset.live = 'false';
+    if (this.frame) { cancelAnimationFrame(this.frame); this.frame = null; }
+    setFlow(0);
+  },
+
+  /* A reading from the worker: one point on the line, filtered, and the two
+     totals, which are the worker's own count and are simply believed. */
+  take(t) {
+    this.arm();
+    const down = Math.max(0, t.downRate || 0);
+    const up = Math.max(0, t.upRate || 0);
+    const was = this.pts[this.pts.length - 1] || { d: 0, u: 0 };
+    this.pts.push({ d: was.d + (down - was.d) * this.SMOOTH,
+                    u: was.u + (up - was.u) * this.SMOOTH });
+    while (this.pts.length > this.span) this.pts.shift();
+    this.at = performance.now();
+
+    this.want = { down: t.down || 0, up: t.up || 0, downRate: down, upRate: up };
+    // A total that went backwards is a new worker on a new port, not a
+    // correction - there is nothing to ease toward, so it is taken whole.
+    if (this.want.down < this.shown.down) this.shown.down = this.want.down;
+    if (this.want.up < this.shown.up) this.shown.up = this.want.up;
+    setFlow(pace(down + up));
+    if (slowMotion.matches) { this.settle(1); this.paint(); }
+  },
+
+  /* Walk the shown figures toward the reported ones. `k` is how much of the
+     remaining gap to close, worked out from the frame time so the pace is
+     the same whether this is running at 30fps or 144. */
+  settle(k) {
+    for (const key of ['down', 'up', 'downRate', 'upRate']) {
+      const gap = this.want[key] - this.shown[key];
+      this.shown[key] += Math.abs(gap) < 0.5 ? gap : gap * k;
+    }
+  },
+
+  paint() {
+    const [dn, dunit] = splitBytes(this.shown.down);
+    const [un, uunit] = splitBytes(this.shown.up);
+    this.say('down', this.legs.down.digits, dn);
+    this.say('dunit', this.legs.down.unit, dunit);
+    this.say('up', this.legs.up.digits, un);
+    this.say('uunit', this.legs.up.unit, uunit);
+    this.say('drate', this.legs.downRate, rateWords(this.shown.downRate));
+    this.say('urate', this.legs.upRate, rateWords(this.shown.upRate));
+    this.draw();
+  },
+
+  /* Written only when it changed. At sixty frames a second, assigning six
+     identical strings back into the document is sixty layout invalidations
+     an app spends on nothing. */
+  say(key, el, text) {
+    if (this.said[key] === text) return;
+    this.said[key] = text;
+    el.textContent = text;
+  },
+
+  run() {
+    if (slowMotion.matches) return;
+    let last = performance.now();
+    const tick = (now) => {
+      this.frame = requestAnimationFrame(tick);
+      if (!this.live) return;
+      if (document.hidden) { last = now; return; }
+      const dt = Math.min(now - last, 250) / 1000;
+      last = now;
+      this.settle(1 - Math.exp(-dt * 7));
+      this.paint();
+    };
+    this.frame = requestAnimationFrame(tick);
+  },
+
+  draw() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const { w, h } = this.box;
+    if (!w || !h) return;
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    if (this.canvas.width !== w * dpr || this.canvas.height !== h * dpr) {
+      this.canvas.width = w * dpr;
+      this.canvas.height = h * dpr;
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    /* The rule sits low, not in the middle. Download gets three fifths of
+       the band because download is what the question is usually about. */
+    const rule = Math.round(h * 0.62) + 0.5;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.075)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, rule);
+    ctx.lineTo(w, rule);
+    ctx.stroke();
+
+    /* The scale is eased, and asymmetrically: it reaches a new peak in about
+       a second and lets go of an old one over the best part of a minute. A
+       scale that tracked the peak exactly would rescale the whole line the
+       moment the tallest point in it scrolled off the left-hand edge, which
+       reads as the line twitching for no reason. */
+    const dt = Math.min(0.25, (performance.now() - this.drawn) / 1000) || 0;
+    this.drawn = performance.now();
+    for (const [key, pick] of [['down', (s) => s.d], ['up', (s) => s.u]]) {
+      let top = 0;
+      for (let i = 0; i < this.pts.length; i += 1) {
+        top = Math.max(top, pick(this.pts[i]));
+      }
+      const target = Math.max(this.floor[key], top * 1.15);
+      const k = 1 - Math.exp(-dt * (target > this.peak[key] ? 3 : 0.35));
+      this.peak[key] += (target - this.peak[key]) * k;
+    }
+
+    /* How far between two readings we are. The whole line is shifted left by
+       this much of one step, which is what makes it glide rather than jump
+       once a second. */
+    const frac = slowMotion.matches
+      ? 0 : Math.min(1, (performance.now() - this.at) / this.every);
+    const step = w / (this.span - 1);
+
+    this.band(ctx, w, rule, rule - 3, (s) => s.d, this.peak.down,
+              this.ink.down, 0.34, 0.92, step, frac, -1);
+    this.band(ctx, w, rule, h - rule - 2, (s) => s.u, this.peak.up,
+              this.ink.up, 0.24, 0.76, step, frac, 1);
+
+    /* Where the line is now. The one lit thing in the band, and the only
+       reason the eye knows which end is the present. */
+    const head = this.pts[this.pts.length - 1];
+    if (!slowMotion.matches && head && head.d > 512) {
+      const y = rule - Math.min(1, head.d / this.peak.down) * (rule - 3);
+      ctx.fillStyle = this.ink.down;
+      ctx.shadowColor = this.ink.down;
+      ctx.shadowBlur = 7;
+      ctx.beginPath();
+      ctx.arc(w - frac * step, y, 1.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
+    /* The trace comes out of nothing on the left rather than being sliced
+       off by the edge of the canvas. */
+    const fade = ctx.createLinearGradient(0, 0, w * 0.24, 0);
+    fade.addColorStop(0, 'rgba(0, 0, 0, 1)');
+    fade.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = fade;
+    ctx.fillRect(0, 0, w * 0.24, h);
+    ctx.globalCompositeOperation = 'source-over';
+  },
+
+  /* One direction: a filled area off the rule with the trace on top of it.
+     `sign` is -1 for the half that grows upward and 1 for the half that
+     hangs below, which is the only difference between them. */
+  band(ctx, w, rule, room, pick, peak, colour, wash, ink, step, frac, sign) {
+    const n = this.pts.length;
+    if (n < 2) return;
+    const ys = new Array(n);
+    for (let i = 0; i < n; i += 1) {
+      ys[i] = rule + sign * Math.min(1, pick(this.pts[i]) / peak) * room;
+    }
+    // The newest reading sits on the right-hand edge the moment it lands and
+    // has slid one step left by the time the next one does.
+    const x0 = w - (n - 1) * step - frac * step;
+
+    const trace = () => {
+      ctx.beginPath();
+      curve(ctx, x0, step, ys);
+    };
+
+    const grad = ctx.createLinearGradient(0, rule + sign * room, 0, rule);
+    grad.addColorStop(0, tint(colour, wash));
+    grad.addColorStop(1, tint(colour, 0));
+    trace();
+    // Closed along the rule. The last point is up to one step short of the
+    // right edge while a reading is in flight, so the fill is carried across
+    // that gap flat rather than sloping down into the corner.
+    ctx.lineTo(w, ys[n - 1]);
+    ctx.lineTo(w, rule);
+    ctx.lineTo(x0, rule);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    trace();
+    ctx.lineTo(w, ys[n - 1]);
+    ctx.strokeStyle = tint(colour, ink);
+    ctx.lineWidth = 1.25;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  },
+};
+
+/* Monotone cubic through evenly spaced points - Fritsch & Carlson, 1980.
+   The tangent at each point is the average of the slopes either side of it,
+   then held back to three times the smaller of the two; that limit is the
+   whole trick, and it is what stops the curve rising above a peak or dipping
+   below a trough that the data never went to.
+
+   The alternative - a Catmull-Rom, or the quadratic-through-midpoints that
+   is the usual two-line answer - is smoother to write and wrong in exactly
+   the way that matters here: it overshoots. On a graph whose entire job is
+   to say how much went through, a curve that bulges past the highest reading
+   is drawing traffic that never happened. */
+function curve(ctx, x0, step, ys) {
+  const n = ys.length;
+  const slope = new Array(n - 1);
+  for (let i = 0; i < n - 1; i += 1) slope[i] = (ys[i + 1] - ys[i]) / step;
+
+  const m = new Array(n);
+  m[0] = slope[0];
+  m[n - 1] = slope[n - 2];
+  for (let i = 1; i < n - 1; i += 1) {
+    if (slope[i - 1] * slope[i] <= 0) {
+      m[i] = 0;                       /* a turning point stays a turning point */
+    } else {
+      const t = (slope[i - 1] + slope[i]) / 2;
+      const cap = 3 * Math.min(Math.abs(slope[i - 1]), Math.abs(slope[i]));
+      m[i] = Math.sign(t) * Math.min(Math.abs(t), cap);
+    }
+  }
+
+  ctx.moveTo(x0, ys[0]);
+  const third = step / 3;
+  for (let i = 0; i < n - 1; i += 1) {
+    const x = x0 + i * step;
+    ctx.bezierCurveTo(x + third, ys[i] + m[i] * third,
+                      x + step - third, ys[i + 1] - m[i + 1] * third,
+                      x + step, ys[i + 1]);
+  }
+}
+
+/* #61efbf at four tenths. Written out rather than handed to the canvas as a
+   colour with an alpha channel, because the palette is authored as six-digit
+   hex in the stylesheet and reading it back is the only way these stay in
+   step with it. */
+function tint(hex, alpha) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
+/* How hard the line is working, from nothing to flat out, on a log scale -
+   the difference between silence and a trickle matters as much as the
+   difference between a trickle and a torrent, and on a straight scale the
+   first one is invisible. Full at about sixteen megabytes a second. */
+function pace(bps) {
+  return Math.max(0, Math.min(1, Math.log10(1 + bps / 2048) / Math.log10(8193)));
+}
+
+/* The core answers the meter. The shader reads this to quicken the goo and
+   the stylesheet reads it to swell the two satellites - so the connection
+   visibly works harder without a second number being printed anywhere. */
+function setFlow(v) {
+  window.__flow = v;
+  $('hero').style.setProperty('--flow', v.toFixed(3));
+}
+
+const slowMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+window.onTraffic = (t) => {
+  if (!t || !t.live || state.mode !== 'on') {
+    flux.stop();
+    $('logOpen').dataset.live = 'false';
+    return;
+  }
+  flux.take(t);
+  // The dot on the header icon, so the log announces itself as somewhere
+  // worth looking without anything being opened to find that out.
+  $('logOpen').dataset.live =
+    String((t.downRate || 0) + (t.upRate || 0) > 512);
+};
+
+/* ------------------------------------------------------------------ log */
+
+/* What is using the connection, and where it went.
+
+   Every row came from the worker's ledger, which counts the same bytes the
+   meter counts, at the same moment and under the same lock. Nothing here is
+   estimated and nothing is inferred from anything else on the page.
+
+   Two groupings over the one set of rows. The worker keys its ledger by
+   destination *and* program together, which is what makes both possible
+   without asking it twice: grouped one way it says where the traffic went,
+   grouped the other it says what sent it. A single flat list would have had
+   to pick one of those questions and leave the other unanswered.
+
+   Hostnames and program names are whatever a program on this machine asked
+   for, so they are put into the page as text nodes and never as markup. */
+
+const log = {
+  by: 'host',            /* or 'app' */
+  poll: null,
+  rows: [],
+  open: false,
+
+  show() {
+    if (this.open) return;
+    this.open = true;
+    $('log').showModal();
+    this.slide();
+    this.pull();
+    // The worker rewrites the list every other second, so asking faster
+    // would be reading the same answer twice.
+    this.poll = setInterval(() => this.pull(), 2000);
+  },
+
+  hide() {
+    this.open = false;
+    clearInterval(this.poll);
+    this.poll = null;
+    $('log').close();
+  },
+
+  async pull() {
+    let said = null;
+    try {
+      said = await window.pywebview.api.hosts();
+    } catch (err) {
+      said = null;
+    }
+    if (!this.open) return;
+    this.rows = (said && said.live && said.rows) || [];
+    this.draw(said);
+  },
+
+  group() {
+    if (this.by === 'host') {
+      // Already one row per destination and program. Rows for the same host
+      // from two different programs are folded together here, and the
+      // programs become the caption.
+      return this.fold((r) => r.host, (r) => r.app);
+    }
+    return this.fold((r) => r.app || 'Not identified', (r) => r.host);
+  },
+
+  /* Rows keyed by `name`, remembering the distinct `other` values that went
+     into each - which is what the second line of the row says. */
+  fold(name, other) {
+    const out = new Map();
+    for (const r of this.rows) {
+      const key = name(r);
+      let g = out.get(key);
+      if (!g) {
+        g = { key, up: 0, down: 0, hits: 0, live: 0, others: new Set() };
+        out.set(key, g);
+      }
+      g.up += r.up;
+      g.down += r.down;
+      g.hits += r.hits;
+      g.live += r.live;
+      const o = other(r);
+      if (o) g.others.add(o);
+    }
+    return [...out.values()].sort((a, b) => (b.up + b.down) - (a.up + a.down));
+  },
+
+  draw(said) {
+    const list = $('logList');
+    const groups = this.group();
+    list.textContent = '';
+
+    if (!groups.length) {
+      const p = document.createElement('p');
+      p.className = 'lnone';
+      p.textContent = said && said.live
+        ? 'Nothing has gone through yet. Open something and it will show up here.'
+        : 'Nothing is routed right now. Connect, and this fills in as your programs start talking.';
+      list.append(p);
+      $('logSum').textContent = '—';
+      $('logFoot').textContent = '';
+      $('logOpen').dataset.live = 'false';
+      return;
+    }
+
+    const top = groups[0].up + groups[0].down;
+    let up = 0;
+    let down = 0;
+    let live = 0;
+    for (const g of groups) { up += g.up; down += g.down; live += g.live; }
+
+    // Short words and no spaces inside the figures. This shares a line with
+    // the two tabs in a 400px window, and the first thing that went was the
+    // upload total off the right-hand end where nobody could see it had.
+    const [dn, du] = splitBytes(down);
+    const [un, uu] = splitBytes(up);
+    $('logSum').textContent =
+      `${groups.length} ${this.by === 'host' ? 'hosts' : 'programs'}`
+      + `  ·  ↓${dn}${du}  ↑${un}${uu}`;
+    $('logOpen').dataset.live = live > 0 ? 'true' : 'false';
+
+    for (const g of groups) list.append(this.row(g, top));
+
+    // Said only when it is true. The worker keeps the hundred busiest pairs
+    // and nothing else, and a list that quietly stopped at a hundred while
+    // looking complete is the kind of thing this app is meant not to do.
+    //
+    // Counted in the worker's own rows rather than in the groups above: the
+    // groups fold two rows into one wherever a host was reached by two
+    // programs, so a number taken from them would not be the number the
+    // worker left out.
+    const missing = ((said && said.total) || 0) - this.rows.length;
+    $('logFoot').textContent = missing > 0
+      ? `${missing} quieter ${missing === 1 ? 'one is' : 'ones are'} counted in the meter but not listed here.`
+      : '';
+  },
+
+  row(g, top) {
+    const el = document.createElement('div');
+    el.className = 'lrow';
+    el.style.setProperty('--share',
+      `${Math.max(1.5, ((g.up + g.down) / (top || 1)) * 100).toFixed(1)}%`);
+
+    const name = document.createElement('p');
+    name.className = 'lrow__name';
+    if (g.live > 0) {
+      const dot = document.createElement('i');
+      dot.className = 'lrow__live';
+      name.append(dot);
+    }
+    const who = document.createElement('span');
+    who.className = 'lrow__who';
+    who.textContent = g.key;
+    name.append(who);
+
+    const [sn, su] = splitBytes(g.up + g.down);
+    const sum = document.createElement('p');
+    sum.className = 'lrow__sum mono';
+    sum.textContent = `${sn} ${su}`;
+
+    const sub = document.createElement('p');
+    sub.className = 'lrow__sub';
+    sub.textContent = this.caption(g);
+
+    const [dn, du] = splitBytes(g.down);
+    const [un, uu] = splitBytes(g.up);
+    const split = document.createElement('p');
+    split.className = 'lrow__split mono';
+    const d = document.createElement('b');
+    d.textContent = `↓${dn}${du}`;
+    const u = document.createElement('i');
+    u.textContent = `↑${un}${uu}`;
+    split.append(d, document.createTextNode('  '), u);
+
+    el.append(name, sum, sub, split);
+    return el;
+  },
+
+  /* The other half of the pair, and how many times it was asked for. One
+     name when there is one, a count when there are several - "4 programs"
+     says as much as four names would in a row that is 200px wide. */
+  caption(g) {
+    const many = g.others.size;
+    const asked = `${g.hits} connection${g.hits === 1 ? '' : 's'}`;
+    if (!many) {
+      return this.by === 'host'
+        ? `not identified · ${asked}` : asked;
+    }
+    if (many === 1) return `${[...g.others][0]} · ${asked}`;
+    const what = this.by === 'host' ? 'programs' : 'destinations';
+    return `${many} ${what} · ${asked}`;
+  },
+
+  pick(by) {
+    if (this.by === by) return;
+    this.by = by;
+    for (const b of $('logPair').querySelectorAll('.pair__opt')) {
+      b.setAttribute('aria-selected', String(b.dataset.by === by));
+    }
+    this.slide();
+    this.draw({ live: true, total: this.rows.length });
+  },
+
+  /* The lit backing, moved to sit under whichever word is chosen. Measured
+     rather than hard-coded: the two words are different lengths, and they
+     are different lengths again in every language this is ever translated
+     into. */
+  slide() {
+    const chosen = $('logPair').querySelector('[aria-selected="true"]');
+    const bar = $('logPair').querySelector('.pair__slide');
+    if (!chosen || !bar) return;
+    bar.style.width = `${chosen.offsetWidth}px`;
+    bar.style.transform = `translateX(${chosen.offsetLeft - 2}px)`;
+  },
 };
 
 /* -------------------------------------------------------------- actions */
@@ -1223,6 +1875,17 @@ $('search').addEventListener('input', (e) => {
 $('realIp').addEventListener('click', (e) => copyIp(e.currentTarget));
 $('exitIp').addEventListener('click', (e) => copyIp(e.currentTarget));
 
+$('logOpen').addEventListener('click', () => log.show());
+$('logClose').addEventListener('click', () => log.hide());
+// Esc closes a <dialog> without going through the button, and a poll left
+// running against a sheet nobody is looking at is a request every two
+// seconds for the rest of the afternoon.
+$('log').addEventListener('close', () => log.hide());
+$('logPair').addEventListener('click', (e) => {
+  const opt = e.target.closest('.pair__opt');
+  if (opt) log.pick(opt.dataset.by);
+});
+
 $('more').addEventListener('click', () => {
   const open = $('details').hidden;
   $('details').hidden = !open;
@@ -1555,6 +2218,12 @@ window.__probe = () => ({
   pinTotal: state.pinPlan && state.pinPlan.total,
   pinMaxIps: state.pinPlan && state.pinPlan.maxIps,
   pinBlocked: ((state.pinPlan && state.pinPlan.blockers) || []).map((b) => b.kind),
+  fluxLive: flux.live,
+  logOpen: $('log').open,
+  logBy: log.by,
+  logRows: $('logList').querySelectorAll('.lrow').length,
+  fluxDown: $('fluxDownSum').textContent,
+  fluxUp: $('fluxUpSum').textContent,
   // Asserted on by the automated check: whatever else this page does, a
   // password must never be sitting in the DOM after it has been saved.
   passwordInDom: $('authPass').value.length > 0,

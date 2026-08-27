@@ -1117,6 +1117,420 @@ canvas.blob__body {
 
 .swap[data-state='fail'] .arrow { color: var(--fail); }
 
+/* --------------------------------------------------------------- the flux */
+
+/* How much has actually gone each way, under the core.
+
+   Drawn as an instrument rather than as a chart. Nobody changes what they
+   are doing because a line moved, so there is nothing here to read closely:
+   a hairline with the download rising off it and the upload hanging under,
+   scrolling on its own the way a needle sits on a dial. What is meant to be
+   read closely is the pair of totals, and those are type.
+
+   The two directions are deliberately not equal. "How much have I used"
+   means download to everyone who has ever asked it - so download takes the
+   deeper half of the band, the larger numeral, and reads left to right;
+   upload answers from the other end at three quarters the size. Two figures
+   of the same size in the same colour would have made the reader work out
+   which was which every single time.
+
+   Colour carries the direction and nothing else: the arrows are jade coming
+   down and lavender going up - the same lavender the core sits in at rest -
+   and the numerals stay in the text greys. Two coloured numbers in a 400px
+   window is a window with no quiet in it. */
+
+.hero__foot {
+  position: absolute;
+  z-index: 3;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+/* .swap used to be anchored to the bottom of the hero itself. It is anchored
+   to the foot now, which is the same place - what changes is that the meter
+   can open above it without the addresses moving a pixel. */
+.swap {
+  position: static;
+  bottom: auto;
+}
+
+/* Said for a screen reader and drawn for nobody. The arrows are the only
+   thing on screen that says which total is which, and an arrow is not
+   something a reader can announce. */
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.flux {
+  --flux-down: var(--ok);
+  --flux-up: #9c8cff;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: 32px 15px;
+  row-gap: 1px;
+  align-items: center;
+  height: 0;
+  margin: 0;
+  overflow: hidden;
+  opacity: 0;
+  /* A readout, not a control. Nothing here is clickable and the core behind
+     it should not feel walled off by an invisible panel. */
+  pointer-events: none;
+  /* It unfolds rather than fades up. It arrives at the moment the route
+     does, and something that opens reads as new; something that was always
+     there and got brighter reads as something you had missed. */
+  transition: height 420ms var(--ease), margin 420ms var(--ease),
+              opacity 200ms linear 100ms;
+}
+
+.flux[data-live='true'] {
+  height: 48px;
+  margin-bottom: 8px;
+  opacity: 1;
+}
+
+.flux__wave {
+  grid-area: 1 / 1 / 2 / 3;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.flux__leg {
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.flux__leg--down { grid-column: 1; justify-self: start; }
+.flux__leg--up { grid-column: 2; justify-self: end; }
+
+.flux__arw {
+  width: 10px;
+  height: 10px;
+  flex: none;
+}
+
+.flux__leg--down .flux__arw { color: var(--flux-down); }
+
+/* One symbol, turned over. Two hand-drawn arrows that were meant to be each
+   other's mirror never quite are. */
+.flux__leg--up .flux__arw {
+  color: var(--flux-up);
+  transform: rotate(180deg);
+}
+
+.flux__sum {
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.flux__leg--down .flux__sum {
+  font-size: 12.5px;
+  line-height: 15px;
+  color: var(--text);
+}
+
+.flux__leg--up .flux__sum {
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--text-muted);
+}
+
+/* The unit is not part of the number and is not read at the same time as
+   one. Set smaller and dimmer, the digits are what the eye lands on. */
+.flux__unit {
+  margin-left: 3.5px;
+  font-size: 0.76em;
+  font-style: normal;
+  letter-spacing: 0.04em;
+  color: var(--text-off);
+}
+
+.flux__rate {
+  font-size: 9px;
+  line-height: 15px;
+  letter-spacing: 0.02em;
+  color: var(--text-off);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The core lifts as the meter opens under it. One movement, two things
+   moving in it, and the room the meter needs is made by the thing that was
+   already in the way rather than found somewhere else. */
+.blob-stage { transition: top 460ms var(--ease); }
+.hero[data-state='on'] .blob-stage { top: -12px; }
+
+/* The satellites answer the line. Both dots swell and burn a little harder
+   the harder the connection is working - which is the only bit of chrome in
+   this app that reports a number without printing one, and the reason the
+   meter can stay as quiet as it does. */
+.hero { --flow: 0; }
+
+.blob__orbit i {
+  width: calc(6px + var(--flow) * 2.5px);
+  height: calc(6px + var(--flow) * 2.5px);
+  box-shadow: 0 0 calc(11px + var(--flow) * 15px) var(--state-accent);
+  transition: width 800ms var(--ease), height 800ms var(--ease),
+              box-shadow 800ms var(--ease), background 300ms ease;
+}
+
+.blob__orbit--inner i {
+  width: calc(4px + var(--flow) * 2px);
+  height: calc(4px + var(--flow) * 2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flux { transition: opacity 120ms linear; }
+  .blob-stage,
+  .blob__orbit i { transition: none; }
+}
+
+/* The 380x560 minimum again, with the meter open. Everything gives up a few
+   pixels rather than one thing giving up all of them. */
+@media (max-height: 610px) {
+  .flux { grid-template-rows: 23px 14px; }
+  .flux[data-live='true'] { height: 38px; margin-bottom: 6px; }
+  .flux__leg--down .flux__sum { font-size: 11.5px; }
+  .hero[data-state='on'] .blob-stage { top: -20px; }
+}
+
+/* ----------------------------------------------------------------- the log */
+
+/* What is using the connection, and where it went.
+
+   Not a chart. The question people bring here is ordinal - what is the
+   biggest thing, and is that thing something I recognise - and a list sorted
+   by size answers it before a bar chart has finished being read. The bar is
+   there anyway, but as the row's own background rather than as a column of
+   its own: it costs no width in a 400px window, and the eye gets the ranking
+   from the shape of the left-hand edge without reading a single number.
+
+   The numbers are still exact, on the right, in the mono face, because the
+   moment somebody does want to read one they want the real one. */
+
+/* The pulse in the title bar, with a dot on it while something is moving.
+   It is the only thing in the header that ever changes, so it is the only
+   thing that gets to. */
+.icon--log { position: relative; }
+
+.icon--log::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 7px rgba(97, 239, 191, 0.75);
+  opacity: 0;
+  transform: scale(0.4);
+  transition: opacity 260ms var(--ease), transform 260ms var(--ease);
+}
+
+.icon--log[data-live='true']::after { opacity: 1; transform: none; }
+
+.logbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 16px 9px;
+  border-bottom: 1px solid var(--divider);
+}
+
+/* Two words and a lit backing that slides between them. A segmented control
+   without the segments: borders around two things that are already two
+   things is a box drawn for the sake of drawing a box. */
+.pair {
+  position: relative;
+  display: flex;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.pair__opt {
+  position: relative;
+  z-index: 1;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-off);
+  transition: color 180ms var(--ease);
+}
+
+.pair__opt[aria-selected='true'] { color: var(--text); }
+.pair__opt:hover { color: var(--text-muted); }
+.pair__opt[aria-selected='true']:hover { color: var(--text); }
+
+.pair__slide {
+  position: absolute;
+  z-index: 0;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  border-radius: 6px;
+  background: var(--control-active);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  transition: transform 260ms var(--ease), width 260ms var(--ease);
+}
+
+.logbar__sum {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--text-off);
+  text-align: right;
+}
+
+/* ------------------------------------------------------------- a log row */
+
+.lrow {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  padding: 8px 16px 7px;
+  isolation: isolate;
+}
+
+.lrow + .lrow { border-top: 1px solid rgba(255, 255, 255, 0.045); }
+
+/* The share of the busiest row, drawn as the row's own ground. Set from JS
+   as a width in per cent; the fade on the right is what keeps it from
+   reading as a progress bar that has stopped somewhere meaningful. */
+.lrow::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  left: 0;
+  top: 1px;
+  bottom: 1px;
+  width: var(--share, 0%);
+  background: linear-gradient(90deg,
+              rgba(97, 239, 191, 0.16), rgba(97, 239, 191, 0.03));
+  transition: width 420ms var(--ease);
+}
+
+.lrow__name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--text);
+}
+
+.lrow__who {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* On while a connection to that name is open. Not a status light for the
+   row - a row with no dot is not broken, it is simply finished. */
+.lrow__live {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 7px rgba(97, 239, 191, 0.7);
+  animation: log-breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes log-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.lrow__sub {
+  grid-column: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--text-off);
+}
+
+.lrow__sum {
+  grid-row: 1;
+  grid-column: 2;
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.lrow__split {
+  grid-row: 2;
+  grid-column: 2;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--text-off);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.lrow__split b { font-weight: 400; color: var(--ok); }
+.lrow__split i { font-style: normal; color: #9c8cff; }
+
+/* The list takes focus when the sheet opens, so that the way out of it is
+   not the first thing offered - but it is a place to scroll, not a control,
+   and a two-pixel ring around the whole of it says otherwise. Nothing is
+   lost: the rows are not focusable, and Esc still closes. */
+#logList:focus,
+#logList:focus-visible { outline: none; }
+
+.logfoot {
+  flex: none;
+  padding: 9px 16px 12px;
+  border-top: 1px solid var(--divider);
+  font-size: 10px;
+  line-height: 15px;
+  color: var(--text-off);
+}
+
+.logfoot:empty { display: none; }
+
+/* Said in the same voice the rest of the app uses when there is nothing to
+   show, which is a sentence and not a shrug. */
+.lnone {
+  padding: 40px 24px;
+  text-align: center;
+  color: var(--text-off);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lrow::before,
+  .pair__slide { transition: none; }
+  .lrow__live { animation: none; }
+}
+
 /* ---------------------------------------------------------- status glass */
 
 .card {

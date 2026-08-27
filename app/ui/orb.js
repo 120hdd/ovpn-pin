@@ -157,6 +157,17 @@ void main() {
   /* The pace of the goo follows the pace of the connection. */
   const STATE_SPEED = { off: 0.5, busy: 1.6, on: 0.7, fail: 0.25 };
 
+  /* And, connected, the pace of what is going through it. app.js puts the
+     load on window.__flow, nought to one on a log scale, once a second; the
+     core reads it here and stirs harder the harder the line is working.
+
+     A third channel rather than a fourth colour, because the thing being
+     reported is not a state - it is a quantity, and the one property this
+     shader already has that a quantity can be spent on is time. It also
+     means the core is doing what the meter below it says without either of
+     them having been told about the other. */
+  const FLOW_SPEED = 1.15;
+
   const FALLBACK = {
     a: [0.61, 0.55, 1.0],
     b: [0.30, 0.89, 0.82],
@@ -217,6 +228,16 @@ void main() {
           speed: STATE_SPEED[state] != null ? STATE_SPEED[state] : 0.5,
         };
       }
+
+      /* Only while the route is up. Idle and failed have their own pace and
+         nothing is flowing through either of them; busy is already the
+         fastest the goo goes, and speeding it further would say "working
+         hard" at the moment nothing is working at all. */
+      function flow() {
+        if (!hero || hero.dataset.state !== 'on') return 0;
+        const v = window.__flow;
+        return typeof v === 'number' && v > 0 ? Math.min(1, v) : 0;
+      }
       let want = targets();
       const cur = { a: want.a.slice(), b: want.b.slice(), c: want.c.slice(), speed: want.speed };
       if (hero) {
@@ -269,8 +290,9 @@ void main() {
 
         /* ease palette and pace toward the current state */
         const k = 1 - Math.exp(-dt*6);
-        let moving = Math.abs(want.speed - cur.speed) > 1e-3;
-        cur.speed += (want.speed - cur.speed)*k;
+        const wanted = want.speed*(1 + FLOW_SPEED*flow());
+        let moving = Math.abs(wanted - cur.speed) > 1e-3;
+        cur.speed += (wanted - cur.speed)*k;
         for (const key of ['a', 'b', 'c']) {
           for (let i = 0; i < 3; i++) {
             const diff = want[key][i] - cur[key][i];

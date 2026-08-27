@@ -499,6 +499,15 @@ class Engine:
                 px.kill(rec['pid'])
             except Exception:
                 pass
+        # The worker tidies its own meter file when it is interrupted, but a
+        # kill on Windows gives it no chance to. Removing it here rather than
+        # leaving it to be aged out means the next connection on this port
+        # cannot be handed the last one's totals for a second and a half.
+        try:
+            px.clear_traffic(self.port)
+            px.clear_hosts(self.port)
+        except Exception:
+            pass
         self.child = None
         self.exit_info = None
         if not quiet:
@@ -619,6 +628,77 @@ class Engine:
     def running(self):
         rec = px.read_state(self.port)
         return rec if rec and px.alive(rec['pid']) else None
+
+    # How stale a reading may be before it stops counting as one. The worker
+    # writes every second, so three is a couple of missed writes - a busy
+    # machine, a slow disk - rather than a proxy that has gone.
+    STALE_AFTER = 3.5
+
+    def traffic(self):
+        """How much has gone each way, or nothing if nobody is counting.
+
+        Nothing, rather than zeroes, when there is no proxy: zeroes are a
+        real reading of a quiet line and the window draws them as one. A
+        connection that has ended has no reading at all, and saying so is
+        what lets the meter be put away instead of frozen at its last value.
+
+        The pid is checked against the state file as well as the timestamp.
+        A worker killed outright never gets to delete its file, so the one
+        left on disk can belong to a proxy that stopped and a new proxy on
+        the same port would otherwise inherit its totals.
+        """
+        rec = self.running()
+        if not rec:
+            return None
+        got = px.read_traffic(self.port)
+        if not got or got.get('pid') != rec['pid']:
+            return None
+        stale = (time.time() - float(got.get('at') or 0)) > self.STALE_AFTER
+        return {'live': True,
+                'up': int(got.get('up') or 0),
+                'down': int(got.get('down') or 0),
+                # A stale file's rate is the rate a second before whatever
+                # went wrong, which on screen is a line still moving for a
+                # connection that may not be. The totals are the last true
+                # thing it said, so those are kept and the rates are not.
+                'upRate': 0.0 if stale else float(got.get('up_bps') or 0),
+                'downRate': 0.0 if stale else float(got.get('down_bps') or 0),
+                'since': float(got.get('since') or 0),
+                'stale': stale}
+
+    def hosts(self):
+        """What went where, and which program asked for it.
+
+        Checked the same way as traffic(): the pid on the file against the pid
+        in the state file, so a list left behind by a proxy that was killed is
+        not shown as this one's. Nothing is trusted from the rows themselves -
+        a hostname in here is whatever a program on this machine asked for,
+        and it reaches the page as text to be put in a list.
+        """
+        rec = self.running()
+        if not rec:
+            return None
+        got = px.read_hosts(self.port)
+        if not got or got.get('pid') != rec['pid']:
+            return None
+        rows = [{'host': str(r.get('host') or '')[:120],
+                 'app': (str(r['app'])[:60] if r.get('app') else None),
+                 'pid': int(r.get('pid') or 0),
+                 'up': int(r.get('up') or 0),
+                 'down': int(r.get('down') or 0),
+                 'hits': int(r.get('hits') or 0),
+                 'live': int(r.get('live') or 0),
+                 'first': float(r.get('first') or 0),
+                 'last': float(r.get('last') or 0)}
+                for r in (got.get('rows') or [])]
+        return {'live': True, 'rows': rows,
+                'total': int(got.get('total') or len(rows)),
+                'since': float(got.get('since') or 0),
+                'at': float(got.get('at') or 0),
+                # The list is written every other second, so a page that
+                # polls faster than that is looking at the same answer twice.
+                # Said out loud rather than left to be worked out from `at`.
+                'every': px.LEDGER_EVERY}
 
     def status(self):
         rec = self.running()
