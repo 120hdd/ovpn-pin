@@ -157,9 +157,11 @@ def run_selftest():
     only says something went wrong. This answers what support would otherwise
     have to ask over the phone, and it is how the build is checked.
     """
+    import accounts
     import engine
     import pin
     import sweep
+    import windscribe
     import winproxy
     out = {'frozen': paths.FROZEN, 'app': paths.APP_DIR,
            'resources': paths.RES_DIR, 'data': paths.DATA_DIR,
@@ -187,10 +189,40 @@ def run_selftest():
                           folder=saved.get('folder') or None,
                           port=saved.get('port'),
                           set_system_proxy=saved.get('systemProxy', True))
+        # Set up the way the window sets it up, or this reports a different
+        # app from the one that is running: it would read one folder and no
+        # provider filter, and answer "533 servers" for a copy that is
+        # actually offering 125 from the other provider. A diagnostic whose
+        # numbers are not the app's numbers sends whoever reads it the wrong
+        # way, which is worse than not printing them.
+        if not saved.get('folderIsSite'):
+            for name in paths.SERVER_DIRS:
+                path = os.path.join(paths.DATA_DIR, name)
+                if os.path.isdir(path) and path not in e.folders:
+                    e.folders.append(path)
+        chosen = saved.get('providers')
+        e.providers = set(chosen) if chosen else None
         out['port'] = e.port
+        out['folders'] = e.sources()
+        out['providers'] = sorted(e.providers) if e.providers else None
+        out['byProvider'] = e.counts_by_provider()
         out['serverCount'] = len(e.servers())
         out['countryCount'] = len(e.catalogue())
-        out['credentialsReadable'] = bool(e.credentials())
+        # One line per provider, and none of them fatal. This was a single
+        # call to e.credentials() back when there was one credential to have;
+        # with that file gone it raised, and took the whole rest of the
+        # diagnostic - the status, which is the part anyone actually wants -
+        # down with it. A self-test that stops at the first missing thing
+        # reports the first missing thing and nothing else.
+        out['credentials'] = {}
+        for name, path in ((accounts.SURFSHARK, paths.AUTH_FILE),
+                           (accounts.WINDSCRIBE, windscribe.AUTH_FILE)):
+            try:
+                with open(path, encoding='utf-8') as f:
+                    lines = [line.strip() for line in f if line.strip()]
+                out['credentials'][name] = len(lines) >= 2
+            except OSError:
+                out['credentials'][name] = False
         out['status'] = e.status()
     except Exception as exc:
         out['engineError'] = repr(exc)
@@ -631,51 +663,27 @@ class Api:
         return {'ok': True}
 
     def _has_credentials(self):
-        try:
-            self._engine.credentials()
-            return True
-        except Exception:
-            return False
+        """Whether anything at all can be connected through.
 
-    def saveCredentials(self, user, password):
-        """The service username and password, set from the window.
+        Not "is there a .ovpn-auth". That was the same question back when
+        there was one provider, and it stopped being so the moment there were
+        two: an app signed in to Windscribe, with a hundred and twenty-five
+        of its exits pinned, answered no - and the button that asks this is
+        the Connect button, so it said NOT SET UP and refused to do the thing
+        it was perfectly able to do.
 
-        Until now the only way to give this app credentials was to put a file
-        beside it by hand, which is a reasonable thing to ask of the person
-        who wrote it and not of anyone else - and the app's answer to not
-        having one was to disable its only button and say so.
+        A provider counts when it has both an account and exits, which is the
+        same test the chooser uses. One of them is enough.
         """
-        # An empty password field with credentials already on file means "the
-        # one I have", not "wipe it" - the field says as much, and a person
-        # correcting a typo in the username should not have to fetch their
-        # password again to do it.
-        if not (password or '').strip():
-            try:
-                password = self._engine.credentials()[1]
-            except Exception:
-                pass
-        try:
-            note = self._engine.save_credentials(user, password)
-        except RuntimeError as e:
-            return {'ok': False, 'error': str(e)}
-        except OSError as e:
-            return {'ok': False,
-                    'error': f'Could not write {paths.AUTH_FILE}: {e}'}
-        if not self._has_credentials():
-            return {'ok': False,
-                    'error': 'Saved, but it cannot be read back. Check whether '
-                             f'something else owns {paths.AUTH_FILE}.'}
-        return {'ok': True, 'username': self._engine.username(),
-                'path': paths.AUTH_FILE, 'env': note.get('env', False)}
+        return bool(self._usable_providers())
 
-    def forgetCredentials(self):
-        try:
-            os.remove(paths.AUTH_FILE)
-        except FileNotFoundError:
-            pass
-        except OSError as e:
-            return {'ok': False, 'error': str(e)}
-        return {'ok': True}
+    # saveCredentials and forgetCredentials used to live here, writing
+    # .ovpn-auth straight from the old Surfshark pane. Nothing calls them any
+    # more - accounts do that now, through _write_active - and leaving them
+    # would have left two ways to set a credential, one of which produces the
+    # state this app has already been caught by once: a credential file on
+    # disk with no account behind it, so the roster says the provider is gone
+    # and the file says it is not.
 
     # -- accounts ----------------------------------------------------------
     #
