@@ -3405,3 +3405,147 @@ canvas.blob__body {
   width: 1px;
   background: var(--divider);
 }
+
+/* ------------------------------------------ which of them actually answer */
+
+.reach {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px 10px;
+}
+.reach .note { flex: 1; min-width: 0; margin: 0; }
+
+/* The progress line sits along the bottom edge of the bar rather than in a
+   box of its own. Eight probes run at once, so the number moves in steps -
+   a line that fills is the honest shape for that, where a smooth bar would
+   be pretending to know how long the ones still in flight will take. */
+.reach__bar {
+  position: absolute;
+  left: 0; bottom: 0;
+  height: 2px;
+  width: var(--at, 0%);
+  background: var(--ok);
+  transition: width 240ms ease;
+}
+
+/* A row's own verdict, said in the one place a colour can carry it. Blocked
+   is the only one drawn loudly: it is the row you must not pick, and every
+   other state is some degree of fine. */
+.row[data-state="blocked"] .row__name { color: var(--text-off); }
+.row[data-state="blocked"] .row__meta { color: var(--fail); }
+.row[data-state="ok"] .row__meta,
+.row[data-state="some"] .row__meta { color: var(--text-muted); }
+
+/* The row that opens a country's exits. Quieter than a place - it is a way
+   of looking, not somewhere to go. */
+.row--more {
+  height: 32px;
+  min-height: 0;
+  justify-content: flex-start;
+  gap: 6px;
+  color: var(--text-off);
+}
+.row--more::before { display: none; }
+.row--more .row__meta { font-size: 10.5px; }
+.row--more .row__chev {
+  width: 13px; height: 13px;
+  transition: transform var(--fade);
+}
+.row--more[data-open="true"] .row__chev { transform: rotate(180deg); }
+
+.exits {
+  display: grid;
+  gap: 2px;
+  padding: 2px 16px 8px;
+}
+
+.exit {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--r-ctl);
+  background: var(--control);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.exit:hover { background: var(--control-hover); }
+.exit:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+.exit__name {
+  flex: 1; min-width: 0;
+  font-size: 11.5px;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.exit__meta {
+  flex: none;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px;
+  color: var(--text-off);
+}
+.exit__ping {
+  flex: none;
+  min-width: 62px;
+  text-align: right;
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+/* Blocked exits stay in the list rather than being hidden. Which addresses
+   are refused is the finding - dropping them would leave a shorter list
+   with no way to tell it had been filtered. */
+.exit[data-state="blocked"] { opacity: 0.55; }
+.exit[data-state="blocked"] .exit__ping {
+  color: var(--fail);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  max-width: 120px;
+}
+.exit[data-state="ok"] .exit__ping { color: var(--ok); }
+
+/* ------------------------------------------- keeping names off the flags */
+
+/* The flag wash is the row's ground, and it had crept far enough left to sit
+   under the longer country names - "Bosnia and Herzegovina" and "United Arab
+   Emirates" were being read off the middle of a flag. Now that rows carry a
+   time and a verdict as well as a name, there is more to read on that line
+   and less room to lose.
+
+   So the ramp starts later and ends later: faint until well past the text,
+   full only at the trailing edge. Hovering still brings it up, which is when
+   somebody is looking at that row rather than scanning past it. */
+.row::before {
+  opacity: 0.34;
+  -webkit-mask-image: linear-gradient(to right, transparent 0%,
+                      rgba(0, 0, 0, 0.10) 44%, #000 82%);
+  mask-image: linear-gradient(to right, transparent 0%,
+              rgba(0, 0, 0, 0.10) 44%, #000 82%);
+}
+.row:hover::before, .row.is-cursor::before { opacity: 0.5; }
+
+/* The name gets the weight now that there is a time beside it competing for
+   the eye. */
+.row__name { font-weight: 600; letter-spacing: -0.005em; }
+
+/* One line, and it has to hold "BE · 1 relay · 1.2 s · 5/6 answering" on a
+   narrow window without pushing the flag out of the row. */
+.row__meta {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* The test control is a thing you press once in a while, not the reason the
+   sheet is open - so it sits at the weight of the note beside it rather than
+   at the weight of Connect. */
+.reach .btn {
+  height: 30px;
+  padding: 0 13px;
+  font-size: 11.5px;
+  border-radius: 999px;
+}

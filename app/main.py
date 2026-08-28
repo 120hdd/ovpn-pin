@@ -353,6 +353,9 @@ class Api:
         # Spans the two halves of a Windscribe sign-in - the name and password
         # that fetched a puzzle, waiting for the puzzle to be let go of.
         self._ws_pending = None
+        # One reachability test at a time. It is eight connections wide
+        # already; two of them racing would measure each other.
+        self._testing = False
 
     # -- talking to the page ----------------------------------------------
 
@@ -1179,6 +1182,52 @@ class Api:
         _, into = self._pin_folders()
         return self.useSiteFolder(folder or into)
 
+    # -- which of them answer, and how fast --------------------------------
+
+    def testReach(self, country=None, provider=None):
+        """Ask every exit on offer whether it takes the credentials.
+
+        The one thing the app could never say. An exit filtered on this line
+        looks exactly like one that is merely slow, and the only way to tell
+        them apart is to ask - which the connect race does every time and
+        then throws away. This asks once and keeps the answer.
+        """
+        if self._testing:
+            return {'ok': False, 'error': 'busy'}
+
+        pool = [s for s in self._engine.servers()
+                if (not country or s.country == country)
+                and (not provider or s.provider == provider)]
+        if not pool:
+            return {'ok': False, 'error': 'Nothing to test.'}
+        only = {s.file for s in pool}
+        self._testing = True
+
+        def work():
+            try:
+                out = self._engine.test_reach(
+                    lambda p: self._emit('Reach', p), only=only)
+                out['ok'] = True
+                out['countries'] = self._engine.catalogue()
+                self._emit('ReachDone', out)
+            except Exception as e:
+                self._emit('ReachDone', {'ok': False, 'error': str(e)})
+            finally:
+                self._testing = False
+
+        threading.Thread(target=work, daemon=True).start()
+        return {'ok': True, 'total': len(only)}
+
+    def cancelReach(self):
+        self._engine.cancelled.set()
+        return {'ok': True}
+
+    def exitsIn(self, country, provider=None):
+        """The individual exits behind one country, with their times."""
+        where, _, via = (country or '').partition(':')
+        return {'ok': True,
+                'exits': self._engine.exits(where, provider or via or None)}
+
     def remember(self, code):
         self._settings['picked'] = code
         save_settings(self._settings)
@@ -1198,8 +1247,18 @@ class Api:
         # both is one place with two ways in, and which way in is a real
         # choice - they are different companies, different addresses and,
         # on this line, different odds of being filtered.
-        where, _, want = (country or '').partition(':')
-        want = want if want in accounts.PROVIDERS else None
+        # Three shapes, narrowing. "fr" is France through whichever provider
+        # answers first; "fr:windscribe" is France through that one;
+        # "file:<config>" is one named exit, picked off a list that had its
+        # measured time beside it - so racing its neighbours instead would be
+        # answering a question nobody asked.
+        only = None
+        if (country or '').startswith('file:'):
+            only = country[5:]
+            where, want = None, None
+        else:
+            where, _, want = (country or '').partition(':')
+            want = want if want in accounts.PROVIDERS else None
         # A saved pick can outlive the provider it names - switched off in
         # the roster, or its account removed. Asking for it anyway is
         # guaranteed to find nothing and to say so in terms of folders, which
@@ -1211,7 +1270,8 @@ class Api:
         def work():
             try:
                 result = self._engine.connect(
-                    where, lambda p: self._emit('Progress', p), provider=want)
+                    where, lambda p: self._emit('Progress', p),
+                    provider=want, only=only)
                 self._since = time.time()
                 self._retray('on')
                 self._emit('Connected', result)
@@ -2123,6 +2183,45 @@ def ui_check(window):
             " r.scrollIntoView({block: 'center'});"
             " return r.dataset.code; })()")
         time.sleep(0.7)
+        # -- which answered, and how fast -----------------------------
+        #
+        # Read off the real list rather than a synthetic one, because the
+        # point of the feature is what it says about exits that have been
+        # asked - and by now some of these have been.
+        said['reachBar'] = window.evaluate_js(
+            "!!document.getElementById('reachGo')")
+        said['rowStates'] = window.evaluate_js(
+            "(() => { const n = {};"
+            " for (const r of document.querySelectorAll('.row[data-state]'))"
+            "   n[r.dataset.state] = (n[r.dataset.state] || 0) + 1;"
+            " return n; })()")
+        said['rowsSayMs'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row__meta'))"
+            ".filter(e => / ms| s$|blocked here/.test(e.textContent)).length")
+        # Opening one country's exits, which is the "each server" half.
+        window.evaluate_js(
+            "(() => { const m = document.querySelector('.row--more');"
+            " if (m) m.click(); return !!m; })()")
+        time.sleep(1.2)
+        said['exitsOpened'] = window.evaluate_js(
+            "document.querySelectorAll('.exit').length")
+        said['exitsPickable'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.exit'))"
+            ".every(e => (e.dataset.code || '').startsWith('file:'))")
+        said['exitsSay'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.exit')).slice(0, 4).map("
+            "e => e.dataset.state + ' ' + e.querySelector('.exit__ping').textContent)")
+        said['exitsShot'] = shot('picker-exits')
+        # A country whose every address was refused. It has to read as
+        # different from one nobody has asked yet - that difference is the
+        # whole feature, and it is the one thing a colour alone cannot carry.
+        said['blockedSays'] = window.evaluate_js(
+            "(() => { const r = document.querySelector('.row[data-state=blocked]');"
+            " if (!r) return null; r.scrollIntoView({block: 'center'});"
+            " return r.querySelector('.row__name').textContent + ' | '"
+            "      + r.querySelector('.row__meta').textContent; })()")
+        time.sleep(0.7)
+        said['blockedShot'] = shot('picker-blocked')
         said['pickedShot'] = shot('picker-picked')
         said['errorsAfter'] = window.evaluate_js('window.__errs')
     except Exception as e:

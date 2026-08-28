@@ -26,6 +26,10 @@ const state = {
   plan: null,           // the last answer about what a test would cost
   pinning: null,        // the same two, for pinning
   pinPlan: null,
+  providers: null,      // which providers the exit list is drawn from
+  testing: false,       // a reachability test is running
+  openExits: null,      // which row has its individual exits showing
+  exits: {},            // and those exits, once fetched, by that row's code
 };
 
 const flagUrl = (code) => `url("flags/${code}.svg")`;
@@ -193,8 +197,16 @@ function setHint(text, bad) {
 }
 
 function nameOf(code) {
-  // "fr" and "fr:windscribe" are the same place, said with and without which
-  // way in - so the country is always the part before the colon.
+  // A named exit says the country and the host it was pinned from. The
+  // filename carries both - "at-vie.ws.at-007.totallyacdn.com_1.2.3.4.ovpn" -
+  // which is why it can be read back without the exits list to hand.
+  if ((code || '').startsWith('file:')) {
+    const file = code.slice(5);
+    const c = state.countries.find((x) => x.code === file.slice(0, 2));
+    const host = file.replace(/^[a-z]{2}-[a-z0-9]{3}\.(?:prod|ws)\./i, '')
+      .replace(/_\d{1,3}(?:\.\d{1,3}){3}\.ovpn$/, '');
+    return `${c ? c.name : file.slice(0, 2).toUpperCase()} · ${host}`;
+  }
   const [where, via] = (code || '').toLowerCase().split(':');
   const c = state.countries.find((x) => x.code === where);
   const name = c ? c.name : (where || '').toUpperCase();
@@ -335,10 +347,40 @@ function drawList(query) {
      The country's own row stays, and stays first, because it means
      "whichever answers" - which is what most people want most of the time.
      The rows under it are for when it is not. */
+  /* The row that opens the exits behind a country.
+
+     A row of its own rather than a control inside the country's row: that
+     row is a <button> that picks the place, and a button inside a button is
+     not a thing. It only appears where there is something to open - one
+     exit is already the whole story. */
+  const buildMore = (c, code) => {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'row row--more';
+    more.dataset.for = code;
+    more.dataset.open = String(state.openExits === code);
+    const n = code.includes(':')
+      ? (c.by || {})[code.split(':')[1]] || 0 : c.count;
+    const said_ = document.createElement('span');
+    said_.className = 'row__meta';
+    said_.textContent = `${n} server${n === 1 ? '' : 's'}, one by one`;
+    const chev = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    chev.setAttribute('class', 'ico row__chev');
+    chev.setAttribute('aria-hidden', 'true');
+    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    use.setAttribute('href', '#i-chev-down');
+    chev.appendChild(use);
+    more.append(said_, chev);
+    return more;
+  };
+
   const buildGroup = (c) => {
     const from = Object.keys(c.by || {}).filter((k) => c.by[k] > 0).sort();
-    if (from.length < 2) return [build(c)];
-    return [build(c, null, true), ...from.map((via) => build(c, via))];
+    const out = from.length < 2
+      ? [build(c)]
+      : [build(c, null, true), ...from.map((via) => build(c, via))];
+    if (c.count > 1) out.push(buildMore(c, c.code));
+    return out;
   };
 
   const build = (c, via, heads) => {
@@ -365,9 +407,23 @@ function drawList(query) {
       // by the row directly above it.
       name.textContent = PROVIDER_NAMES[via] || via;
       const n = (c.by || {})[via] || 0;
-      meta.textContent = `${n} relay${n === 1 ? '' : 's'}`;
+      const ok = (c.byOk || {})[via];
+      const ping = (c.byPing || {})[via];
+      meta.textContent = `${n} relay${n === 1 ? '' : 's'}`
+        + (ping !== undefined && ping !== null ? ` · ${msSaid(ping)}` : '')
+        + (c.tested && !ok ? ' · blocked here' : '');
+      row.dataset.state = !c.tested ? 'untested'
+        : ok ? (ok < n ? 'some' : 'ok') : 'blocked';
     } else if (heads) {
-      meta.textContent = meta.textContent + ' · whichever answers';
+      meta.textContent = meta.textContent + ' · whichever answers'
+        + reachSaid(c);
+      row.dataset.state = reachState(c);
+    } else {
+      // What the last test found, after the count: a time when it answered,
+      // and that it did not when it did not. Nothing at all before it has
+      // been asked, because "untested" and "blocked" must not look alike.
+      meta.textContent = meta.textContent + reachSaid(c);
+      row.dataset.state = reachState(c);
     }
     copy.append(name, meta);
     // Which provider the exits behind this country actually come from.
@@ -1918,8 +1974,12 @@ $('more').addEventListener('click', () => {
 // One listener on the list rather than one per row, so a re-render cannot
 // leave a stale handler behind.
 $('list').addEventListener('click', (e) => {
+  // An exit row picks that one exit; the row that opens them is not a pick
+  // at all and is handled where the opening is.
+  const exit = e.target.closest('.exit');
+  if (exit) { choose(exit.dataset.code); return; }
   const row = e.target.closest('.row');
-  if (row) choose(row.dataset.code);
+  if (row && !row.classList.contains('row--more')) choose(row.dataset.code);
 });
 
 $('picker').addEventListener('keydown', (e) => {
@@ -2942,3 +3002,140 @@ async function commitUse() {
 }
 
 $('useOpts').addEventListener('change', commitUse);
+
+/* -------------------------------------------- which of them actually answer */
+
+/* An exit that is filtered on this line looks exactly like one that is
+   merely slow. The only way to tell them apart is to ask - which the connect
+   race does every single time and then throws away, so the answer was always
+   "try it and see", spending the same seconds and learning nothing.
+
+   Asking once and keeping the answer turns the list from a list of places
+   into a list of places that work, in the order they answered. */
+
+function msSaid(ms) {
+  if (ms === null || ms === undefined) return '';
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
+}
+
+/* What a row says about itself once it has been tested: nothing at all
+   before, a time when it answered, and why not when it did not. Kept short -
+   this sits after the relay count on one line. */
+function reachSaid(c) {
+  if (!c || !c.tested) return '';
+  if (!c.ok) return ' · blocked here';
+  const some = c.ok < c.count ? ` · ${c.ok}/${c.count} answering` : '';
+  return c.ping === null ? some : ` · ${msSaid(c.ping)}${some}`;
+}
+
+function reachState(c) {
+  if (!c || !c.tested) return 'untested';
+  if (!c.ok) return 'blocked';
+  return c.ok < c.count ? 'some' : 'ok';
+}
+
+/* -- running one ------------------------------------------------------- */
+
+async function startReach() {
+  if (state.testing) {
+    await window.pywebview.api.cancelReach();
+    return;
+  }
+  const r = await window.pywebview.api.testReach();
+  if (!r.ok) { said($('reachSaid'), r.error, 'bad'); return; }
+  state.testing = true;
+  $('reachGo').textContent = 'Stop';
+  said($('reachSaid'), `Asking ${r.total}…`);
+}
+
+window.onReach = (p) => {
+  // Eight at a time, so the count moves in steps rather than smoothly. It is
+  // still the only honest thing to show: a bar would have to guess at how
+  // long the ones still in flight are going to take, and the slow ones are
+  // exactly the ones that are about to time out.
+  said($('reachSaid'), `${p.done} of ${p.total} asked…`);
+  $('reachBar').style.setProperty('--at', `${(p.done / (p.total || 1)) * 100}%`);
+};
+
+window.onReachDone = (r) => {
+  state.testing = false;
+  $('reachGo').textContent = 'Test';
+  $('reachBar').style.setProperty('--at', '0%');
+  if (!r.ok) { said($('reachSaid'), r.error || 'Could not test.', 'bad'); return; }
+  state.countries = r.countries || state.countries;
+  state.exits = {};            // measured again, so the old detail is stale
+  said($('reachSaid'),
+    r.cancelled ? `Stopped after ${r.tested}. ${r.ok} answered.`
+      : `${r.ok} of ${r.tested} answered.`,
+    r.ok ? 'good' : 'bad');
+  // The list is rebuilt rather than patched: every row's order can change,
+  // because answering ones sort above blocked ones.
+  $('list').dataset.key = '';
+  drawList($('search').value.trim());
+  render();
+};
+
+$('reachGo').addEventListener('click', startReach);
+
+/* -- the exits behind one row ------------------------------------------ */
+
+/* Countries are what the list is, because ninety-one endpoints is not
+   something anybody reads. But once each exit has a measured time, the
+   individual ones are worth being able to look at - "why is this country
+   slow" and "is this one blocked" are questions about a server. */
+
+async function toggleExits(code, after) {
+  const open = state.openExits === code;
+  state.openExits = open ? null : code;
+  for (const el of document.querySelectorAll('.exits')) el.remove();
+  for (const b of document.querySelectorAll('.row--more')) {
+    b.dataset.open = String(b.dataset.for === state.openExits);
+  }
+  if (open) return;
+
+  const [where, via] = code.split(':');
+  let list = state.exits[code];
+  if (!list) {
+    const r = await window.pywebview.api.exitsIn(where, via || null);
+    list = (r && r.exits) || [];
+    state.exits[code] = list;
+  }
+  if (state.openExits !== code) return;   // toggled again while it loaded
+
+  const box = document.createElement('div');
+  box.className = 'exits';
+  for (const x of list) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'exit';
+    row.dataset.code = `file:${x.file}`;
+    row.dataset.state = x.ok === true ? 'ok' : x.ok === false ? 'blocked' : 'untested';
+
+    const name = document.createElement('span');
+    name.className = 'exit__name';
+    // The host, because that is what the address was pinned from and what
+    // the certificate is checked against - the filename is ours, the host is
+    // the provider's.
+    name.textContent = x.host || x.file;
+
+    const meta = document.createElement('span');
+    meta.className = 'exit__meta';
+    meta.textContent = x.ip;
+
+    const said_ = document.createElement('span');
+    said_.className = 'exit__ping';
+    said_.textContent = x.ok === true ? msSaid(x.ms)
+      : x.ok === false ? (x.why || 'no answer')
+        : 'not tested';
+    if (x.ok === false) said_.title = x.why || '';
+
+    row.append(name, meta, said_);
+    box.append(row);
+  }
+  after.insertAdjacentElement('afterend', box);
+}
+
+$('list').addEventListener('click', (e) => {
+  const more = e.target.closest('.row--more');
+  if (more) toggleExits(more.dataset.for, more);
+});

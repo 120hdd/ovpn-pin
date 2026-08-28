@@ -248,6 +248,18 @@
       <span class="rig__key" aria-hidden="true">/</span>
     </div>
   </div>
+  <!-- Which of them actually answer.
+
+       An exit filtered on this line looks exactly like one that is merely
+       slow, and the only way to tell them apart is to ask. The connect race
+       asks every time and throws the answer away; this asks once and keeps
+       it, so the list can be ordered by what works instead of by name. -->
+  <div class="reach" id="reach">
+    <button class="btn btn--quiet btn--auto" id="reachGo" type="button">Test</button>
+    <p class="note" id="reachSaid">Times are from the last test.</p>
+    <i class="reach__bar" id="reachBar" aria-hidden="true"></i>
+  </div>
+
   <div class="sheet__list" id="list"></div>
 </dialog>
 

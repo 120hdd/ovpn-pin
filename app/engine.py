@@ -66,6 +66,11 @@ CONFIG = re.compile(r'^(?:(\d+\.\d+)s-)?([a-z]{2})-([a-z]{3})\.(?:prod|ws)\.',
 # in use" and no obvious cause.
 DEFAULT_PORT = 8877
 
+# What the last reachability test found, kept between runs: an exit that
+# was refused an hour ago is worth showing as refused now, rather than
+# making somebody find out again.
+REACH_PATH = os.path.join(paths.STATE_DIR, 'reach.json')
+
 
 def clean_port(value):
     """A port or a sentence saying why not.
@@ -221,15 +226,39 @@ class Engine:
         """Countries, not servers. Ninety-one endpoints is a list nobody
         reads; seventy-five countries is a thing people already have opinions
         about. Which city inside one is our problem, not theirs."""
+        found = self.reach()
         by_country = {}
         for s in self.servers():
             c = by_country.setdefault(s.country, {'code': s.country,
                                                   'cities': set(),
                                                   'count': 0,
                                                   'best': None,
-                                                  'by': {}})
+                                                  'by': {},
+                                                  'tested': 0,
+                                                  'ok': 0,
+                                                  'ping': None,
+                                                  'byOk': {},
+                                                  'byPing': {}})
             c['cities'].add(s.city)
             c['count'] += 1
+
+            # What the last test found about this exit, folded up per country
+            # and per provider. Kept as separate keys rather than folded into
+            # `by` so that a country nobody has tested still answers the only
+            # question the list used to be able to answer - how many are here.
+            rec = found.get(s.file)
+            if rec:
+                c['tested'] += 1
+                if rec.get('ok'):
+                    c['ok'] += 1
+                    c['byOk'][s.provider] = c['byOk'].get(s.provider, 0) + 1
+                    ms = rec.get('ms')
+                    if ms is not None:
+                        if c['ping'] is None or ms < c['ping']:
+                            c['ping'] = ms
+                        was = c['byPing'].get(s.provider)
+                        if was is None or ms < was:
+                            c['byPing'][s.provider] = ms
             # Per provider as well as in total, because a country backed by
             # eleven Surfshark exits and one Windscribe one is a different
             # proposition from the reverse, and the row that says only "12
@@ -246,10 +275,28 @@ class Engine:
                         'cities': len(c['cities']),
                         'count': c['count'],
                         'by': c['by'],
+                        'tested': c['tested'],
+                        'ok': c['ok'],
+                        'ping': c['ping'],
+                        'byOk': c['byOk'],
+                        'byPing': c['byPing'],
                         'best': c['best']})
-        # Quickest first, and anything with no recorded time last rather than
-        # first - an unmeasured exit is not a fast one.
-        out.sort(key=lambda c: (c['best'] is None, c['best'] or 0, c['name']))
+        # Answering first, then quickest, then the rest.
+        #
+        # A country every one of whose addresses was refused belongs at the
+        # bottom whatever its name: it is the one thing about a list of
+        # places to connect through that is worth reordering for. Untested
+        # sits between the two - not known to be blocked, not known to be
+        # quick - and an unmeasured exit is still not a fast one.
+
+        def rank(c):
+            blocked = c['tested'] and not c['ok']
+            return (bool(blocked),
+                    c['ping'] is None,
+                    c['ping'] if c['ping'] is not None else 0,
+                    c['best'] is None, c['best'] or 0, c['name'])
+
+        out.sort(key=rank)
         return out
 
     # -- credentials -------------------------------------------------------
@@ -406,7 +453,7 @@ class Engine:
 
     # -- choosing one ------------------------------------------------------
 
-    def candidates(self, country, provider=None):
+    def candidates(self, country, provider=None, only=None):
         """The addresses worth asking, in the order worth asking them.
 
         The rule differs by what was asked for, and getting this wrong made
@@ -424,6 +471,11 @@ class Engine:
         measures how hard you are hammering the provider rather than which
         exit is quick.
         """
+        # One named config beats every other rule here: it was picked off a
+        # list of exits with their own measured times, and racing its
+        # neighbours instead would be answering a question nobody asked.
+        if only:
+            return [s for s in self.servers() if s.file == only]
         pool = [s for s in self.servers()
                 if (country in (None, 'auto') or s.country == country)
                 and (provider is None or s.provider == provider)]
@@ -438,8 +490,181 @@ class Engine:
             return out[:140]
         return pool[:80]
 
+    def exits(self, country, provider=None):
+        """Every individual exit in one country, with what is known about it.
+
+        The list has always been countries, because ninety-one endpoints is
+        not something anybody reads. But once each one has a measured answer
+        and a time beside it, the individual exits are worth being able to
+        look at - "why is this country slow" and "is this one blocked" are
+        questions about a server, not about a place.
+        """
+        found = self.reach()
+        out = []
+        for s in self.servers():
+            if s.country != country:
+                continue
+            if provider and s.provider != provider:
+                continue
+            rec = found.get(s.file) or {}
+            try:
+                ip, host = px.read_config(s.path)
+            except SystemExit:
+                ip, host = None, None
+            out.append({'file': s.file, 'city': s.city, 'cityName':
+                        city_name(s.city), 'provider': s.provider,
+                        'host': host or '', 'ip': ip or '',
+                        'ok': rec.get('ok'), 'ms': rec.get('ms'),
+                        'why': rec.get('why', ''), 'at': rec.get('at')})
+        # Answering first and quickest first; untested after those, refused
+        # last. The same order as the countries, for the same reason.
+        out.sort(key=lambda e: (e['ok'] is False, e['ok'] is None,
+                                e['ms'] if e['ms'] is not None else 0,
+                                e['host']))
+        return out
+
+    def with_credentials(self, pool):
+        """The exits in that pool that something can actually open, and the
+        credentials to open them with.
+
+        Read once per provider, not once per probe - and before the race
+        rather than inside it, so "you have no credentials" is an answer that
+        arrives immediately instead of eighty timeouts later.
+        """
+        creds, missing = {}, {}
+        for s in list(pool):
+            path = self.auth_file_for(s)
+            if path in creds or path in missing:
+                continue
+            try:
+                creds[path] = self.credentials_for(s)
+            except RuntimeError as e:
+                missing[path] = str(e)
+        if missing:
+            # Half a pool is still a pool. Only if nothing is left does the
+            # missing credential become the thing that stopped the connect.
+            pool = [s for s in pool if self.auth_file_for(s) in creds]
+            if not pool:
+                raise RuntimeError(sorted(missing.values())[0])
+        return pool, creds
+
+    def ask_exit(self, server, creds, timeout=6):
+        """Whether this one exit takes the credentials, and how long it took.
+
+        The same question the race asks, in the same way, which is the point:
+        a reachability test that probed differently would be measuring
+        something other than whether connecting is about to work.
+        """
+        ip, host = px.read_config(server.path)
+        if not host:
+            raise OSError('not pinned')
+        user, password = creds[self.auth_file_for(server)]
+        if windscribe.is_windscribe(server.file):
+            # A `200` from Windscribe is not an answer. Its nghttpx says 200
+            # to an unauthenticated CONNECT too and then forwards nothing, so
+            # can_connect() - which is right for Surfshark, where the same
+            # request is refused with 407 - would report every exit alive and
+            # hand back one that silently drops everything. Ask with a whole
+            # request instead.
+            #
+            # Twice the budget, because it is doing about twice the work:
+            # can_connect stops at the CONNECT, this one tunnels, does an
+            # inner handshake and fetches a page. windscribe.md measured cold
+            # dials at up to 4.7s, which is inside six seconds only just -
+            # and an exit failed for being slow is one the race never comes
+            # back to.
+            took = windscribe.verify_tunnel(
+                px, ip, host, user, password, timeout * 2)['ttfb']
+        else:
+            took = px.can_connect(
+                px.Exit(ip, 443, host, user, password), timeout)
+        return took, ip, host
+
+    # -- which of them are actually reachable -----------------------------
+
+    def reach(self):
+        """What the last test found, by config filename."""
+        try:
+            with open(REACH_PATH, encoding='utf-8') as f:
+                got = json.load(f)
+            return got if isinstance(got, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def test_reach(self, progress, width=8, timeout=6, only=None):
+        """Ask every exit on offer whether it answers, and how fast.
+
+        This is the thing the app could never say. An exit that is filtered
+        on this line looks exactly like one that is simply slow, and the only
+        way to tell them apart is to ask - so the answer was always "try
+        connecting and see", which spends the same time and throws the
+        finding away.
+
+        Kept between runs, because the finding is worth more than the run: a
+        country whose every address was refused an hour ago is worth showing
+        as blocked now, rather than making somebody discover it again.
+        """
+        pool = [s for s in self.servers()
+                if not only or s.file in only]
+        if not pool:
+            raise RuntimeError('no-servers')
+        pool, creds = self.with_credentials(pool)
+
+        self.cancelled.clear()
+        found = self.reach()
+        done, total = 0, len(pool)
+        progress({'phase': 'testing', 'done': 0, 'total': total})
+
+        def ask(s):
+            if self.cancelled.is_set():
+                raise OSError('cancelled')
+            took, ip, _host = self.ask_exit(s, creds, timeout)
+            return s, took, ip
+
+        ex = cf.ThreadPoolExecutor(max_workers=width)
+        try:
+            futures = {ex.submit(ask, s): s for s in pool}
+            for fut in cf.as_completed(list(futures)):
+                done += 1
+                s = futures[fut]
+                try:
+                    _s, took, ip = fut.result()
+                    found[s.file] = {'ok': True, 'ms': int(took * 1000),
+                                     'ip': ip, 'at': int(time.time())}
+                except Exception as e:
+                    # Why it refused is worth keeping. "filtered here" and
+                    # "no proxy for this account" are the same red dot and
+                    # completely different problems.
+                    found[s.file] = {'ok': False, 'ms': None,
+                                     'why': str(e).strip()[:60] or 'no answer',
+                                     'at': int(time.time())}
+                if done % 4 == 0 or done == total:
+                    progress({'phase': 'testing', 'done': done, 'total': total})
+                if self.cancelled.is_set():
+                    break
+        finally:
+            for f in futures:
+                f.cancel()
+            ex.shutdown(wait=False, cancel_futures=True)
+            self._save_reach(found)
+
+        ok = sum(1 for s in pool if found.get(s.file, {}).get('ok'))
+        return {'tested': done, 'total': total, 'ok': ok,
+                'cancelled': self.cancelled.is_set()}
+
+    @staticmethod
+    def _save_reach(found):
+        os.makedirs(paths.STATE_DIR, exist_ok=True)
+        tmp = f'{REACH_PATH}.{os.getpid()}'
+        try:
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(found, f)
+            os.replace(tmp, REACH_PATH)
+        except OSError:
+            pass
+
     def find_exit(self, country, progress, width=8, timeout=6,
-                  provider=None):
+                  provider=None, only=None):
         """Race the candidates and take the first that says yes.
 
         First rather than best. An earlier version waited for two so it could
@@ -459,29 +684,10 @@ class Engine:
         bad moment when only one exit in twenty is accepting still works
         through the list, just over a few more rounds.
         """
-        ordered = self.candidates(country, provider)
+        ordered = self.candidates(country, provider, only)
         if not ordered:
             raise RuntimeError('no-servers')
-
-        # Once per provider, not once per probe - and before the race rather
-        # than inside it, so "you have no credentials" is still an answer that
-        # arrives immediately instead of eighty timeouts later.
-        creds, missing = {}, {}
-        for s in list(ordered):
-            path = self.auth_file_for(s)
-            if path in creds or path in missing:
-                continue
-            try:
-                creds[path] = self.credentials_for(s)
-            except RuntimeError as e:
-                missing[path] = str(e)
-        if missing:
-            # Half a pool is still a pool. Only if nothing is left does the
-            # missing credential become the thing that stopped the connect.
-            ordered = [s for s in ordered
-                       if self.auth_file_for(s) in creds]
-            if not ordered:
-                raise RuntimeError(sorted(missing.values())[0])
+        ordered, creds = self.with_credentials(ordered)
 
         self.cancelled.clear()
         winners, asked, done = [], len(ordered), 0
@@ -490,28 +696,7 @@ class Engine:
         def probe(s):
             if self.cancelled.is_set():
                 raise OSError('cancelled')
-            ip, host = px.read_config(s.path)
-            if not host:
-                raise OSError('not pinned')
-            user, password = creds[self.auth_file_for(s)]
-            if windscribe.is_windscribe(s.file):
-                # A `200` from Windscribe is not an answer. Its nghttpx says
-                # 200 to an unauthenticated CONNECT too and then forwards
-                # nothing, so can_connect() - which is right for Surfshark,
-                # where the same request is refused with 407 - would report
-                # every exit alive and hand back one that silently drops
-                # everything. Ask with a whole request instead.
-                # Twice the budget, because it is doing about twice the work:
-                # can_connect stops at the CONNECT, this one tunnels, does an
-                # inner handshake and fetches a page. windscribe.md measured
-                # cold dials at up to 4.7s, which is inside six seconds only
-                # just - and an exit failed for being slow is an exit the
-                # race never comes back to.
-                took = windscribe.verify_tunnel(
-                    px, ip, host, user, password, timeout * 2)['ttfb']
-            else:
-                took = px.can_connect(
-                    px.Exit(ip, 443, host, user, password), timeout)
+            took, ip, host = self.ask_exit(s, creds, timeout)
             return took, s, ip, host
 
         ex = cf.ThreadPoolExecutor(max_workers=width)
@@ -585,12 +770,12 @@ class Engine:
                 pass
         raise RuntimeError(f'did-not-start: {said[-400:]}')
 
-    def connect(self, country, progress, provider=None):
+    def connect(self, country, progress, provider=None, only=None):
         with self.lock:
             self.disconnect(quiet=True)
 
             took, server, ip, host = self.find_exit(
-                country, progress, provider=provider)
+                country, progress, provider=provider, only=only)
             progress({'phase': 'starting', 'country': server.country,
                       'city': server.city})
 
