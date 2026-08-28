@@ -3384,7 +3384,12 @@ canvas.blob__body {
    each: indented, quieter, and without a flag of their own - repeating the
    flag three times would make one country look like three. */
 .row--via {
+  /* Taken out of the width as well as added to the left. .row is width:100%,
+     so an indent that is only a margin makes every indented row overhang by
+     exactly the indent - which showed up as 22px of horizontal scroll on the
+     whole list and rows running under its right edge. */
   margin-left: 22px;
+  width: calc(100% - 22px);
   min-height: 46px;
 }
 .row--via::before { opacity: 0.16; }

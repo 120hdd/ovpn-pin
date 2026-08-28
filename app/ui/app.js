@@ -281,7 +281,13 @@ function drawList(query) {
   // over the top of it. Nothing about that list changes between one open and
   // the next unless the query or the chosen country has, so it is only built
   // when one of them has.
-  const key = `${q}|${state.picked}|${state.countries.length}`;
+  // The provider selection belongs in here too. What a country row says now
+  // depends on which providers back it, and two different selections can
+  // leave the same number of countries standing - so a key counting only
+  // countries lets the list keep rows for a provider that has been switched
+  // off, with counts from before it was.
+  const key = `${q}|${state.picked}|${state.countries.length}`
+    + `|${(state.providers || []).join(',')}`;
   if (list.dataset.key === key) return;
   list.dataset.key = key;
 
@@ -2922,6 +2928,16 @@ async function commitUse() {
   said($('useSaid'), `${r.serverCount} exits from ${names}.`, 'good');
   state.providers = r.providers;
   state.countries = r.countries || state.countries;
+
+  // A pick naming a provider that has just been switched off would ask for
+  // exits the engine has been told not to offer, and come back "no servers
+  // in that folder for that country" - which is true, and no help at all.
+  // The country is still a good answer, so it falls back to that.
+  const [where, via] = String(state.picked || '').split(':');
+  if (via && !r.providers.includes(via)) {
+    state.picked = where;
+    await window.pywebview.api.remember(where);
+  }
   render();
 }
 

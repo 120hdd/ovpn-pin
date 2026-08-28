@@ -352,15 +352,7 @@ class Api:
         about them, and a chooser that greys a provider out without saying
         which is a chooser nobody can act on.
         """
-        was = self._engine.providers
-        self._engine.providers = None
-        try:
-            counts = {}
-            for s in self._engine.servers():
-                counts[s.provider] = counts.get(s.provider, 0) + 1
-        finally:
-            self._engine.providers = was
-
+        counts = self._engine.counts_by_provider()
         roster = accounts.listing()
         out = {}
         for name in accounts.PROVIDERS:
@@ -387,7 +379,12 @@ class Api:
                   if p in usable]
         if not chosen:
             chosen = usable
-        self._engine.providers = set(chosen) if chosen else set()
+        # Nothing usable is not the same as "offer nothing". With no accounts
+        # at all, an empty filter empties the country list too - and a person
+        # looking at 533 pinned servers and a blank picker has been told
+        # nothing. Connecting is already refused, with a message that says
+        # why, so the list is left showing what is there.
+        self._engine.providers = set(chosen) if chosen else None
         if self._settings.get('providers') != chosen:
             self._settings['providers'] = chosen
             save_settings(self._settings)
@@ -844,8 +841,10 @@ class Api:
         self._sync_providers()
         return {'ok': True, 'username': who['username'],
                 'credentials': bool(proxy) and not problem,
-                'remembered': accounts.find(account['id']).get('password')
-                is not None,
+                # From what put() just returned rather than looked up again -
+                # a second read that comes back empty would crash on the way
+                # out of a sign-in that had actually worked.
+                'remembered': account.get('password') is not None,
                 'error': problem or trouble or '',
                 'premium': who['premium']}
 
@@ -1193,6 +1192,13 @@ class Api:
         # on this line, different odds of being filtered.
         where, _, want = (country or '').partition(':')
         want = want if want in accounts.PROVIDERS else None
+        # A saved pick can outlive the provider it names - switched off in
+        # the roster, or its account removed. Asking for it anyway is
+        # guaranteed to find nothing and to say so in terms of folders, which
+        # is not what went wrong. The country on its own still works.
+        if want and self._engine.providers is not None \
+                and want not in self._engine.providers:
+            want = None
 
         def work():
             try:
@@ -1718,11 +1724,28 @@ def ui_check(window):
         # test skips that call - so it is stood in for here. Without it the
         # submit refuses, correctly, and the drag looks broken for a reason
         # that only exists in the test.
+        # With the add-account dialog already up, which is where a real
+        # puzzle arrives from - one modal opening over another, and the drag
+        # having to work in the top one. Shown on its own, this test passed
+        # while the flow it stands for was never tried.
+        window.evaluate_js("acctShowForm(true); acctSetProvider('windscribe')")
+        time.sleep(0.5)
         window.evaluate_js(
             f"wsShowCaptcha({{kind:'slider',top:{UI_CHECK_TOP},"
             f"background:'{UI_CHECK_BG}',slider:'{UI_CHECK_PIECE}'}});"
             "ws.token = 'ui-check-token'")
         time.sleep(1.5)
+        said['captchaOverForm'] = window.evaluate_js(
+            "document.getElementById('acctDlg').open"
+            " && document.getElementById('wsCapDlg').open")
+        # The one that decides whether it can be dragged at all: the piece
+        # has to be the topmost thing under the pointer where it is drawn.
+        said['captchaOnTop'] = window.evaluate_js(
+            "(() => { const p = document.getElementById('wsCapPc');"
+            " const b = p.getBoundingClientRect();"
+            " const hit = document.elementFromPoint(b.left + b.width / 2,"
+            "                                       b.top + b.height / 2);"
+            " return hit === p ? 'the piece' : (hit && hit.id) || 'something else'; })()")
         # A dialog, so that "is it up" is a question about the window rather
         # than about a hidden attribute somewhere down the settings sheet.
         said['wsCaptchaShown'] = window.evaluate_js(
@@ -2066,6 +2089,16 @@ def ui_check(window):
             '!!document.querySelector(".row[data-code=\'zz:windscribe\']")')
         said['splitNames'] = window.evaluate_js(
             "nameOf('zz:windscribe') + ' | ' + nameOf('zz')")
+        # Indented rows must still fit. .row is width:100%, so an indent put
+        # on as a margin makes every one of them overhang by exactly the
+        # indent and gives the list a horizontal scrollbar.
+        said['splitOverflows'] = window.evaluate_js(
+            "(() => { const l = document.getElementById('list');"
+            " return l.scrollWidth - l.clientWidth; })()")
+        said['splitWidest'] = window.evaluate_js(
+            "(() => { const l = document.getElementById('list').getBoundingClientRect();"
+            " return Math.max(0, ...Array.from(document.querySelectorAll('.row'))"
+            ".map(r => Math.round(r.getBoundingClientRect().right - l.right))); })()")
         said['splitShot'] = shot('picker-split')
         window.evaluate_js(
             "state.countries = window.__realCountries; drawList('')")

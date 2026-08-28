@@ -179,6 +179,24 @@ class Engine:
         return out
 
     def servers(self):
+        """The exits on offer: everything found, less what is filtered out."""
+        return [s for s in self.scan()
+                if self.providers is None or s.provider in self.providers]
+
+    def counts_by_provider(self):
+        """How many exits each provider has, whatever is selected.
+
+        Its own method rather than servers() with the filter turned off for a
+        moment: the filter is read by a connect racing on another thread, and
+        borrowing it to count with is a way to have that race see a provider
+        it was told not to offer.
+        """
+        out = {}
+        for s in self.scan():
+            out[s.provider] = out.get(s.provider, 0) + 1
+        return out
+
+    def scan(self):
         out, seen = [], set()
         for folder in self.sources():
             try:
@@ -194,13 +212,9 @@ class Engine:
                 if not m:
                     continue
                 seen.add(name)
-                server = Server(os.path.join(folder, name), name,
-                                float(m.group(1)) if m.group(1) else None,
-                                m.group(2).lower(), m.group(3).lower())
-                if (self.providers is not None
-                        and server.provider not in self.providers):
-                    continue
-                out.append(server)
+                out.append(Server(os.path.join(folder, name), name,
+                                  float(m.group(1)) if m.group(1) else None,
+                                  m.group(2).lower(), m.group(3).lower()))
         return out
 
     def catalogue(self):
@@ -487,8 +501,14 @@ class Engine:
                 # where the same request is refused with 407 - would report
                 # every exit alive and hand back one that silently drops
                 # everything. Ask with a whole request instead.
+                # Twice the budget, because it is doing about twice the work:
+                # can_connect stops at the CONNECT, this one tunnels, does an
+                # inner handshake and fetches a page. windscribe.md measured
+                # cold dials at up to 4.7s, which is inside six seconds only
+                # just - and an exit failed for being slow is an exit the
+                # race never comes back to.
                 took = windscribe.verify_tunnel(
-                    px, ip, host, user, password, timeout)['ttfb']
+                    px, ip, host, user, password, timeout * 2)['ttfb']
             else:
                 took = px.can_connect(
                     px.Exit(ip, 443, host, user, password), timeout)
