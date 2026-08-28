@@ -2000,16 +2000,40 @@ def meter_writer(port, stop):
 
 
 def alive(pid):
+    """Whether that process is still running - not merely still referred to.
+
+    Opening a handle is not the question, and answering it that way is a bug
+    that cost an evening. On Windows a process object outlives the process
+    itself for as long as anybody holds a handle to it, and the app holds one
+    on every proxy it starts, in the Popen it keeps. So after the proxy was
+    force-killed, OpenProcess still succeeded, `alive` still said yes, the
+    dead proxy's record survived read_states(), and the next worker refused
+    to start with "a proxy is already up on port 8877" - naming a pid that
+    had not existed for half an hour. Connecting worked exactly once per run
+    of the app.
+
+    WaitForSingleObject asks the question that was meant: a process object is
+    signalled when the process ends, so WAIT_TIMEOUT - it is not signalled,
+    nothing to wait for yet - is the only answer that means running. Checking
+    the exit code instead would work too, except that a process is allowed to
+    exit with 259 and that is the value that means "still active".
+    """
     if not pid:
         return False
     if os.name == 'nt':
         try:
             import ctypes
-            h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
-            if h:
-                ctypes.windll.kernel32.CloseHandle(h)
-                return True
-            return False
+            SYNCHRONIZE = 0x00100000
+            QUERY_LIMITED = 0x1000
+            WAIT_TIMEOUT = 0x102
+            k = ctypes.windll.kernel32
+            h = k.OpenProcess(SYNCHRONIZE | QUERY_LIMITED, False, pid)
+            if not h:
+                return False
+            try:
+                return k.WaitForSingleObject(h, 0) == WAIT_TIMEOUT
+            finally:
+                k.CloseHandle(h)
         except Exception:
             return False
     try:
