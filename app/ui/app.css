@@ -3050,3 +3050,353 @@ canvas.blob__body {
    with a filter to run over it. The look survives being folded into the
    opacity and the mask that were already there; the layer does not. */
 .sheet__list .row::before { filter: none; }
+
+/* ------------------------------------------------- the Windscribe captcha */
+
+/* A slider puzzle, drawn from the two base64 images the API sends. It is
+   here rather than in a hosted page or a second window for one reason worth
+   writing down: the puzzle arrives as data, so there is nothing to embed and
+   nobody else's frame to trust. The app draws it, the person drags it, and
+   the pointer path that comes out is what gets sent.
+
+   The stage is sized by the background's natural width, and the piece is
+   positioned in that same coordinate space - which is the space the solution
+   is measured in, so nothing has to be scaled back on the way out. */
+.ws-cap { display: grid; gap: 8px; margin: 2px 0 4px; }
+
+.ws-cap__stage {
+  position: relative;
+  width: 100%;
+  border-radius: var(--r-ctl);
+  overflow: hidden;
+  background: var(--control);
+  border: 1px solid var(--border);
+  /* No selection and no drag-image: both fire on a slow drag over an <img>
+     and both end the gesture, which loses the trail halfway through and
+     submits a path that stops in the middle of the puzzle. */
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.ws-cap__bg { display: block; width: 100%; height: auto; pointer-events: none; }
+/* The handle, not decoration - this is what gets dragged, so it has to take
+   the pointer. The rail below only mirrors where it reached. */
+.ws-cap__pc {
+  position: absolute;
+  left: 0;
+  cursor: grab;
+  touch-action: none;
+  will-change: transform;
+}
+.ws-cap__stage.is-held .ws-cap__pc { cursor: grabbing; }
+
+/* The rail is the thing under the pointer, not the piece. Dragging the piece
+   itself means the grab point and the reported position drift apart as the
+   image scales, and the first version did exactly that - the piece lagged
+   the cursor by a few pixels at one window size and matched it at another. */
+.ws-cap__rail {
+  position: relative;
+  height: 34px;
+  border-radius: 999px;
+  background: var(--control);
+  border: 1px solid var(--border);
+  touch-action: none;
+  /* Draggable too, so it has to say so. A bar with a knob on it reads as
+     draggable whatever the caption above says. */
+  cursor: grab;
+}
+.ws-cap__stage.is-held ~ .ws-cap__rail { cursor: grabbing; }
+.ws-cap__knob {
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 46px; height: 26px;
+  border-radius: 999px;
+  background: var(--control-active);
+  border: 1px solid var(--border);
+  will-change: transform;
+}
+.ws-cap__stage.is-held ~ .ws-cap__rail .ws-cap__knob {
+  background: var(--control-hover);
+}
+
+.ws-cap__ascii {
+  margin: 0;
+  padding: 10px;
+  border-radius: var(--r-ctl);
+  background: var(--control);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1.05;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* "optional", beside a caption that would otherwise read as a demand. Same
+   size as the caption and dimmer, so it reads as an aside rather than as a
+   second label. */
+.field__hint {
+  color: var(--text-off);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* The captcha dialog. Full-window like the other sheets, because the app's
+   window is small and a floating box inside a 400px-wide window is a box
+   with nowhere to float. The content sits at the top rather than centred:
+   the piece has to line up with a gap in a picture, and a puzzle that moves
+   vertically when the error line appears under it is a puzzle you have to
+   re-aim at. */
+.sheet--captcha .ws-cap {
+  padding: 0 16px 16px;
+  align-content: start;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+/* ------------------------------------------------ the settings, as a stack */
+
+/* A list of four, then the one you picked. Not four dropdowns: collapsed
+   sections still put every heading and the top of whichever was left open in
+   front of you at once, and closing one leaves you wherever the page had
+   scrolled to rather than back where you started. */
+.menu { padding: 6px 0; }
+
+.menu__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 15px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--divider);
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.menu__row:last-child { border-bottom: 0; }
+.menu__row:hover { background: var(--control-hover); }
+.menu__row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+.menu__copy { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.menu__name { font-size: 13.5px; font-weight: 650; color: var(--text); }
+.menu__note {
+  font-size: 11px;
+  color: var(--text-off);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+/* The same chevron the groups used, turned to point the way it now goes. */
+.menu__chev {
+  flex: none;
+  width: 15px; height: 15px;
+  color: var(--text-off);
+  transform: rotate(-90deg);
+}
+
+.screen { display: block; padding: 4px 0 8px; animation: rise var(--enter); }
+
+/* Back points left, out of the same sprite. */
+.icon--back { order: -1; margin-right: 2px; }
+.icon--back .ico { transform: rotate(90deg); }
+
+/* ------------------------------------------------------ the (i) tooltips */
+
+/* The explanations used to sit under every title as a paragraph, which made
+   a sheet of seven settings read as a page of documentation. They are still
+   there, in full, one hover away - and the ones that are corrections rather
+   than descriptions ("this port answers both", "being blocked is mostly a
+   property of the address") stay where they are, inline, because those are
+   about the control beside them and not about the pane. */
+.info {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 18px; height: 18px;
+  margin-left: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--text-off);
+  cursor: help;
+  position: relative;
+}
+.info:hover, .info:focus-visible { color: var(--text); }
+.info:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.info .ico { width: 13px; height: 13px; }
+
+.info__bubble {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 50%;
+  z-index: 40;
+  /* Anchored to the middle of the sheet rather than to the button, because
+     the button can sit two pixels from the right edge and a bubble centred
+     on it would hang off the window. */
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(280px, calc(100vw - 44px));
+  padding: 9px 11px;
+  border-radius: var(--r-ctl);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: left;
+  white-space: normal;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 120ms ease, visibility 120ms;
+}
+.info:hover .info__bubble,
+.info:focus-visible .info__bubble { opacity: 1; visibility: visible; }
+.info__bubble b { color: var(--text); font-weight: 600; }
+
+/* Near the right edge the bubble is pinned to the sheet instead of centred,
+   which is the one case translateX(-50%) cannot solve on its own. */
+.info--right .info__bubble { left: auto; right: 0; transform: none; }
+
+/* ----------------------------------------------------------- the roster */
+
+.acct { display: grid; gap: 6px; }
+
+.acct__row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border-radius: var(--r-ctl);
+  border: 1px solid var(--border);
+  background: var(--control);
+}
+.acct__row[data-active="1"] {
+  border-color: var(--ok);
+  background: var(--control-active);
+}
+
+.acct__who { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.acct__name {
+  font-size: 12.5px;
+  color: var(--text);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.acct__sub {
+  font-size: 10.5px;
+  color: var(--text-off);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+
+/* Which provider, said in a word rather than with a logo nobody licensed. */
+.acct__tag {
+  flex: none;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.acct__row[data-provider="windscribe"] .acct__tag { color: var(--jade-2, var(--ok)); }
+
+.acct__act { flex: none; display: flex; gap: 5px; }
+
+.acct__new {
+  display: grid;
+  gap: 9px;
+  margin-top: 4px;
+  padding: 11px;
+  border-radius: var(--r-ctl);
+  border: 1px dashed var(--border);
+}
+
+.acct__none {
+  padding: 11px;
+  border-radius: var(--r-ctl);
+  border: 1px dashed var(--border);
+  color: var(--text-off);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+
+/* -------------------------------------------- which providers, and whose */
+
+.use {
+  display: grid;
+  gap: 7px;
+  padding: 10px 11px;
+  margin-top: 8px;
+  border-radius: var(--r-ctl);
+  border: 1px solid var(--border);
+  background: var(--control);
+}
+.use__cap {
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-off);
+}
+.use__opts { display: grid; gap: 5px; }
+.use__opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+.use__opt input { accent-color: var(--ok); cursor: pointer; }
+/* Nothing pinned is said rather than shown as an empty tick that refuses. */
+.use__opt[data-empty="1"] { color: var(--text-off); cursor: default; }
+.use__opt[data-empty="1"] input { cursor: default; }
+.use__n { margin-left: auto; font-size: 10.5px; color: var(--text-off); }
+
+/* The tag on a country row. An initial, because the country's own name is
+   what the row is for and a word beside it competes with it. */
+.row__tags { display: flex; gap: 3px; margin-top: 3px; }
+.row__tag {
+  display: grid;
+  place-items: center;
+  width: 15px; height: 15px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--text-off);
+  background: var(--control);
+}
+.row__tag[data-provider="windscribe"] {
+  color: var(--jade-2, var(--ok));
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+}
+
+/* ------------------------------------- one country, two ways into it */
+
+/* The country's own row still means "whichever answers", so it keeps its
+   full weight. The rows under it are the same place through one provider
+   each: indented, quieter, and without a flag of their own - repeating the
+   flag three times would make one country look like three. */
+.row--via {
+  margin-left: 22px;
+  min-height: 46px;
+}
+.row--via::before { opacity: 0.16; }
+.row--via .row__name { font-size: 12.5px; font-weight: 550; }
+
+/* A rule down the left, so the indented rows read as belonging to the one
+   above rather than as three separate countries that happen to be near
+   each other. */
+.row--via::after {
+  content: '';
+  position: absolute;
+  left: -12px; top: 6px; bottom: 6px;
+  width: 1px;
+  background: var(--divider);
+}

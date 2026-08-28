@@ -11,9 +11,12 @@ server would put a claim on screen that nothing checked.
 NAMES = {
     'ad': 'Andorra',        'ae': 'United Arab Emirates',
     'af': 'Afghanistan',    'al': 'Albania',
-    'am': 'Armenia',        'ar': 'Argentina',
-    'at': 'Austria',        'au': 'Australia',
-    'az': 'Azerbaijan',     'ba': 'Bosnia and Herzegovina',
+    # Antarctica is not a joke entry: Windscribe lists one, and without a
+    # name here the country picker offers a row reading "AQ".
+    'am': 'Armenia',        'aq': 'Antarctica',
+    'ar': 'Argentina',      'at': 'Austria',
+    'au': 'Australia',      'az': 'Azerbaijan',
+    'ba': 'Bosnia and Herzegovina',
     'bd': 'Bangladesh',     'be': 'Belgium',
     'bg': 'Bulgaria',       'bh': 'Bahrain',
     'bn': 'Brunei',         'bo': 'Bolivia',

@@ -193,8 +193,12 @@ function setHint(text, bad) {
 }
 
 function nameOf(code) {
-  const c = state.countries.find((x) => x.code === (code || '').toLowerCase());
-  return c ? c.name : (code || '').toUpperCase();
+  // "fr" and "fr:windscribe" are the same place, said with and without which
+  // way in - so the country is always the part before the colon.
+  const [where, via] = (code || '').toLowerCase().split(':');
+  const c = state.countries.find((x) => x.code === where);
+  const name = c ? c.name : (where || '').toUpperCase();
+  return via ? `${name} · ${PROVIDER_NAMES[via] || via}` : name;
 }
 
 function render() {
@@ -314,11 +318,30 @@ function drawList(query) {
     return;
   }
 
-  const build = (c) => {
+  /* One row per way in, when there is more than one.
+
+     A country both providers reach is one place with two doors, and which
+     door is a real choice: they are different companies at different
+     addresses, and on this line one is often filtered where the other is
+     not. Showing "France - 24 relays" and picking for you hides the only
+     decision worth making there.
+
+     The country's own row stays, and stays first, because it means
+     "whichever answers" - which is what most people want most of the time.
+     The rows under it are for when it is not. */
+  const buildGroup = (c) => {
+    const from = Object.keys(c.by || {}).filter((k) => c.by[k] > 0).sort();
+    if (from.length < 2) return [build(c)];
+    return [build(c, null, true), ...from.map((via) => build(c, via))];
+  };
+
+  const build = (c, via, heads) => {
+    const code = via ? `${c.code}:${via}` : c.code;
     const row = document.createElement('button');
     row.type = 'button';
-    row.className = 'row' + (state.picked === c.code ? ' is-picked' : '');
-    row.dataset.code = c.code;
+    row.className = 'row' + (state.picked === code ? ' is-picked' : '')
+      + (via ? ' row--via' : '') + (heads ? ' row--heads' : '');
+    row.dataset.code = code;
     row.style.setProperty('--flag', flagUrl(c.code));
     const copy = document.createElement('span');
     copy.className = 'row__copy';
@@ -331,7 +354,41 @@ function drawList(query) {
     // will work, so that is the number shown rather than a speed nobody can
     // act on.
     meta.textContent = `${c.code.toUpperCase()} \u00b7 ${c.count} relay${c.count === 1 ? '' : 's'}`;
+    if (via) {
+      // The provider is the name here, because the country is already said
+      // by the row directly above it.
+      name.textContent = PROVIDER_NAMES[via] || via;
+      const n = (c.by || {})[via] || 0;
+      meta.textContent = `${n} relay${n === 1 ? '' : 's'}`;
+    } else if (heads) {
+      meta.textContent = meta.textContent + ' · whichever answers';
+    }
     copy.append(name, meta);
+    // Which provider the exits behind this country actually come from.
+    // Worth a tag rather than a number: with both switched on, "12 relays"
+    // says nothing about which credential is about to open one, and the two
+    // behave differently enough on this line to be worth telling apart.
+    // Only on a plain row. Under a group the provider is the row's own name
+    // and a tag repeating it is noise; on the group's head, tags would claim
+    // one exit of each, which is what the rows below it say properly.
+    const by = c.by || {};
+    const from = Object.keys(by).filter((k) => by[k] > 0).sort();
+    if (from.length && !via && !heads) {
+      const tags = document.createElement('span');
+      tags.className = 'row__tags';
+      for (const key of from) {
+        const t = document.createElement('span');
+        t.className = 'row__tag';
+        t.dataset.provider = key;
+        // An initial each, so a country backed by both is one glance rather
+        // than two words competing with the country's own name.
+        t.textContent = (PROVIDER_NAMES[key] || key).slice(0, 1);
+        t.title = (PROVIDER_NAMES[key] || key)
+          + ' · ' + by[key] + ' relay' + (by[key] === 1 ? '' : 's');
+        tags.append(t);
+      }
+      copy.append(tags);
+    }
     // No tick. The chosen row is outlined instead - see .row.is-picked.
     row.append(copy);
     return row;
@@ -343,7 +400,7 @@ function drawList(query) {
   // them. content-visibility already stops those being painted; this stops
   // them being built in the frame that matters.
   const AT_ONCE = 14;
-  for (const c of found.slice(0, AT_ONCE)) list.append(build(c));
+  for (const c of found.slice(0, AT_ONCE)) list.append(...buildGroup(c));
   markCursor();
 
   // And the tail a handful at a time. Appending all sixty-one in one idle
@@ -359,7 +416,7 @@ function drawList(query) {
     // tail was queued would otherwise have the old countries land under it.
     if (list.dataset.key !== key) return;
     const batch = document.createDocumentFragment();
-    for (const c of rest.slice(at, at + AT_ONCE)) batch.append(build(c));
+    for (const c of rest.slice(at, at + AT_ONCE)) batch.append(...buildGroup(c));
     list.append(batch);
     at += AT_ONCE;
     if (at < rest.length) later(more);
@@ -450,6 +507,12 @@ window.onFailed = (err) => {
       : `No ${nameOf(state.picked)} server accepted just now. Try again, or use Fastest available.`,
     'no-servers': 'No servers in that folder for that country.',
     'no-credentials': 'The username and password file is missing, so there is nothing to sign in with.',
+    // Its own message, because the fix is a different one: these exits were
+    // fetched from Windscribe and only its credential opens them, and that
+    // credential is signed in for rather than typed.
+    'no-windscribe-credentials':
+      'These are Windscribe servers, and there is no Windscribe credential on '
+      + 'file. Sign in to Windscribe in Settings.',
     'cancelled': 'Cancelled.',
     'did-not-start': 'The connection opened but did not come up. Try once more.',
     // Only from a port change: the old worker was stopped and the new one
@@ -1167,33 +1230,10 @@ function paintPrefs(info) {
     `${info.serverCount || 0} servers · ${state.countries.length} countries`;
   $('aboutPaths').textContent = info.about || '';
 
+  // Whether anything can connect at all. What is signed in as what is the
+  // roster's business now, and it paints itself - but the rest of the window
+  // still needs to know whether there is a credential behind the button.
   state.hasCredentials = info.hasCredentials !== false;
-  paintAuthPill();
-  // The name is shown back; the password never is. A field that arrives
-  // pre-filled with a password is a password on screen, and all that buys is
-  // the ability to read it over somebody's shoulder.
-  const user = $('authUser');
-  if (document.activeElement !== user) user.value = info.username || '';
-  // The placeholder carries the state, so the field is not simultaneously
-  // empty and correct with nothing saying which.
-  $('authPass').placeholder = state.hasCredentials
-    ? 'on file — type to replace' : 'not set';
-  if (!state.hasCredentials) said($('authSaid'), 'Not set, so nothing can connect yet.', 'bad');
-}
-
-/* The one fact this pane is about, said in two words at the top of it - and
-   it reacts when it changes, because somebody has just typed a password and
-   wants to see that it landed. */
-function paintAuthPill() {
-  const pill = $('authPill');
-  const want = state.hasCredentials ? 'on' : 'off';
-  const words = state.hasCredentials ? 'on file' : 'not set';
-  if (pill.dataset.state === want && pill.textContent === words) return;
-  pill.dataset.state = want;
-  pill.textContent = words;
-  pill.classList.remove('turned');
-  void pill.offsetWidth;
-  pill.classList.add('turned');
 }
 
 function said(el, text, kind) {
@@ -1209,6 +1249,11 @@ async function refreshPrefs() {
     keys: ['name', 'code', 'alias'], threshold: 0.4, ignoreLocation: true,
   });
   paintPrefs(info);
+  paintUse(info);
+  // Its own call, and allowed to fail on its own. Who this app signs in as
+  // is a question for the roster, and folding it into info() would mean an
+  // unreadable accounts file could keep the rest of the sheet from painting.
+  acctRefresh().catch(() => {});
   render();
   return info;
 }
@@ -1253,35 +1298,6 @@ async function commitPort() {
 }
 
 /* ------------------------------------------------------------- sign-in */
-
-async function saveCredentials() {
-  const user = $('authUser').value.trim();
-  const pass = $('authPass').value;
-  const btn = $('authSave');
-  btn.disabled = true;
-  said($('authSaid'), 'Saving…');
-  const r = await window.pywebview.api.saveCredentials(user, pass);
-  btn.disabled = false;
-  if (!r.ok) {
-    said($('authSaid'), r.error, 'bad');
-    return;
-  }
-  // Out of the DOM the moment it has been written. It is on disk now, and a
-  // settings sheet left open on a filled password field is the one place this
-  // app would be leaking one.
-  $('authPass').value = '';
-  said($('authSaid'), r.env
-    ? 'Saved, and .env was updated to match — the sweep scripts read that one first.'
-    : 'Saved.', 'good');
-  state.hasCredentials = true;
-  paintAuthPill();
-  $('act').disabled = false;
-  if (state.mode === 'off') {
-    setStatus('DISCONNECTED', 'off', '', '');
-    setHint(`${state.countries.length} countries ready.`);
-  }
-  render();
-}
 
 /* ------------------------------------------ pinning them to real addresses */
 
@@ -1833,7 +1849,8 @@ async function boot() {
     $('prefs').showModal();
     refreshSweep();
     refreshPin(true);
-    setTimeout(() => $('authUser').focus(), 60);
+    // Straight at the one thing there is to do from here.
+    setTimeout(() => $('acctAdd').focus(), 60);
     return;
   }
   if (info.recovered) {
@@ -1932,25 +1949,6 @@ $('settings').addEventListener('click', async () => {
 });
 $('prefsClose').addEventListener('click', () => $('prefs').close());
 
-$('authSave').addEventListener('click', saveCredentials);
-$('authPass').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') saveCredentials();
-});
-$('authUser').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') $('authPass').focus();
-});
-
-$('authPeek').addEventListener('click', () => {
-  const field = $('authPass');
-  const showing = field.type === 'text';
-  field.type = showing ? 'password' : 'text';
-  // The eye is open while the password is, and crossed out while it is not.
-  $('authPeek').querySelector('use')
-    .setAttribute('href', showing ? '#i-eye' : '#i-eye-off');
-  $('authPeek').setAttribute('aria-pressed', String(!showing));
-  $('authPeek').setAttribute('aria-label',
-    showing ? 'Show the password' : 'Hide the password');
-});
 
 $('pinPick').addEventListener('click', async () => {
   const r = await window.pywebview.api.choosePinFolder();
@@ -2190,6 +2188,9 @@ $('resetFolder').addEventListener('click', async () => {
 });
 
 initConnectionCore();
+// Before boot, because it only rearranges markup that is already on the page
+// and a settings sheet opened in the first second should already have it.
+wireInfoButtons();
 window.addEventListener('pywebviewready', boot);
 if (window.pywebview && window.pywebview.api) boot();
 
@@ -2225,6 +2226,703 @@ window.__probe = () => ({
   fluxDown: $('fluxDownSum').textContent,
   fluxUp: $('fluxUpSum').textContent,
   // Asserted on by the automated check: whatever else this page does, a
-  // password must never be sitting in the DOM after it has been saved.
-  passwordInDom: $('authPass').value.length > 0,
+  // password must never be sitting in the DOM after it has been used. One
+  // box now rather than two, which is most of why the panes were merged.
+  passwordInDom: $('acctPass').value.length > 0,
 });
+
+/* ---------------------------------------------------------- Windscribe */
+
+/* The one provider that cannot be a text box.
+
+   Windscribe hands out a different credential per client type and only the
+   browser extension's opens the proxy, so there is nothing to paste from a
+   settings page - it has to be logged in for, and the login is behind a
+   slider captcha.
+
+   The captcha is drawn here from the two images the API sends. What the API
+   wants back is where the piece was let go and the path the pointer took
+   getting there, and both come from the actual drag: the trail is the half
+   that is really being asked about, since where the slider stopped is easy
+   and how a hand got there is not. Nothing in this file generates either. */
+
+const ws = {
+  token: null,        // the secure token this puzzle belongs to
+  scale: 1,           // drawn width / natural width, to undo on the way out
+  span: 0,            // how far the knob can travel, in rail pixels
+  left: 0,            // where it is now, in rail pixels
+  trailX: [],
+  trailY: [],
+  solved: false,
+  sending: false,     // one submit at a time; the gesture can fire twice
+};
+
+const WS_TRAIL_MAX = 50;
+
+function wsHideCaptcha() {
+  const dlg = $('wsCapDlg');
+  if (dlg.open) dlg.close();
+  $('wsCapAnswerWrap').hidden = true;
+  $('wsCapSend').hidden = true;
+  $('wsCapAnswer').value = '';
+  said($('wsCapErr'), '');
+  ws.token = null;
+  ws.solved = false;
+  ws.sending = false;
+  ws.trailX = [];
+  ws.trailY = [];
+}
+
+function wsShowCaptcha(captcha) {
+  const ascii = $('wsCapAscii');
+  const stage = $('wsCapStage');
+  const rail = $('wsCapRail');
+
+  ws.trailX = [];
+  ws.trailY = [];
+  ws.left = 0;
+  ws.span = 0;
+  ws.solved = false;
+  ws.sending = false;
+  said($('wsCapErr'), '');
+
+  if (captcha.kind === 'ascii') {
+    // No image to place, so no slider either - the answer is read off the
+    // drawing and typed, and typing has no moment that means "done". That
+    // kind, and only that kind, needs a button.
+    ascii.hidden = false;
+    ascii.textContent = captcha.art || '';
+    stage.hidden = true;
+    rail.hidden = true;
+    $('wsCapAnswerWrap').hidden = false;
+    $('wsCapAnswer').value = '';
+    $('wsCapSend').hidden = false;
+    said($('wsCapSaid'), 'Type what the drawing says.');
+    wsOpenCaptcha();
+    $('wsCapAnswer').focus();
+    return;
+  }
+
+  ascii.hidden = true;
+  $('wsCapAnswerWrap').hidden = true;
+  $('wsCapSend').hidden = true;
+  stage.hidden = false;
+  rail.hidden = false;
+  said($('wsCapSaid'), 'Drag the piece into the gap, then let go.');
+
+  const bg = $('wsCapBg');
+  const pc = $('wsCapPc');
+  $('wsCapKnob').style.transform = 'translateX(0px)';
+  pc.style.transform = 'translateX(0px)';
+
+  const fit = () => {
+    // The solution is measured in the background's own pixels, so the ratio
+    // between that and the width it is actually drawn at is the only thing
+    // standing between a correct drag and a rejected one. Recomputed rather
+    // than assumed, because the dialog animates open.
+    const drawn = stage.getBoundingClientRect().width;
+    if (!drawn) return;                 // not laid out yet; nothing to measure
+    ws.scale = drawn / (bg.naturalWidth || drawn);
+    pc.style.top = Math.round((captcha.top || 0) * ws.scale) + 'px';
+    if (pc.naturalWidth) {
+      const wide = Math.round(pc.naturalWidth * ws.scale);
+      pc.style.width = wide + 'px';
+      // Held rather than measured again mid-drag. Taken live, this is the
+      // one number that can quietly be wrong: before the piece has decoded
+      // its width reads 0, and a span measured against the stage alone lets
+      // the piece be dragged off the end - while a stage that is not laid
+      // out yet reads 0 the other way and pins every drag at zero, which
+      // looks exactly like a broken puzzle.
+      ws.span = Math.max(0, drawn - wide);
+    }
+  };
+  // Both images matter to the fit and they land in whichever order they
+  // decode in - the piece's own width is what the drag is clamped against,
+  // so a fit that ran before it arrived would leave the span unset.
+  bg.onload = fit;
+  pc.onload = fit;
+  bg.src = 'data:image/png;base64,' + (captcha.background || '');
+  pc.src = 'data:image/png;base64,' + (captcha.slider || '');
+
+  wsOpenCaptcha();
+  // The dialog has to be open before the stage has a width, and the images
+  // may already have decoded by then - in which case neither onload will
+  // fire again and nothing would ever set the span.
+  requestAnimationFrame(fit);
+}
+
+function wsOpenCaptcha() {
+  const dlg = $('wsCapDlg');
+  if (!dlg.open) dlg.showModal();
+}
+
+/* The piece is the handle, and the rail below only reports where it got to.
+
+   That split is not a style decision - it is what the trail means. The x
+   values sent are the *piece's* position, clamped, not wherever the pointer
+   happened to be, and the y values are measured from the top of the picture.
+   Dragging the rail instead would produce numbers in the rail's coordinates,
+   which are a different width and a different origin, and the puzzle would
+   be refused with nothing on screen to explain why. */
+(function wsDrag() {
+  const stage = $('wsCapStage');
+  const pc = $('wsCapPc');
+  const rail = $('wsCapRail');
+  if (!stage || !pc) return;
+  let held = false;
+  let grabbed = 0;
+
+  const move = (e) => {
+    if (!held) return;
+    const box = stage.getBoundingClientRect();
+    // A stage with no width is one that is not on screen, and every number
+    // taken from it would be a lie recorded into the trail.
+    if (!box.width) return;
+    const span = ws.span || Math.max(0, box.width - pc.offsetWidth);
+    ws.left = Math.max(0, Math.min(span, e.clientX - box.left - grabbed));
+    pc.style.transform = 'translateX(' + ws.left + 'px)';
+    $('wsCapKnob').style.transform = 'translateX(' + ws.left + 'px)';
+    // Where the piece is, and how high the hand was holding it - both as
+    // whole numbers, both relative to the picture.
+    ws.trailX.push(Math.round(ws.left));
+    ws.trailY.push(Math.round(e.clientY - box.top));
+    // The last fifty are what gets sent, so that a long drag arrives as its
+    // ending rather than its beginning.
+    if (ws.trailX.length > WS_TRAIL_MAX) { ws.trailX.shift(); ws.trailY.shift(); }
+  };
+
+  const up = () => {
+    if (!held) return;
+    held = false;
+    stage.classList.remove('is-held');
+    ws.solved = true;
+    // Letting go IS the answer. Waiting for a second press on a button
+    // somewhere else was the whole of "I dropped it in the gap and nothing
+    // happened" - and while it waited, the token quietly went stale.
+    wsSubmit();
+  };
+
+  /* Either handle starts the same drag.
+
+     The piece is the obvious one. The rail is there because a bar with a
+     knob on it reads as draggable whatever the instructions say, and a
+     control that looks draggable and is not is a control that appears
+     broken. Both write the same ws.left in the same coordinate space, so
+     what gets sent does not depend on which one was used - and the rail's
+     grab offset is taken against the *stage*, not against the rail, for
+     exactly that reason. */
+  const begin = (handle) => (e) => {
+    if (ws.sending) return;
+    const box = stage.getBoundingClientRect();
+    grabbed = e.clientX - box.left - ws.left;
+    held = true;
+    // Cleared here rather than carried over: a second attempt at the same
+    // puzzle would otherwise send the first attempt's path in front of it.
+    ws.trailX = [];
+    ws.trailY = [];
+    stage.classList.add('is-held');
+    // Captured, so a drag that leaves the handle - which every drag does,
+    // the pointer runs ahead of it - keeps arriving. Guarded because it
+    // throws for a pointer the browser is not already tracking, and an
+    // exception here would end the gesture on its first move.
+    try { handle.setPointerCapture(e.pointerId); } catch (_) { /* not fatal */ }
+    e.preventDefault();
+  };
+
+  for (const handle of [pc, rail]) {
+    if (!handle) continue;
+    handle.addEventListener('pointerdown', begin(handle));
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+    handle.addEventListener('pointercancel', up);
+  }
+})();
+
+/* What the API is told the answer is: the piece's travel converted back out
+   of drawn pixels into the background's own, which is the space the puzzle
+   was cut in. */
+function wsSolution() {
+  return Math.round(ws.left / (ws.scale || 1));
+}
+
+/* -- sending it ---------------------------------------------------------- */
+
+/* The second half of the sign-in, run by the gesture rather than by a click.
+   The name and password are not passed from here: they stayed on the Python
+   side when the puzzle was fetched, so they cross the bridge once. */
+async function wsSubmit() {
+  if (ws.sending || !ws.token) return;
+  ws.sending = true;
+  const ascii = !$('wsCapAscii').hidden;
+  said($('wsCapSaid'), 'Checking...');
+  said($('wsCapErr'), '');
+
+  const r = await window.pywebview.api.windscribeFinish(
+    ws.token,
+    // The drawn puzzle answers with where it was let go; the text one
+    // answers with what was typed.
+    ascii ? $('wsCapAnswer').value.trim() : wsSolution(),
+    ws.trailX, ws.trailY, $('acctTwo').value.trim());
+
+  if (!r.ok) {
+    // The token and the puzzle are both spent now, whatever went wrong -
+    // reusing either gets a fresh rejection that looks like a wrong password.
+    // So the dialog closes and the pane says what happened, with the reason
+    // where the rest of the sign-in's answers appear.
+    wsHideCaptcha();
+    said($('acctNewSaid'), r.why ? r.error + ' (' + r.why + ')' : r.error, 'bad');
+    // Deliberately not retried on its own. note.md records an account
+    // blocked after about seventy security alerts, and the way to get there
+    // is something that tries again without being asked.
+    acctBusy(false);
+    await acctRefresh();
+    return;
+  }
+
+  wsHideCaptcha();
+  acctBusy(false);
+  acctShowForm(false);
+  if (r.credentials) {
+    said($('acctSaid'), 'Signed in as ' + r.username + '. The proxy credential '
+      + 'is on file' + (r.remembered ? ' and the password is remembered' : '')
+      + ' - now press Get servers.', 'good');
+  } else {
+    said($('acctSaid'), 'Signed in as ' + r.username + ', but the proxy '
+      + 'credential did not come back: ' + r.error, 'bad');
+  }
+  await acctRefresh();
+}
+
+$('wsCapSend').addEventListener('click', wsSubmit);
+
+$('wsCapClose').addEventListener('click', () => {
+  wsHideCaptcha();
+  acctBusy(false);
+  said($('acctNewSaid'), 'Sign-in stopped. Nothing was sent.');
+});
+
+// Escape closes a <dialog> on its own; this keeps the rest of the state in
+// step with that rather than leaving a spent token behind.
+$('wsCapDlg').addEventListener('close', () => {
+  if (ws.sending) return;
+  ws.token = null;
+  ws.solved = false;
+  acctBusy(false);
+});
+
+/* -- signing in ---------------------------------------------------------- */
+
+
+/* ------------------------------------------------------------ the whys */
+
+/* Every pane used to open with a paragraph explaining itself. Seven of them
+   in a row turned a settings sheet into a page of documentation, where the
+   control you came for was three sentences down and the six you did not come
+   for were between you and it.
+
+   The paragraphs are not deleted - they are the reason each setting is worth
+   having, and losing them would be losing the argument. They move into the
+   title, one hover away.
+
+   Only the pane's own description moves. The ones marked --after and --tight
+   are corrections about the control beside them ("this port answers both",
+   "being blocked is mostly a property of the address"), and those belong
+   where they are: read at the moment they apply, not looked up. */
+function wireInfoButtons() {
+  const whys = document.querySelectorAll(
+    '.pane__why:not(.pane__why--after):not(.pane__why--tight)');
+  for (const why of whys) {
+    const pane = why.closest('.pane');
+    const title = pane && pane.querySelector('.pane__title');
+    if (!title) continue;
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'info';
+    btn.setAttribute('aria-label', 'Why this is here');
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('class', 'ico');
+    icon.setAttribute('aria-hidden', 'true');
+    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    use.setAttribute('href', '#i-info');
+    icon.appendChild(use);
+    const bubble = document.createElement('span');
+    bubble.className = 'info__bubble';
+    bubble.setAttribute('role', 'tooltip');
+    // The paragraph's own markup, not its text - several of them bold the
+    // word that the whole sentence turns on.
+    bubble.innerHTML = why.innerHTML;
+    btn.append(icon, bubble);
+
+    title.insertAdjacentElement('afterend', btn);
+    why.remove();
+
+    // A bubble centred on a button two pixels from the right edge hangs off
+    // the window. Measured on first hover rather than guessed at, because
+    // where the button lands depends on how long the title is.
+    btn.addEventListener('pointerenter', () => {
+      btn.classList.remove('info--right');
+      const box = bubble.getBoundingClientRect();
+      if (box.right > window.innerWidth - 8) btn.classList.add('info--right');
+    }, { once: false });
+  }
+}
+
+/* ------------------------------------------------------------- accounts */
+
+/* One roster for both providers. They were two panes doing the same job -
+   "which account is this app using" - and being two is what made holding
+   one of each look like the natural state of things rather than a limit.
+
+   What genuinely differs is only how an account is proved: Surfshark hands
+   out a service credential you can paste, Windscribe issues one per client
+   and has to be signed in to. So that is the only place the form differs. */
+
+const acct = {
+  provider: 'surfshark',   // which one the add-form is currently for
+  rows: [],
+};
+
+function acctBusy(on) {
+  for (const id of ['acctAdd', 'acctSave', 'acctCancel', 'acctUser',
+                    'acctPass', 'acctTwo', 'acctLabel', 'wsGet', 'wsRefresh']) {
+    const el = $(id);
+    if (el) el.disabled = on;
+  }
+  for (const b of document.querySelectorAll('#acctList button')) b.disabled = on;
+}
+
+function acctPaint() {
+  const list = $('acctList');
+  list.textContent = '';
+
+  if (!acct.rows.length) {
+    const none = document.createElement('p');
+    none.className = 'acct__none';
+    none.textContent = 'No accounts yet. Add one and this app has something '
+      + 'to connect with.';
+    list.appendChild(none);
+  }
+
+  for (const row of acct.rows) {
+    const el = document.createElement('div');
+    el.className = 'acct__row';
+    el.dataset.provider = row.provider;
+    el.dataset.active = row.active ? '1' : '0';
+
+    const tag = document.createElement('span');
+    tag.className = 'acct__tag';
+    tag.textContent = row.providerName;
+
+    const who = document.createElement('span');
+    who.className = 'acct__who';
+    const name = document.createElement('span');
+    name.className = 'acct__name';
+    name.textContent = row.label;
+    const sub = document.createElement('span');
+    sub.className = 'acct__sub';
+    // What is true of it, in the order it matters: whether it is the one in
+    // use, then whether it can be used without typing anything again.
+    sub.textContent = [
+      row.active ? 'in use' : null,
+      row.username && row.username !== row.label ? row.username : null,
+      row.provider === 'windscribe' && row.signedIn ? 'signed in' : null,
+      row.hasPassword ? 'password remembered' : null,
+    ].filter(Boolean).join(' · ') || 'not set up';
+    who.append(name, sub);
+
+    const act = document.createElement('span');
+    act.className = 'acct__act';
+    if (!row.active) {
+      const use = document.createElement('button');
+      use.className = 'btn btn--quiet btn--auto';
+      use.type = 'button';
+      use.textContent = 'Use';
+      use.addEventListener('click', () => acctUse(row.id));
+      act.appendChild(use);
+    }
+    const drop = document.createElement('button');
+    drop.className = 'btn btn--quiet btn--auto';
+    drop.type = 'button';
+    drop.textContent = 'Remove';
+    drop.addEventListener('click', () => acctRemove(row.id, row.label));
+    act.appendChild(drop);
+
+    el.append(tag, who, act);
+    list.appendChild(el);
+  }
+
+  // The pill counts what is usable, not what is listed - a roster entry with
+  // nothing behind it is not an account this app can connect with.
+  const usable = acct.rows.filter((r) => r.signedIn).length;
+  const pill = $('acctPill');
+  pill.dataset.state = usable ? 'on' : 'off';
+  pill.textContent = usable ? `${usable} ready` : 'none';
+
+  // Windscribe's fleet is a download rather than a folder somebody already
+  // has, so its two buttons only mean anything while one is in use.
+  const ws = acct.rows.find((r) => r.provider === 'windscribe' && r.active);
+  $('acctWsTools').hidden = !ws;
+}
+
+async function acctRefresh() {
+  const r = await window.pywebview.api.accountsList();
+  acct.rows = (r && r.accounts) || [];
+  acctPaint();
+  return acct.rows;
+}
+
+/* -- adding one -------------------------------------------------------- */
+
+function acctShowForm(on) {
+  const dlg = $('acctDlg');
+  if (!on) {
+    if (dlg.open) dlg.close();
+    return;
+  }
+  $('acctUser').value = '';
+  $('acctPass').value = '';
+  $('acctTwo').value = '';
+  $('acctLabel').value = '';
+  said($('acctNewSaid'), '');
+  acctSetProvider(acct.provider);
+  if (!dlg.open) dlg.showModal();
+  $('acctUser').focus();
+}
+
+function acctSetProvider(which) {
+  acct.provider = which;
+  for (const opt of $('acctWhich').querySelectorAll('.pair__opt')) {
+    opt.setAttribute('aria-selected', String(opt.dataset.provider === which));
+  }
+  // Surfshark's is a service credential off a web page; Windscribe's is the
+  // account you log in with. Saying which is the difference between pasting
+  // the right thing and being refused with no idea why.
+  $('acctUserCap').textContent = which === 'windscribe'
+    ? 'Username or email' : 'Service username';
+  // Two-factor is a login thing, and only one of these is a login.
+  $('acctTwoWrap').hidden = which !== 'windscribe';
+  said($('acctNewSaid'), which === 'windscribe'
+    ? 'Signing in fetches a puzzle to solve. It is asked once.'
+    : 'From the manual-setup page — not the email you log in with.');
+}
+
+$('acctWhich').addEventListener('click', (e) => {
+  const opt = e.target.closest('.pair__opt');
+  if (opt) acctSetProvider(opt.dataset.provider);
+});
+
+$('acctAdd').addEventListener('click', () => acctShowForm(true));
+$('acctCancel').addEventListener('click', () => acctShowForm(false));
+$('acctDlgClose').addEventListener('click', () => acctShowForm(false));
+
+$('acctSave').addEventListener('click', async () => {
+  const user = $('acctUser').value.trim();
+  const pass = $('acctPass').value;
+  const label = $('acctLabel').value.trim();
+  if (!user) { said($('acctNewSaid'), 'Enter the username.', 'bad'); return; }
+  if (!pass) { said($('acctNewSaid'), 'Enter the password.', 'bad'); return; }
+
+  acctBusy(true);
+  if (acct.provider === 'surfshark') {
+    said($('acctNewSaid'), 'Saving…');
+    const r = await window.pywebview.api.accountAdd('surfshark', label, user, pass);
+    acctBusy(false);
+    if (!r.ok) { said($('acctNewSaid'), r.error, 'bad'); return; }
+    $('acctPass').value = '';
+    acctShowForm(false);
+    said($('acctSaid'), `Saved and in use: ${r.label}.`, 'good');
+    await acctRefresh();
+    await refreshPrefs();
+    return;
+  }
+
+  // Windscribe: the puzzle stands between here and an account.
+  said($('acctNewSaid'), 'Asking Windscribe…');
+  const r = await window.pywebview.api.accountAdd(
+    'windscribe', label, user, pass);
+  if (!r.ok) {
+    acctBusy(false);
+    said($('acctNewSaid'), r.error, 'bad');
+    return;
+  }
+  $('acctPass').value = '';
+  ws.token = r.token;
+  if (r.captcha) {
+    wsShowCaptcha(r.captcha);
+    said($('acctNewSaid'), 'Solve the puzzle to finish.');
+  } else {
+    said($('acctNewSaid'), 'Signing in…');
+    await wsSubmit();
+  }
+});
+
+/* -- using and dropping ------------------------------------------------ */
+
+async function acctUse(id) {
+  acctBusy(true);
+  said($('acctSaid'), 'Switching…');
+  const r = await window.pywebview.api.accountUse(id);
+  acctBusy(false);
+  if (!r.ok) { said($('acctSaid'), r.error, 'bad'); return; }
+  said($('acctSaid'), `Now using ${r.label}.`, 'good');
+  await acctRefresh();
+  await refreshPrefs();
+}
+
+async function acctRemove(id, label) {
+  acctBusy(true);
+  const r = await window.pywebview.api.accountRemove(id);
+  acctBusy(false);
+  if (!r.ok) { said($('acctSaid'), r.error, 'bad'); return; }
+  said($('acctSaid'), `Removed ${label}.`);
+  await acctRefresh();
+  await refreshPrefs();
+}
+
+/* -- the two Windscribe-only buttons ----------------------------------- */
+
+$('wsGet').addEventListener('click', async () => {
+  acctBusy(true);
+  said($('wsSaid'), 'Fetching the server list…');
+  const r = await window.pywebview.api.windscribeServers();
+  acctBusy(false);
+  if (!r.ok) { said($('wsSaid'), r.error, 'bad'); return; }
+  said($('wsSaid'), `${r.written} servers across ${r.countries} countries `
+    + `written to ${r.folder}. They are hostnames, so pin them next — the `
+    + 'Servers group below does it.', 'good');
+});
+
+$('wsRefresh').addEventListener('click', async () => {
+  acctBusy(true);
+  said($('wsSaid'), 'Asking for a fresh credential…');
+  const r = await window.pywebview.api.windscribeRefresh();
+  acctBusy(false);
+  if (!r.ok) {
+    said($('wsSaid'), r.error + ' — the session may have expired; sign in '
+      + 'again to get a new one.', 'bad');
+    return;
+  }
+  said($('wsSaid'), 'Still good — the session fetched a working credential '
+    + 'with no puzzle.', 'good');
+  await acctRefresh();
+});
+
+$('acctPeek').addEventListener('click', () => {
+  const field = $('acctPass');
+  const showing = field.type === 'text';
+  field.type = showing ? 'password' : 'text';
+  $('acctPeek').querySelector('use')
+    .setAttribute('href', showing ? '#i-eye' : '#i-eye-off');
+  $('acctPeek').setAttribute('aria-pressed', String(!showing));
+  $('acctPeek').setAttribute('aria-label',
+    showing ? 'Show the password' : 'Hide the password');
+});
+
+/* ------------------------------------------------ settings, as a stack */
+
+/* Four screens behind a list, rather than four dropdowns in a scroll.
+
+   The difference is what you are looking at when the sheet opens. Collapsed
+   sections still put every heading, every chevron and the top of whichever
+   one was left open in front of you at once; a list of four things is four
+   things. And going back is a place to go back to, which an accordion never
+   has - closing a section leaves you wherever the page had scrolled to.
+
+   The screens are all in the DOM the whole time. They hold live controls
+   with state in them - a sweep running, a pin part-done - and rebuilding
+   one on the way in would throw that away. */
+
+function showScreen(slug) {
+  for (const s of document.querySelectorAll('.screen')) {
+    s.hidden = s.dataset.screen !== slug;
+  }
+  const found = document.querySelector(`.screen[data-screen="${slug}"]`);
+  $('prefsMenu').hidden = !!found;
+  $('prefsBack').hidden = !found;
+  // The title says where you are, so that the one piece of chrome that
+  // moves is not the only clue.
+  const row = document.querySelector(`.menu__row[data-goto="${slug}"]`);
+  $('prefsTitle').textContent = row
+    ? row.querySelector('.menu__name').textContent : 'Settings';
+  if (found) found.scrollTop = 0;
+  $('prefsBody').scrollTop = 0;
+  state.screen = found ? slug : null;
+}
+
+function showSettingsMenu() {
+  showScreen(null);
+}
+
+$('prefsMenu').addEventListener('click', (e) => {
+  const row = e.target.closest('.menu__row');
+  if (row) showScreen(row.dataset.goto);
+});
+
+$('prefsBack').addEventListener('click', showSettingsMenu);
+
+// Escape backs out one level rather than closing the whole sheet from three
+// screens deep, which is the behaviour a stack implies.
+$('prefs').addEventListener('cancel', (e) => {
+  if (state.screen) {
+    e.preventDefault();
+    showSettingsMenu();
+  }
+});
+
+/* ------------------------------------------- which providers to use */
+
+/* Separate from the roster on purpose. "Which accounts exist" and "which of
+   them am I connecting through today" are different questions, and folding
+   them together would mean the only way to stop using a provider was to sign
+   out of it - which throws away the session that took a captcha to get. */
+
+const PROVIDER_NAMES = { surfshark: 'Surfshark', windscribe: 'Windscribe' };
+
+function paintUse(info) {
+  const per = (info && info.providerState) || {};
+  const usable = Object.keys(per).filter((k) => per[k].usable);
+  const chosen = (info && info.providers) || usable;
+  state.providers = chosen;
+
+  for (const key of ['surfshark', 'windscribe']) {
+    const cap = key[0].toUpperCase() + key.slice(1);
+    const box = $('use' + cap);
+    const count = $('use' + cap + 'N');
+    const has = per[key] || { servers: 0, account: false, usable: false };
+    box.checked = has.usable && chosen.includes(key);
+    // A tick that can be put in a box that then refuses is worse than a box
+    // that says why it is empty.
+    box.disabled = !has.usable;
+    box.closest('.use__opt').dataset.empty = has.usable ? '0' : '1';
+    // Which half is missing, because they want opposite things doing about
+    // them: one needs an account added, the other needs servers fetched.
+    // "Unavailable" would say neither, and leaving the exit count showing
+    // for a provider with no account is what made a removed account look
+    // like it was still there.
+    count.textContent = has.usable ? String(has.servers)
+      : !has.account ? 'no account'
+        : 'none pinned';
+  }
+}
+
+async function commitUse() {
+  const want = ['surfshark', 'windscribe']
+    .filter((k) => $('use' + k[0].toUpperCase() + k.slice(1)).checked);
+  said($('useSaid'), 'Applying…');
+  const r = await window.pywebview.api.setProviders(want);
+  if (!r.ok) {
+    said($('useSaid'), r.error, 'bad');
+    // Put the boxes back to what is really in force, so the screen never
+    // shows a choice that was refused.
+    await refreshPrefs();
+    return;
+  }
+  const names = r.providers.map((p) => PROVIDER_NAMES[p] || p).join(' and ');
+  said($('useSaid'), `${r.serverCount} exits from ${names}.`, 'good');
+  state.providers = r.providers;
+  state.countries = r.countries || state.countries;
+  render();
+}
+
+$('useOpts').addEventListener('change', commitUse);

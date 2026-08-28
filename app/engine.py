@@ -24,7 +24,9 @@ import threading
 import time
 import urllib.request
 
+import accounts
 import paths
+import windscribe
 from countries import aliases, city_name, country_name
 
 HERE = paths.APP_DIR
@@ -48,7 +50,14 @@ px = load_proxy_module()
 
 # Pulled out of the filename, which is where the tunnel sweep recorded how
 # long that exit took to answer: "01.8s-no-osl.prod.surfshark.com_tcp_1.2.3.4"
-CONFIG = re.compile(r'^(?:(\d+\.\d+)s-)?([a-z]{2})-([a-z]{3})\.prod\.', re.I)
+#
+# `ws` beside `prod` is Windscribe, whose exits arrive as a JSON list of
+# hostnames rather than as downloaded configs and are written into the same
+# shape on the way in - "us-dal.ws.us-central-117.totallyacdn.com_1.2.3.4".
+# Everything downstream of the filename then works on either provider: the
+# catalogue, the racing, the re-pinning, the one-per-city dedupe.
+CONFIG = re.compile(r'^(?:(\d+\.\d+)s-)?([a-z]{2})-([a-z]{3})\.(?:prod|ws)\.',
+                    re.I)
 
 # The port the proxy sits on. 8877 rather than 8899, which is what the command
 # line half of this repo uses for a second proxy beside somebody's own: the two
@@ -112,11 +121,16 @@ def port_holder(port, host='127.0.0.1'):
 
 
 class Server:
-    __slots__ = ('path', 'file', 'seconds', 'country', 'city')
+    __slots__ = ('path', 'file', 'seconds', 'country', 'city', 'provider')
 
     def __init__(self, path, file, seconds, country, city):
         self.path, self.file = path, file
         self.seconds, self.country, self.city = seconds, country, city
+        # Read off the filename, which is the only place it is written down -
+        # and the same fact that decides which credential opens the exit and
+        # whether a bare 200 from it can be believed.
+        self.provider = (accounts.WINDSCRIBE if windscribe.is_windscribe(file)
+                         else accounts.SURFSHARK)
 
 
 class Engine:
@@ -126,6 +140,16 @@ class Engine:
                  set_system_proxy=True, port=None):
         self.sysproxy = sysproxy
         self.folder = folder or paths.servers_dir()
+        # Every folder worth looking in, the primary one first. A list rather
+        # than a single folder because the two providers arrive by different
+        # routes and land in different places - Surfshark's configs are
+        # downloaded and pinned, Windscribe's are fetched and pinned - and
+        # "use both at once" has to mean something without asking anyone to
+        # merge two folders by hand first.
+        self.folders = [self.folder]
+        # Which providers to offer. None is all of them, which is what an app
+        # that has only ever had one provider should keep doing.
+        self.providers = None
         self.auth_file = auth_file or paths.AUTH_FILE
         # Where it listens. Settable because 8877 is only free until it is
         # not - a second copy of this, a proxy the person already runs, a
@@ -146,21 +170,37 @@ class Engine:
 
     # -- what there is to connect to --------------------------------------
 
-    def servers(self):
+    def sources(self):
+        """The folders to read, primary first and without repeats."""
         out = []
-        try:
-            names = os.listdir(self.folder)
-        except OSError:
-            return out
-        for name in sorted(names):
-            if not name.endswith('.ovpn'):
+        for folder in [self.folder] + list(self.folders or []):
+            if folder and folder not in out:
+                out.append(folder)
+        return out
+
+    def servers(self):
+        out, seen = [], set()
+        for folder in self.sources():
+            try:
+                names = os.listdir(folder)
+            except OSError:
                 continue
-            m = CONFIG.match(name)
-            if not m:
-                continue
-            out.append(Server(os.path.join(self.folder, name), name,
-                              float(m.group(1)) if m.group(1) else None,
-                              m.group(2).lower(), m.group(3).lower()))
+            for name in sorted(names):
+                if not name.endswith('.ovpn') or name in seen:
+                    # The same config pinned into two folders is one exit, and
+                    # counting it twice would weight the race towards it.
+                    continue
+                m = CONFIG.match(name)
+                if not m:
+                    continue
+                seen.add(name)
+                server = Server(os.path.join(folder, name), name,
+                                float(m.group(1)) if m.group(1) else None,
+                                m.group(2).lower(), m.group(3).lower())
+                if (self.providers is not None
+                        and server.provider not in self.providers):
+                    continue
+                out.append(server)
         return out
 
     def catalogue(self):
@@ -172,9 +212,15 @@ class Engine:
             c = by_country.setdefault(s.country, {'code': s.country,
                                                   'cities': set(),
                                                   'count': 0,
-                                                  'best': None})
+                                                  'best': None,
+                                                  'by': {}})
             c['cities'].add(s.city)
             c['count'] += 1
+            # Per provider as well as in total, because a country backed by
+            # eleven Surfshark exits and one Windscribe one is a different
+            # proposition from the reverse, and the row that says only "12
+            # relays" cannot tell you which you are about to get.
+            c['by'][s.provider] = c['by'].get(s.provider, 0) + 1
             if s.seconds is not None and (c['best'] is None
                                           or s.seconds < c['best']):
                 c['best'] = s.seconds
@@ -185,6 +231,7 @@ class Engine:
                         'alias': aliases(code),
                         'cities': len(c['cities']),
                         'count': c['count'],
+                        'by': c['by'],
                         'best': c['best']})
         # Quickest first, and anything with no recorded time last rather than
         # first - an unmeasured exit is not a fast one.
@@ -200,6 +247,29 @@ class Engine:
             raise RuntimeError('no-credentials')
         except OSError:
             raise RuntimeError('no-credentials')
+
+    def auth_file_for(self, server):
+        """Which credentials file opens this exit.
+
+        Not a setting, because one folder can hold both providers - a sweep
+        that measured Surfshark and Windscribe exits into the same site
+        folder is a reasonable thing to have done - and a single answer for
+        the whole folder would be wrong for half of it. The filename says
+        which provider the exit came from, so the filename decides.
+        """
+        name = getattr(server, 'file', server)
+        if windscribe.is_windscribe(name):
+            return windscribe.AUTH_FILE
+        return self.auth_file
+
+    def credentials_for(self, server):
+        path = self.auth_file_for(server)
+        if path == self.auth_file:
+            return self.credentials()
+        try:
+            return px.read_auth(path)
+        except (SystemExit, OSError):
+            raise RuntimeError('no-windscribe-credentials')
 
     def username(self):
         """The name on file, for showing back. The password is never returned
@@ -322,7 +392,7 @@ class Engine:
 
     # -- choosing one ------------------------------------------------------
 
-    def candidates(self, country):
+    def candidates(self, country, provider=None):
         """The addresses worth asking, in the order worth asking them.
 
         The rule differs by what was asked for, and getting this wrong made
@@ -341,7 +411,8 @@ class Engine:
         exit is quick.
         """
         pool = [s for s in self.servers()
-                if country in (None, 'auto') or s.country == country]
+                if (country in (None, 'auto') or s.country == country)
+                and (provider is None or s.provider == provider)]
         pool.sort(key=lambda s: (s.seconds is None, s.seconds or 0))
         if country in (None, 'auto'):
             seen, out = set(), []
@@ -353,7 +424,8 @@ class Engine:
             return out[:140]
         return pool[:80]
 
-    def find_exit(self, country, progress, width=8, timeout=6):
+    def find_exit(self, country, progress, width=8, timeout=6,
+                  provider=None):
         """Race the candidates and take the first that says yes.
 
         First rather than best. An earlier version waited for two so it could
@@ -373,10 +445,29 @@ class Engine:
         bad moment when only one exit in twenty is accepting still works
         through the list, just over a few more rounds.
         """
-        user, password = self.credentials()
-        ordered = self.candidates(country)
+        ordered = self.candidates(country, provider)
         if not ordered:
             raise RuntimeError('no-servers')
+
+        # Once per provider, not once per probe - and before the race rather
+        # than inside it, so "you have no credentials" is still an answer that
+        # arrives immediately instead of eighty timeouts later.
+        creds, missing = {}, {}
+        for s in list(ordered):
+            path = self.auth_file_for(s)
+            if path in creds or path in missing:
+                continue
+            try:
+                creds[path] = self.credentials_for(s)
+            except RuntimeError as e:
+                missing[path] = str(e)
+        if missing:
+            # Half a pool is still a pool. Only if nothing is left does the
+            # missing credential become the thing that stopped the connect.
+            ordered = [s for s in ordered
+                       if self.auth_file_for(s) in creds]
+            if not ordered:
+                raise RuntimeError(sorted(missing.values())[0])
 
         self.cancelled.clear()
         winners, asked, done = [], len(ordered), 0
@@ -388,8 +479,19 @@ class Engine:
             ip, host = px.read_config(s.path)
             if not host:
                 raise OSError('not pinned')
-            took = px.can_connect(
-                px.Exit(ip, 443, host, user, password), timeout)
+            user, password = creds[self.auth_file_for(s)]
+            if windscribe.is_windscribe(s.file):
+                # A `200` from Windscribe is not an answer. Its nghttpx says
+                # 200 to an unauthenticated CONNECT too and then forwards
+                # nothing, so can_connect() - which is right for Surfshark,
+                # where the same request is refused with 407 - would report
+                # every exit alive and hand back one that silently drops
+                # everything. Ask with a whole request instead.
+                took = windscribe.verify_tunnel(
+                    px, ip, host, user, password, timeout)['ttfb']
+            else:
+                took = px.can_connect(
+                    px.Exit(ip, 443, host, user, password), timeout)
             return took, s, ip, host
 
         ex = cf.ThreadPoolExecutor(max_workers=width)
@@ -423,14 +525,20 @@ class Engine:
 
     # -- holding it --------------------------------------------------------
 
-    def _spawn(self, ip, host):
+    def _spawn(self, ip, host, auth_file=None):
         """The proxy runs as its own process, exactly as `--detach` starts
         it. Keeping it out of this one means a wedged connection cannot take
         the window down with it, and the window closing does not have to be
-        the thing that stops it."""
+        the thing that stops it.
+
+        The credentials file is passed in rather than read off self, because
+        the exit that won the race decides it: a Windscribe exit started with
+        the Surfshark credential comes up, listens, and refuses everything.
+        """
         out_path = os.path.join(paths.STATE_DIR, f'proxy-{self.port}.out')
         os.makedirs(paths.STATE_DIR, exist_ok=True)
-        argv = paths.worker_argv(ip, host, self.port, self.auth_file)
+        argv = paths.worker_argv(ip, host, self.port,
+                                 auth_file or self.auth_file)
         flags = 0x08 | 0x200 if os.name == 'nt' else 0   # DETACHED, NEW_GROUP
         with open(out_path, 'w', encoding='utf-8') as out:
             return subprocess.Popen(
@@ -457,15 +565,17 @@ class Engine:
                 pass
         raise RuntimeError(f'did-not-start: {said[-400:]}')
 
-    def connect(self, country, progress):
+    def connect(self, country, progress, provider=None):
         with self.lock:
             self.disconnect(quiet=True)
 
-            took, server, ip, host = self.find_exit(country, progress)
+            took, server, ip, host = self.find_exit(
+                country, progress, provider=provider)
             progress({'phase': 'starting', 'country': server.country,
                       'city': server.city})
 
-            child, out_path = self._spawn(ip, host)
+            child, out_path = self._spawn(ip, host,
+                                          self.auth_file_for(server))
             self._wait_listening(child, out_path)
             self.child = child
 
@@ -474,7 +584,8 @@ class Engine:
                 self.sysproxy.engage('127.0.0.1', self.port)
 
             self.exit_info = {'ip': ip, 'host': host, 'country': server.country,
-                              'city': server.city, 'answered': round(took, 2),
+                              'city': server.city, 'provider': server.provider,
+                              'answered': round(took, 2),
                               'pid': child.pid, 'since': time.time()}
             # Deliberately NOT verified here. The connection is live the
             # moment the machine is pointed at a listening proxy; asking a
@@ -499,6 +610,31 @@ class Engine:
                 px.kill(rec['pid'])
             except Exception:
                 pass
+
+        # Reaped, and the handle let go of with it.
+        #
+        # Not housekeeping. On Windows a process object outlives the process
+        # for as long as anyone holds a handle, and this object held one on
+        # every proxy it started - so a force-killed worker stayed "running"
+        # to anything that asked, its record survived, and the next connect
+        # was refused with "a proxy is already up on port 8877" naming a pid
+        # that had been dead for half an hour. alive() no longer answers that
+        # way, and this stops the handle being held in the first place.
+        child, self.child = self.child, None
+        if child is not None:
+            try:
+                child.wait(timeout=5)
+            except Exception:
+                pass
+
+        # And the record itself. Killed with /F, the worker never gets to
+        # remove its own line, so the file keeps a proxy that is not there.
+        # read_states() already leaves the dead ones out; writing back what
+        # it returns is what takes them out of the file.
+        try:
+            px.put_states(px.read_states())
+        except Exception:
+            pass
         # The worker tidies its own meter file when it is interrupted, but a
         # kill on Windows gives it no chance to. Removing it here rather than
         # leaving it to be aged out means the next connection on this port

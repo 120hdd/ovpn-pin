@@ -289,7 +289,10 @@ import pin                                                   # noqa: E402
 import sweep                                                 # noqa: E402
 import webview                                               # noqa: E402
 import winproxy                                              # noqa: E402
+import accounts                                              # noqa: E402
+import windscribe                                            # noqa: E402
 from engine import Engine                                    # noqa: E402
+
 
 class Api:
     def __init__(self):
@@ -313,6 +316,11 @@ class Api:
         self._stop = threading.Event()
         self._sweep = sweep.Sweep()
         self._pin = pin.Pin()
+        self._apply_sources()
+        self._sync_providers()
+        # Spans the two halves of a Windscribe sign-in - the name and password
+        # that fetched a puzzle, waiting for the puzzle to be let go of.
+        self._ws_pending = None
 
     # -- talking to the page ----------------------------------------------
 
@@ -331,10 +339,86 @@ class Api:
 
     # -- what the page asks for -------------------------------------------
 
+    def _provider_state(self):
+        """What each provider has, and therefore whether it can be offered.
+
+        Two halves, and both are needed. Servers without an account is a list
+        of exits nothing can open - which is what removing an account used to
+        leave behind, since the configs are files and stay where they are.
+        An account without servers is the opposite and just as useless.
+
+        Kept apart in the answer rather than collapsed into one flag, because
+        "none pinned" and "no account" want completely different things doing
+        about them, and a chooser that greys a provider out without saying
+        which is a chooser nobody can act on.
+        """
+        was = self._engine.providers
+        self._engine.providers = None
+        try:
+            counts = {}
+            for s in self._engine.servers():
+                counts[s.provider] = counts.get(s.provider, 0) + 1
+        finally:
+            self._engine.providers = was
+
+        roster = accounts.listing()
+        out = {}
+        for name in accounts.PROVIDERS:
+            servers = counts.get(name, 0)
+            signed = any(a['provider'] == name and a['signedIn'] for a in roster)
+            out[name] = {'servers': servers, 'account': signed,
+                         'usable': bool(servers) and signed}
+        return out
+
+    def _usable_providers(self):
+        return sorted(k for k, v in self._provider_state().items()
+                      if v['usable'])
+
+    def _sync_providers(self):
+        """Keep the selection inside what is actually usable.
+
+        Called after anything that changes the roster. A provider whose
+        account has just been removed has to leave the selection by itself -
+        left in, its exits stay in the list and the app offers to connect
+        through a credential that is not there any more.
+        """
+        usable = self._usable_providers()
+        chosen = [p for p in (self._settings.get('providers') or usable)
+                  if p in usable]
+        if not chosen:
+            chosen = usable
+        self._engine.providers = set(chosen) if chosen else set()
+        if self._settings.get('providers') != chosen:
+            self._settings['providers'] = chosen
+            save_settings(self._settings)
+        return chosen
+
+    def _forget_provider(self, provider):
+        """Take away what the app was using to sign in as that provider.
+
+        Removing the last account of a provider has to remove its credential
+        too. Leaving it is what "I removed Surfshark and it is still there"
+        was: the roster said no account, the file on disk said otherwise, and
+        the file is what actually connects.
+        """
+        if provider == accounts.WINDSCRIBE:
+            return windscribe.forget()
+        gone = []
+        try:
+            os.remove(paths.AUTH_FILE)
+            gone.append(paths.AUTH_FILE)
+        except OSError:
+            pass
+        return gone
+
     def _describe(self):
         return {'countries': self._engine.catalogue(),
                 'serverCount': len(self._engine.servers()),
                 'folder': self._engine.folder,
+                'folders': self._engine.sources(),
+                'providers': sorted(self._engine.providers)
+                if self._engine.providers is not None else None,
+                'providerState': self._provider_state(),
                 'systemProxy': self._engine.set_system_proxy,
                 'port': self._engine.port,
                 'defaultPort': engine.DEFAULT_PORT,
@@ -531,8 +615,13 @@ class Api:
     def resetFolder(self):
         self._engine.folder = paths.servers_dir()
         self._settings.pop('folder', None)
+        # And back to reading every folder, which is what "the servers that
+        # came with the app" means once there is more than one provider.
+        self._settings.pop('folderIsSite', None)
         save_settings(self._settings)
-        return {'ok': True, 'folder': self._engine.folder}
+        self._apply_sources()
+        return {'ok': True, 'folder': self._engine.folder,
+                'folders': self._engine.sources()}
 
     def copy(self, text):
         """A fallback for the clipboard API, which needs a secure context and
@@ -590,6 +679,214 @@ class Api:
         except OSError as e:
             return {'ok': False, 'error': str(e)}
         return {'ok': True}
+
+    # -- accounts ----------------------------------------------------------
+    #
+    # One roster over both providers. What differs between them is only how
+    # an account is proved: Surfshark's is a service credential that can be
+    # pasted, Windscribe's needs a login and a puzzle. Everything after that
+    # - which one is in use, what it is called, how it is dropped - is the
+    # same question, so it is the same code.
+    #
+    # The captcha is drawn in the page from the two images the API sends;
+    # what comes back here is where the person let go of the piece and the
+    # path their pointer took getting there. Neither is generated anywhere in
+    # this app - a solved captcha that nobody solved is the one thing this
+    # flow must not be able to produce.
+
+    def _write_active(self, account):
+        """Put an account's credential where the rest of the app reads it.
+
+        This is the whole of what "in use" means. Nothing downstream knows
+        about accounts: the engine reads .ovpn-auth and .windscribe-auth, the
+        sweep scripts read .env, and all of them keep working because
+        activating an account rewrites those and changes nothing else.
+        """
+        secrets = accounts.secrets(account['id'])
+        if not secrets:
+            return 'That account could not be read back.'
+
+        if account['provider'] == accounts.SURFSHARK:
+            if not (secrets['username'] and secrets['password']):
+                return ('That Surfshark account has no password stored - '
+                        'remove it and add it again.')
+            try:
+                # The engine's own writer, so that .env stays in step. The
+                # PowerShell half reads that one first.
+                self._engine.save_credentials(secrets['username'],
+                                              secrets['password'])
+            except (RuntimeError, OSError) as e:
+                return str(e)
+            return None
+
+        user, password = secrets['proxy']
+        if not (user and password):
+            return ('That Windscribe account has no proxy credential stored '
+                    '- press Refresh credential, or sign in again.')
+        try:
+            windscribe.save_proxy_credentials(user, password)
+            if secrets['session']:
+                windscribe.save_token(secrets['session'], secrets['username'])
+        except OSError as e:
+            return str(e)
+        return None
+
+    def accountsList(self):
+        # Whatever was already signed in becomes the first entries, once.
+        # Someone who has been using this app should not open the new pane
+        # and be told they have no accounts while both providers are plainly
+        # connected.
+        accounts.adopt(self._engine)
+        return {'ok': True, 'accounts': accounts.listing()}
+
+    def accountAdd(self, provider, label, username, password):
+        username = (username or '').strip()
+        if provider not in accounts.PROVIDERS:
+            return {'ok': False, 'error': 'Unknown provider.'}
+        if not username:
+            return {'ok': False, 'error': 'Enter the username.'}
+        if not password:
+            return {'ok': False, 'error': 'Enter the password.'}
+
+        if provider == accounts.SURFSHARK:
+            account = accounts.put(provider, label, username, password=password)
+            problem = self._write_active(account)
+            if problem:
+                return {'ok': False, 'error': problem}
+            self._sync_providers()
+            return {'ok': True, 'id': account['id'], 'label': account['label']}
+
+        # Windscribe: the puzzle stands between here and an account, so this
+        # only fetches it. The account is written when the login lands.
+        try:
+            out = windscribe.begin_login(username, password)
+        except windscribe.ApiError as e:
+            return {'ok': False, 'error': str(e), 'code': e.code}
+        self._ws_pending = {'username': username, 'password': password,
+                            'label': (label or '').strip()}
+        return {'ok': True, 'token': out['token'], 'captcha': out['captcha']}
+
+    def accountUse(self, account_id):
+        account = accounts.activate(account_id)
+        if not account:
+            return {'ok': False, 'error': 'No such account.'}
+        problem = self._write_active(account)
+        if problem:
+            return {'ok': False, 'error': problem}
+        return {'ok': True, 'label': account['label'],
+                'provider': account['provider']}
+
+    def accountRemove(self, account_id):
+        gone = accounts.remove(account_id)
+        if not gone:
+            return {'ok': False, 'error': 'No such account.'}
+        # Whatever took over as active for that provider has to be written
+        # out, or the file on disk still holds the account just removed.
+        left = accounts.active(gone['provider'])
+        if left:
+            self._write_active(left)
+        else:
+            # None left, so the credential goes too. The configs stay - they
+            # are files, they cost nothing, and they are worth having if the
+            # account comes back - but the provider stops being offered,
+            # which is what _sync_providers does next.
+            self._forget_provider(gone['provider'])
+        self._sync_providers()
+        return {'ok': True, 'label': gone.get('label') or '',
+                'providers': sorted(self._engine.providers or [])}
+
+    def windscribeFinish(self, token, solution,
+                         trailX=None, trailY=None, code2fa=''):
+        """Half two of a Windscribe sign-in, run the moment the puzzle is let
+        go of.
+
+        The name and password come from the call that fetched the puzzle
+        rather than from the page, so they cross the bridge once. One
+        attempt: note.md records an account blocked after about seventy
+        security alerts, so a failure here is reported and left alone.
+        """
+        pending = getattr(self, '_ws_pending', None)
+        if not pending:
+            return {'ok': False,
+                    'error': 'That sign-in expired. Start it again.'}
+        try:
+            who = windscribe.finish_login(
+                pending['username'], pending['password'], token, solution,
+                trailX or [], trailY or [], (code2fa or '').strip())
+        except windscribe.ApiError as e:
+            # Spent either way - the token is single-use and so is the
+            # puzzle - so it is dropped rather than left for a retry that
+            # would be refused for a reason nobody could see.
+            self._ws_pending = None
+            return {'ok': False, 'error': str(e), 'code': e.code,
+                    'why': e.description}
+
+        # The credential the whole login was for. Fetched here rather than
+        # left for later, because this is the one moment the session is
+        # certainly good - and an account saved without one is an account
+        # that looks signed in and cannot connect.
+        proxy, trouble = None, None
+        try:
+            proxy = windscribe.proxy_credentials(who['session_auth_hash'])
+        except windscribe.ApiError as e:
+            trouble = str(e)
+
+        account = accounts.put(
+            accounts.WINDSCRIBE, pending.get('label'), who['username'],
+            # Only now, and only because it has just been proved right.
+            # Saving a password before it has worked is how a wrong one gets
+            # remembered and quietly reused until the account locks.
+            password=pending['password'],
+            session=who['session_auth_hash'], proxy=proxy)
+        self._ws_pending = None
+
+        problem = self._write_active(account) if proxy else trouble
+        self._sync_providers()
+        return {'ok': True, 'username': who['username'],
+                'credentials': bool(proxy) and not problem,
+                'remembered': accounts.find(account['id']).get('password')
+                is not None,
+                'error': problem or trouble or '',
+                'premium': who['premium']}
+
+    def windscribeRefresh(self):
+        """The whole of what this app does on its own: token in, working
+        proxy credential out, no captcha anywhere. Also the answer to the one
+        open question in windscribe.md - if this still works in a month, the
+        sign-in was a one-time thing."""
+        account = accounts.active(accounts.WINDSCRIBE)
+        secrets = accounts.secrets(account['id']) if account else None
+        session = (secrets or {}).get('session') or (
+            (windscribe.load_token() or {}).get('session_auth_hash'))
+        if not session:
+            return {'ok': False, 'error': 'Not signed in to Windscribe.'}
+        try:
+            user, password = windscribe.proxy_credentials(session)
+        except windscribe.ApiError as e:
+            return {'ok': False, 'error': str(e), 'code': e.code}
+        windscribe.save_proxy_credentials(user, password)
+        if account:
+            accounts.put(accounts.WINDSCRIBE, account.get('label'),
+                         account.get('username'), proxy=(user, password),
+                         account_id=account['id'])
+        return {'ok': True, 'proxyUser': user}
+
+    def windscribeServers(self, freeOnly=False):
+        """Fetch the published fleet and write it out as configs to pin.
+
+        Unpinned on purpose. These are hostnames, and a hostname is the thing
+        this line answers dishonestly - so they go through the same pinning
+        the rest of the app uses rather than being resolved here.
+        """
+        try:
+            out = windscribe.write_configs(free_only=bool(freeOnly))
+        except windscribe.ApiError as e:
+            return {'ok': False, 'error': str(e)}
+        except OSError as e:
+            return {'ok': False,
+                    'error': f'Could not write into {windscribe.CONFIG_DIR}: {e}'}
+        out['ok'] = True
+        return out
 
     # -- measuring the servers properly ------------------------------------
 
@@ -681,6 +978,63 @@ class Api:
                 'minutes': sweep.estimate_minutes(
                     len(sweep.configs_in(self._engine.folder)), len(named))}
 
+    def _apply_sources(self):
+        """Which folders the engine reads.
+
+        The chosen folder first, and then the other places pinned configs
+        land. Both providers have to be visible at once for "use both" to
+        mean anything, and they do not share a folder: Surfshark's configs
+        are downloaded and pinned, Windscribe's are fetched and pinned, and
+        nobody should have to merge two folders by hand to have both offered.
+
+        Picking a site's folder is the one case that narrows rather than
+        widens - see useSiteFolder, which is the whole point of that feature.
+        """
+        folders = [self._engine.folder]
+        if not self._settings.get('folderIsSite'):
+            for name in paths.SERVER_DIRS:
+                path = os.path.join(paths.DATA_DIR, name)
+                if os.path.isdir(path) and path not in folders:
+                    folders.append(path)
+        self._engine.folders = folders
+        return folders
+
+    def setProviders(self, providers=None):
+        """Which providers to offer exits from.
+
+        An empty choice is refused rather than obeyed. "None of them" is a
+        setting whose only effect is an app that cannot connect and does not
+        say why, and the button that produced it looked like a filter.
+        """
+        wanted = [p for p in (providers or []) if p in accounts.PROVIDERS]
+        if not wanted:
+            return {'ok': False,
+                    'error': 'Pick at least one — with none chosen there is '
+                             'nothing to connect through.'}
+
+        state = self._provider_state()
+        usable = [p for p in wanted if state[p]['usable']]
+        if not usable:
+            names = {accounts.SURFSHARK: 'Surfshark',
+                     accounts.WINDSCRIBE: 'Windscribe'}
+            # Which half is missing, because the two want opposite things
+            # doing about them and "unavailable" says neither.
+            why = []
+            for p in wanted:
+                if not state[p]['account']:
+                    why.append(f'no {names.get(p, p)} account')
+                elif not state[p]['servers']:
+                    why.append(f'no pinned {names.get(p, p)} servers')
+            return {'ok': False, 'error': (' and '.join(why) or 'nothing to '
+                                           'connect through') + '.'}
+
+        self._engine.providers = set(usable)
+        self._settings['providers'] = sorted(usable)
+        save_settings(self._settings)
+        return {'ok': True, 'providers': sorted(usable),
+                'serverCount': len(self._engine.servers()),
+                'countries': self._engine.catalogue()}
+
     def useSiteFolder(self, folder):
         """Point the app at one site's folder.
 
@@ -693,7 +1047,12 @@ class Api:
                     'error': 'That folder has no servers in it any more.'}
         self._engine.folder = folder
         self._settings['folder'] = folder
+        # Narrowed on purpose. The point of a site folder is "only the exits
+        # that were measured getting into this site", and quietly reading the
+        # other folders beside it would give back exactly what was excluded.
+        self._settings['folderIsSite'] = True
         save_settings(self._settings)
+        self._apply_sources()
         return {'ok': True, 'folder': folder,
                 'count': len(sweep.configs_in(folder))}
 
@@ -827,10 +1186,18 @@ class Api:
         self._busy = True
         self._retray('busy')
 
+        # "fr" is France through whichever provider answers first;
+        # "fr:windscribe" is France through that one. A country reached by
+        # both is one place with two ways in, and which way in is a real
+        # choice - they are different companies, different addresses and,
+        # on this line, different odds of being filtered.
+        where, _, want = (country or '').partition(':')
+        want = want if want in accounts.PROVIDERS else None
+
         def work():
             try:
                 result = self._engine.connect(
-                    country, lambda p: self._emit('Progress', p))
+                    where, lambda p: self._emit('Progress', p), provider=want)
                 self._since = time.time()
                 self._retray('on')
                 self._emit('Connected', result)
@@ -1062,6 +1429,41 @@ def dress_window():
     return done
 
 
+def _flat_png(width, height, rgb):
+    """A solid rectangle, built here rather than kept as a wall of base64.
+
+    Only the Windscribe captcha check wants these, and only for its geometry:
+    it needs an image with a known natural width to measure the drawn scale
+    against, and a second one to move. What they look like is irrelevant, so
+    a file is not worth carrying.
+    """
+    import struct
+    import zlib
+    raw = b''.join(b'\x00' + bytes(rgb) * width for _ in range(height))
+
+    def chunk(tag, data):
+        body = tag + data
+        return (struct.pack('>I', len(data)) + body
+                + struct.pack('>I', zlib.crc32(body) & 0xffffffff))
+
+    png = (b'\x89PNG\r\n\x1a\n'
+           + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
+           + chunk(b'IDAT', zlib.compress(raw))
+           + chunk(b'IEND', b''))
+    import base64
+    return base64.b64encode(png).decode()
+
+
+# The sizes a real puzzle arrives at, measured from one: a 700x400 background
+# with a 240x240 piece, cut at top=56. Not round numbers picked to be easy -
+# at the width the sheet draws them the scale is about 0.45, so an answer that
+# forgot to convert back out of drawn pixels is wrong by more than double, and
+# a piece that was not scaled with the background covers a third of it.
+UI_CHECK_BG = _flat_png(700, 400, (40, 60, 90))
+UI_CHECK_PIECE = _flat_png(240, 240, (200, 180, 60))
+UI_CHECK_TOP = 56
+
+
 def ui_check(window):
     """Open the window, photograph it, and say what the page thinks it shows.
 
@@ -1185,8 +1587,229 @@ def ui_check(window):
         said['settings'] = shot('settings')
         # What the two new sections are actually saying, which is the part a
         # picture of a scrolled sheet can miss.
-        said['signIn'] = window.evaluate_js(
-            "document.getElementById('authSaid').textContent")
+        # -- the settings, as a stack ---------------------------------
+        #
+        # A list of four, then the one you picked, then back. Driven rather
+        # than looked at: the thing that can be wrong is whether the other
+        # three screens are really gone or merely scrolled past, and a
+        # screenshot of the right one showing proves neither.
+        said['menu'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.menu__name'))"
+            ".map(e => e.textContent)")
+        said['screensAtRest'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.screen'))"
+            ".filter(s => !s.hidden).length")
+        window.evaluate_js(
+            "document.querySelector('.menu__row[data-goto=servers]').click()")
+        time.sleep(0.5)
+        said['screenOpen'] = window.evaluate_js(
+            "(document.querySelector('.screen:not([hidden])')||{}).dataset"
+            " && document.querySelector('.screen:not([hidden])').dataset.screen")
+        said['onlyOneScreen'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.screen'))"
+            ".filter(s => !s.hidden).length === 1")
+        said['menuGoneWhileIn'] = window.evaluate_js(
+            "document.getElementById('prefsMenu').hidden")
+        said['backOffered'] = window.evaluate_js(
+            "!document.getElementById('prefsBack').hidden")
+        said['titleFollows'] = window.evaluate_js(
+            "document.getElementById('prefsTitle').textContent")
+        window.evaluate_js("document.getElementById('prefsBack').click()")
+        time.sleep(0.4)
+        said['backWorks'] = window.evaluate_js(
+            "!document.getElementById('prefsMenu').hidden"
+            " && document.querySelectorAll('.screen:not([hidden])').length === 0"
+            " && document.getElementById('prefsBack').hidden")
+        said['titleBack'] = window.evaluate_js(
+            "document.getElementById('prefsTitle').textContent")
+        # Into the one the rest of this check needs.
+        window.evaluate_js(
+            "document.querySelector('.menu__row[data-goto=sign-in]').click()")
+        time.sleep(0.4)
+
+        # -- the whys, moved into (i) buttons -------------------------------
+        #
+        # The paragraphs are not deleted, they are relocated - so the test is
+        # that the text still exists, not merely that the paragraphs are gone.
+        said['infoButtons'] = window.evaluate_js(
+            "document.querySelectorAll('.pane .info').length")
+        said['whysLeftInline'] = window.evaluate_js(
+            "document.querySelectorAll('.pane__why').length")
+        said['infoKeptTheWords'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.info__bubble'))"
+            ".every(b => b.textContent.trim().length > 40)")
+        said['infoHiddenUntilAsked'] = window.evaluate_js(
+            "getComputedStyle(document.querySelector('.info__bubble'))"
+            ".visibility")
+
+        # -- the roster -----------------------------------------------------
+        said['acctPane'] = window.evaluate_js(
+            "!!document.getElementById('prefAccounts')")
+        said['acctPill'] = window.evaluate_js(
+            "document.getElementById('acctPill').textContent")
+        said['acctRows'] = window.evaluate_js(
+            "document.querySelectorAll('.acct__row').length")
+        said['acctSays'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.acct__row')).map("
+            "r => r.dataset.provider + ':' + r.dataset.active)")
+        # One form for both providers, and the provider switch changes what
+        # it asks for rather than which form is shown.
+        # The provider chooser, which is a different question from the
+        # roster above it: an account can be signed in and still be one you
+        # do not want exits from today.
+        said['useBoxes'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.use__opt input'))"
+            ".map(b => b.value + ':' + (b.disabled ? 'none' : b.checked))")
+        said['useCounts'] = window.evaluate_js(
+            "[document.getElementById('useSurfsharkN').textContent,"
+            " document.getElementById('useWindscribeN').textContent]")
+
+        window.evaluate_js("document.getElementById('acctAdd').click()")
+        time.sleep(0.5)
+        # A dialog over the pane, not a form unfolding inside the list - the
+        # list is what "is this one already here" needs to still see.
+        said['acctFormOpen'] = window.evaluate_js(
+            "document.getElementById('acctDlg').open")
+        said['acctCapSurfshark'] = window.evaluate_js(
+            "document.getElementById('acctUserCap').textContent")
+        window.evaluate_js(
+            "document.querySelector('#acctWhich [data-provider=windscribe]').click()")
+        time.sleep(0.3)
+        said['acctCapWindscribe'] = window.evaluate_js(
+            "document.getElementById('acctUserCap').textContent")
+        said['acctTwoShown'] = window.evaluate_js(
+            "!document.getElementById('acctTwoWrap').hidden")
+        said['acctForm'] = shot('settings-add-account')
+        window.evaluate_js("document.getElementById('acctCancel').click()")
+        time.sleep(0.3)
+        said['acctFormClosed'] = window.evaluate_js(
+            "!document.getElementById('acctDlg').open")
+        said['accounts'] = shot('settings-accounts')
+
+        # -- the Windscribe puzzle ------------------------------------
+        #
+        # Driven rather than looked at, because the part that can be wrong is
+        # arithmetic and not appearance: the answer has to be given in the
+        # background image's own pixels, and what the drag produces is
+        # positions in a box that is a different width. A screenshot of a
+        # piece in the right place proves none of that.
+        #
+        # Letting go now sends the puzzle, so the bridge call is replaced
+        # first with one that writes down what it was given. Without that,
+        # running this test would attempt a real login against a real
+        # account - and there is a rate limiter and a lockout on the other
+        # end of that. Recording it is also the better test: what matters is
+        # what would have been sent.
+        said['wsPane'] = window.evaluate_js(
+            "!!document.getElementById('acctWsTools')")
+        window.evaluate_js("""
+            (function () {
+              window.__wsReal = window.pywebview.api.windscribeFinish;
+              window.__wsSent = null;
+              window.pywebview.api.windscribeFinish =
+                (token, solution, trailX, trailY, code2fa) => {
+                  window.__wsSent = {token, solution, trailX, trailY, code2fa};
+                  return Promise.resolve(
+                    {ok: false, error: 'not sent - ui-check stub'});
+                };
+            })()""")
+
+        # The token comes from the call that fetched the puzzle, and this
+        # test skips that call - so it is stood in for here. Without it the
+        # submit refuses, correctly, and the drag looks broken for a reason
+        # that only exists in the test.
+        window.evaluate_js(
+            f"wsShowCaptcha({{kind:'slider',top:{UI_CHECK_TOP},"
+            f"background:'{UI_CHECK_BG}',slider:'{UI_CHECK_PIECE}'}});"
+            "ws.token = 'ui-check-token'")
+        time.sleep(1.5)
+        # A dialog, so that "is it up" is a question about the window rather
+        # than about a hidden attribute somewhere down the settings sheet.
+        said['wsCaptchaShown'] = window.evaluate_js(
+            "document.getElementById('wsCapDlg').open")
+        said['wsScale'] = window.evaluate_js('ws.scale')
+        # The two widths the clamp is built out of. Reported because when a
+        # drag comes back pinned at zero these are the only two numbers that
+        # can be responsible, and neither is visible in a screenshot.
+        said['wsStageW'] = window.evaluate_js(
+            "document.getElementById('wsCapStage').getBoundingClientRect().width")
+        said['wsPieceW'] = window.evaluate_js(
+            "document.getElementById('wsCapPc').offsetWidth")
+        # The piece is scaled with the background rather than drawn at its own
+        # 240px, and sits where the cut is. Both are what make the puzzle
+        # solvable at all: an unscaled piece covers a third of the picture.
+        said['wsPieceTop'] = window.evaluate_js(
+            "document.getElementById('wsCapPc').style.top")
+        said['wsCaptcha'] = shot('settings-windscribe')
+
+        # A drag in three moves, so the trail has to collect more than the
+        # endpoint. Dispatched at the piece, which is the handle, and from a
+        # cursor 7px below the top of the picture - the y values sent are
+        # measured from there, so a wrong origin shows up as a trail of the
+        # wrong numbers rather than as anything visible.
+        window.evaluate_js("""
+            (function () {
+              const pc = document.getElementById('wsCapPc');
+              const box = document.getElementById('wsCapStage')
+                            .getBoundingClientRect();
+              const y = box.top + 7;
+              const at = (type, x) => pc.dispatchEvent(new PointerEvent(type, {
+                clientX: x, clientY: y, pointerId: 1, bubbles: true }));
+              at('pointerdown', box.left + 10);
+              at('pointermove', box.left + 40);
+              at('pointermove', box.left + 80);
+              at('pointermove', box.left + 120);
+              at('pointerup', box.left + 120);
+            })()""")
+        # Let go is the answer, so by now it should already have gone.
+        time.sleep(1.2)
+
+        said['wsLeft'] = window.evaluate_js('ws.left')
+        said['wsSolution'] = window.evaluate_js('wsSolution()')
+        # The piece must have moved, and the rail's knob with it.
+        said['wsPieceMoved'] = window.evaluate_js(
+            "document.getElementById('wsCapPc').style.transform")
+        said['wsKnobFollowed'] = window.evaluate_js(
+            "document.getElementById('wsCapKnob').style.transform")
+
+        # What letting go actually sent - the whole point of the change, and
+        # the thing that was silently not happening before.
+        said['wsAutoSent'] = window.evaluate_js('!!window.__wsSent')
+        said['wsSentSolution'] = window.evaluate_js(
+            'window.__wsSent && window.__wsSent.solution')
+        said['wsSentMatches'] = window.evaluate_js(
+            'window.__wsSent && window.__wsSent.solution === wsSolution()')
+        said['wsSentTrail'] = window.evaluate_js(
+            'window.__wsSent && window.__wsSent.trailX.length')
+        # The trail carries the piece's position, not the cursor's - so the
+        # last x has to be the piece's left, and not the pointer's distance
+        # across the screen.
+        said['wsTrailIsPiece'] = window.evaluate_js(
+            'window.__wsSent && window.__wsSent.trailX[window.__wsSent.trailX.length - 1]'
+            ' === Math.round(ws.left)')
+        # And y is measured from the top of the picture, so a cursor 7px down
+        # reads as 7 rather than as several hundred.
+        said['wsTrailY'] = window.evaluate_js(
+            'window.__wsSent && window.__wsSent.trailY[0]')
+        said['wsTrailWhole'] = window.evaluate_js(
+            'window.__wsSent && window.__wsSent.trailX.every(Number.isInteger)'
+            ' && window.__wsSent.trailY.every(Number.isInteger)')
+        # An answer has to land inside what the puzzle can accept, which is
+        # the background's own width less the piece - 460 for a real one.
+        said['wsSolutionInRange'] = window.evaluate_js(
+            'wsSolution() >= 0 && wsSolution() <= 700 - 240')
+        # And a rejected puzzle takes the dialog down with it rather than
+        # leaving a spent token on screen.
+        said['wsClosedOnFail'] = window.evaluate_js(
+            "!document.getElementById('wsCapDlg').open && ws.token === null")
+        said['wsToldWhy'] = window.evaluate_js(
+            "document.getElementById('wsSaid').textContent")
+
+        window.evaluate_js(
+            'window.pywebview.api.windscribeFinish = window.__wsReal')
+        window.evaluate_js('wsHideCaptcha()')
+        said['wsCleared'] = window.evaluate_js(
+            "!document.getElementById('wsCapDlg').open && ws.token === null")
         said['sweep'] = window.evaluate_js(
             "document.getElementById('sweepSaid').textContent")
         said['sweepFolder'] = window.evaluate_js(
@@ -1387,6 +2010,70 @@ def ui_check(window):
         said['pickerOpen'] = window.evaluate_js(
             "document.getElementById('picker').open")
         said['picker'] = shot('picker')
+        # Which provider each country's exits come from, said on the row. The
+        # point of the tag is the rows backed by both: with one provider
+        # switched on it is decoration, and with two it is the only thing
+        # that says which credential is about to open the exit.
+        said['rowsTagged'] = window.evaluate_js(
+            "document.querySelectorAll('.row .row__tag').length")
+        said['rowsWithBoth'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row'))"
+            ".filter(r => r.querySelectorAll('.row__tag').length > 1).length")
+        said['tagLetters'] = window.evaluate_js(
+            "Array.from(new Set(Array.from("
+            "document.querySelectorAll('.row__tag')).map(t => t.textContent)))"
+            ".sort()")
+        said['tagSaysWhich'] = window.evaluate_js(
+            "(document.querySelector('.row__tag') || {}).title")
+
+        # -- one country, two ways into it ----------------------------
+        #
+        # Fed synthetic countries rather than whatever is pinned today: the
+        # case that matters is a country both providers reach, and whether
+        # this machine happens to have one is not something a test should
+        # depend on. The rows are the real ones, built by the real builder.
+        window.evaluate_js("""
+            (function () {
+              window.__realCountries = state.countries;
+              state.countries = [
+                {code: 'zz', name: 'Bothland', alias: '', cities: 2, count: 12,
+                 best: null, by: {surfshark: 9, windscribe: 3}},
+                {code: 'zy', name: 'Onlyland', alias: '', cities: 1, count: 4,
+                 best: null, by: {windscribe: 4}}
+              ];
+              drawList('');
+            })()""")
+        time.sleep(0.6)
+        said['splitRows'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row[data-code]'))"
+            ".map(r => r.dataset.code).filter(c => c.startsWith('z'))")
+        # The head still means "whichever answers", and says so.
+        said['splitHeadSays'] = window.evaluate_js(
+            "(document.querySelector('.row--heads .row__meta')||{}).textContent")
+        said['splitViaNames'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row--via .row__name'))"
+            ".map(e => e.textContent)")
+        said['splitViaCounts'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row--via .row__meta'))"
+            ".map(e => e.textContent)")
+        # A country only one provider reaches stays a single plain row - if
+        # everything split, the split would mean nothing.
+        said['splitLeavesSingles'] = window.evaluate_js(
+            'document.querySelectorAll(".row[data-code=zy]").length === 1'
+            ' && document.querySelectorAll(".row[data-code^=\'zy:\']").length === 0')
+        # And picking one of the sub-rows is what tells the app which.
+        said['splitPickable'] = window.evaluate_js(
+            '!!document.querySelector(".row[data-code=\'zz:windscribe\']")')
+        said['splitNames'] = window.evaluate_js(
+            "nameOf('zz:windscribe') + ' | ' + nameOf('zz')")
+        said['splitShot'] = shot('picker-split')
+        window.evaluate_js(
+            "state.countries = window.__realCountries; drawList('')")
+        # A country only one of them reaches is the other half of the same
+        # claim - if every row carried both tags the tag would mean nothing.
+        said['rowsOneOnly'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row'))"
+            ".filter(r => r.querySelectorAll('.row__tag').length === 1).length")
         # And the chosen row, which is the only one that looks different and
         # is almost never the one at the top of the list.
         said['pickedRow'] = window.evaluate_js(

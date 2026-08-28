@@ -255,8 +255,16 @@
   <header class="sheet__top">
     <span class="sheet__heading">
       <span class="sheet__kicker">THIS COPY</span>
-      <span class="sheet__title">Settings</span>
+      <span class="sheet__title" id="prefsTitle">Settings</span>
     </span>
+    <!-- Back sits where it is looked for: on the left of the title, not
+         beside the close button. It is only there while a screen is open,
+         because a back button on the top level is a button that does the
+         same thing as close and reads as though it does not. -->
+    <button class="icon icon--back" id="prefsBack" type="button"
+            aria-label="Back to settings" hidden>
+      <svg class="ico" aria-hidden="true"><use href="#i-chev-down"/></svg>
+    </button>
     <button class="icon" id="prefsClose" type="button" aria-label="Close">
       <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
     </button>
@@ -269,40 +277,117 @@
        to make four unrelated decisions. -->
   <div class="sheet__body" id="prefsBody">
 
-    <!-- 1 · the gate -->
-    <section class="pane pane--gate" id="prefAuth" style="--i:0">
+    <!-- Four groups, and the settings sheet is four questions rather than
+         seven cards. The order is the order they are needed in: an account
+         before anything can connect, the connection before it is worth
+         measuring anything, the servers after that, and the paths last
+         because they are a footnote.
+
+         Only the first is open. The sheet used to be one long scroll where
+         the thing you came for was somewhere in the middle, and everything
+         you did not come for was between you and it. -->
+    <!-- The top level. Four things to go and look at rather than
+         four things already open, so the sheet opens on a list you
+         read in a second instead of on the middle of a form. -->
+    <nav class="menu" id="prefsMenu">
+      <button class="menu__row" type="button" data-goto="sign-in">
+        <span class="menu__copy">
+          <span class="menu__name">Sign-in</span>
+          <span class="menu__note">the accounts this app can use</span>
+        </span>
+        <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
+      </button>
+      <button class="menu__row" type="button" data-goto="connection">
+        <span class="menu__copy">
+          <span class="menu__name">Connection</span>
+          <span class="menu__note">where it listens, and what it moves</span>
+        </span>
+        <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
+      </button>
+      <button class="menu__row" type="button" data-goto="servers">
+        <span class="menu__copy">
+          <span class="menu__name">Servers</span>
+          <span class="menu__note">finding them, pinning them, timing them</span>
+        </span>
+        <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
+      </button>
+      <button class="menu__row" type="button" data-goto="about-this-copy">
+        <span class="menu__copy">
+          <span class="menu__name">About this copy</span>
+          <span class="menu__note">paths, versions, the log</span>
+        </span>
+        <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
+      </button>
+    </nav>
+
+    <section class="screen" data-screen="sign-in" hidden>
+
+    <!-- 1 · the accounts.
+
+         One pane for both providers, because they are the same decision:
+         which account is this app using. They were two, and being two is
+         what made "you can only have one of each, and swapping means typing
+         it again" look like the natural state of things rather than a
+         limitation.
+
+         What differs between them is only how an account is proved - one
+         takes a service credential off a web page, the other needs a login
+         and a puzzle - so that is the only place the form differs. -->
+    <section class="pane pane--gate" id="prefAccounts" style="--i:0">
       <div class="pane__head">
         <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-key"/></svg></span>
-        <h3 class="pane__title">Sign-in</h3>
-        <span class="pill" id="authPill" data-state="off">not set</span>
+        <h3 class="pane__title">Accounts</h3>
+        <span class="pill" id="acctPill" data-state="off">none</span>
       </div>
-      <p class="pane__why">The Surfshark <b>service</b> username and password —
-        not the email you log in with. Both are on the manual-setup page,
-        beside the config files.</p>
+      <p class="pane__why">Every account this app can use, and which one each
+        provider is using now. Surfshark takes the <b>service</b> username and
+        password from its manual-setup page — not the email you log in with.
+        Windscribe cannot: it issues a different credential per client, so it
+        has to be signed in to, and that means a puzzle.</p>
 
       <div class="pane__body">
-        <label class="field">
-          <span class="field__cap">Username</span>
-          <input class="field__in mono" id="authUser" type="text" placeholder="not set"
-                 autocomplete="off" autocapitalize="off" spellcheck="false">
-        </label>
-        <label class="field">
-          <span class="field__cap">Password</span>
-          <span class="field__pair">
-            <input class="field__in mono" id="authPass" type="password" placeholder="not set"
-                   autocomplete="off" spellcheck="false">
-            <button class="field__peek" id="authPeek" type="button"
-                    aria-pressed="false" aria-label="Show the password">
-              <svg class="ico" aria-hidden="true"><use href="#i-eye" id="authPeekIcon"/></svg>
-            </button>
-          </span>
-        </label>
+        <!-- The roster. Built by the page; empty until there is one. -->
+        <div class="acct" id="acctList"></div>
+
         <div class="pane__row">
-          <button class="btn btn--quiet btn--auto" id="authSave" type="button">Save</button>
-          <p class="note" id="authSaid"></p>
+          <button class="btn btn--quiet btn--auto" id="acctAdd" type="button">Add an account</button>
+          <p class="note" id="acctSaid"></p>
+        </div>
+
+        <!-- Which of them the exit list is drawn from. Separate from
+             which accounts exist, because they are separate questions: an
+             account can be signed in and still be one you do not want
+             exits from today. -->
+        <div class="use" id="acctUse">
+          <span class="use__cap">Connect through</span>
+          <div class="use__opts" id="useOpts">
+            <label class="use__opt">
+              <input type="checkbox" id="useSurfshark" value="surfshark">
+              <span>Surfshark</span>
+              <span class="use__n" id="useSurfsharkN">—</span>
+            </label>
+            <label class="use__opt">
+              <input type="checkbox" id="useWindscribe" value="windscribe">
+              <span>Windscribe</span>
+              <span class="use__n" id="useWindscribeN">—</span>
+            </label>
+          </div>
+          <p class="note" id="useSaid"></p>
+        </div>
+
+        <!-- Windscribe only: the fleet is a download, not a folder of files
+             somebody already has. -->
+        <div class="pane__row" id="acctWsTools" hidden>
+          <button class="btn btn--quiet btn--auto" id="wsGet" type="button">Get servers</button>
+          <button class="btn btn--quiet btn--auto" id="wsRefresh" type="button">Refresh credential</button>
+          <p class="note" id="wsSaid"></p>
         </div>
       </div>
     </section>
+
+    </section>
+
+    <section class="screen" data-screen="connection" hidden>
 
     <!-- 2 · one line, no card. A switch is not a form. -->
     <section class="pane pane--line" style="--i:1">
@@ -365,6 +450,10 @@
         <button class="btn btn--quiet btn--auto" id="resetFolder" type="button">Use default</button>
       </div>
     </section>
+
+    </section>
+
+    <section class="screen" data-screen="servers" hidden>
 
     <!-- 5 · a folder in, a folder out, and the one decision in between.
          Shaped as the route it describes rather than as another form: three
@@ -582,11 +671,126 @@
       <ol class="tally" id="sweepTally" hidden></ol>
     </section>
 
+    </section>
+
+    <section class="screen" data-screen="about-this-copy" hidden>
+
     <!-- 7 · a footnote, and shaped like one -->
     <section class="pane pane--foot" style="--i:6">
       <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-info"/></svg></span>
       <p class="path path--bare mono" id="aboutPaths">—</p>
     </section>
+    </section>
+
+  </div>
+</dialog>
+
+<!-- The puzzle, over everything else.
+
+     A captcha is the one thing in this app that is genuinely modal: nothing
+     else can be done until it is solved or abandoned, it expires while it
+     waits, and it is the only screen where the answer is a gesture rather
+     than a value. Inline, it sat in a settings sheet that could be scrolled
+     away from and looked like another field to fill in.
+
+     There is no button in here on purpose. Letting go of the piece is the
+     answer, so letting go of the piece is what submits it. -->
+<!-- Adding an account, over the top rather than inside the pane.
+
+     It is a form with a provider switch, four fields and a puzzle behind one
+     of them, and unfolding all of that inside a list of accounts pushed the
+     list off the screen at the moment you most wanted to see it - which is
+     what "is this one already here" needs. -->
+<dialog class="sheet sheet--add" id="acctDlg">
+  <header class="sheet__top">
+    <span class="sheet__heading">
+      <span class="sheet__kicker">SIGN-IN</span>
+      <span class="sheet__title">Add an account</span>
+    </span>
+    <button class="icon" id="acctDlgClose" type="button" aria-label="Close">
+      <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
+    </button>
+  </header>
+  <!-- One shape for both providers. The switch on top changes what it asks
+       for - a service credential or a login - and nothing else, because
+       that is genuinely the only difference between them. -->
+  <div class="acct__new" id="acctNew">
+  <div class="pair" id="acctWhich" role="tablist">
+    <button class="pair__opt" type="button" data-provider="surfshark"
+            role="tab" aria-selected="true">Surfshark</button>
+    <button class="pair__opt" type="button" data-provider="windscribe"
+            role="tab" aria-selected="false">Windscribe</button>
+    <i class="pair__slide" aria-hidden="true"></i>
+  </div>
+
+  <label class="field">
+    <span class="field__cap" id="acctUserCap">Username</span>
+    <input class="field__in mono" id="acctUser" type="text" placeholder="not set"
+           autocomplete="off" autocapitalize="off" spellcheck="false">
+  </label>
+  <label class="field">
+    <span class="field__cap">Password</span>
+    <span class="field__pair">
+      <input class="field__in mono" id="acctPass" type="password" placeholder="not set"
+             autocomplete="off" spellcheck="false">
+      <button class="field__peek" id="acctPeek" type="button"
+              aria-pressed="false" aria-label="Show the password">
+        <svg class="ico" aria-hidden="true"><use href="#i-eye" id="acctPeekIcon"/></svg>
+      </button>
+    </span>
+  </label>
+  <label class="field" id="acctTwoWrap" hidden>
+    <span class="field__cap">Two-factor code <span class="field__hint">optional</span></span>
+    <input class="field__in mono" id="acctTwo" type="text" placeholder="only if your account uses one"
+           autocomplete="off" spellcheck="false" inputmode="numeric">
+  </label>
+  <label class="field">
+    <span class="field__cap">Call it <span class="field__hint">optional</span></span>
+    <input class="field__in" id="acctLabel" type="text" placeholder="the username, if you leave this"
+           autocomplete="off" spellcheck="false">
+  </label>
+
+  <div class="pane__row">
+    <button class="btn btn--quiet btn--auto" id="acctSave" type="button">Save</button>
+    <button class="btn btn--quiet btn--auto" id="acctCancel" type="button">Cancel</button>
+    <p class="note" id="acctNewSaid"></p>
+  </div>
+      </div>
+</dialog>
+
+<dialog class="sheet sheet--captcha" id="wsCapDlg">
+  <header class="sheet__top">
+    <span class="sheet__heading">
+      <span class="sheet__kicker">WINDSCRIBE</span>
+      <span class="sheet__title">Prove you are a person</span>
+    </span>
+    <button class="icon" id="wsCapClose" type="button" aria-label="Close">
+      <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
+    </button>
+  </header>
+
+  <div class="ws-cap" id="wsCap">
+    <p class="note" id="wsCapSaid">Drag the piece into the gap.</p>
+    <div class="ws-cap__stage" id="wsCapStage">
+      <img class="ws-cap__bg" id="wsCapBg" alt="" draggable="false">
+      <img class="ws-cap__pc" id="wsCapPc" alt="" draggable="false">
+    </div>
+    <div class="ws-cap__rail" id="wsCapRail">
+      <span class="ws-cap__knob" id="wsCapKnob"></span>
+    </div>
+    <pre class="ws-cap__ascii mono" id="wsCapAscii" hidden></pre>
+    <!-- Only the drawn kind is ever asked for, but the API can send a text
+         one, and its answer is typed rather than dragged - so that kind does
+         need a button, and gets the only one here. -->
+    <label class="field" id="wsCapAnswerWrap" hidden>
+      <span class="field__cap">What it says</span>
+      <input class="field__in mono" id="wsCapAnswer" type="text"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+    </label>
+    <div class="pane__row">
+      <button class="btn btn--quiet btn--auto" id="wsCapSend" type="button" hidden>Send</button>
+      <p class="note" id="wsCapErr"></p>
+    </div>
   </div>
 </dialog>
 

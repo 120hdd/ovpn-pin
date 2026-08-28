@@ -112,6 +112,7 @@ def main():
         # once frozen; paths.py knows the difference.
         '--add-data', f'{os.path.join(ROOT, "core", "ovpn-proxy.py")}{sep}.',
         '--hidden-import', 'winproxy',
+        '--hidden-import', 'windscribe',
         '--hidden-import', 'engine',
         '--hidden-import', 'countries',
         '--hidden-import', 'paths',

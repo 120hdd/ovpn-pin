@@ -3,6 +3,10 @@ success/
 sitetest/
 proxy-ok/
 
+# Written from Windscribe's published list, not by hand - 356 files that are
+# a download rather than a source, and stale the moment the fleet changes.
+windscribe/
+
 # Working notes - measurements, dead ends and links, kept so they do not have
 # to be rediscovered. Personal to this line and this account, not the repo's.
 note.md
@@ -21,6 +25,12 @@ windscribe.md
 !.env.example
 .ovpn-auth
 .ovpn-auth.*
+
+# Windscribe's proxy credential, which is fetched rather than typed but is a
+# password all the same. The session it is fetched with lives under .state/,
+# which is already ignored below.
+.windscribe-auth
+.windscribe-auth.*
 
 # pid, log and what-is-connected, written while a tunnel is up.
 .state/
