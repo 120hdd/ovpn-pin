@@ -1174,6 +1174,15 @@ IDLE = 300
 # forgets to check it fails loudly instead of slicing by a negative number.
 CANNOT_TELL = object()
 
+# The methods a request may be sent twice with. A connection out of the warm
+# pool can have died without saying so, and a request that died with it never
+# reached the exit - but "never reached it" is a guess, not a fact: the bytes
+# may have arrived and only the answer been lost. For GET that costs a second
+# read of the same page. For POST it could be a second order, so POST and
+# PATCH stay off this list however tempting it is. Same rule every HTTP client
+# reuses a kept-alive connection under, and the one RFC 7230 6.3.1 states.
+IDEMPOTENT = frozenset(('GET', 'HEAD', 'OPTIONS', 'TRACE', 'PUT', 'DELETE'))
+
 
 def read_head(sock, buf=b'', who='client'):
     """Everything up to the blank line, plus whatever was read past it.
@@ -1271,148 +1280,175 @@ def head_host(head):
     return target.split('/', 1)[0] if target and not target.startswith('/') else ''
 
 
-def pump_bytes(src, dst, direction=None, watch_for_407=False, note=None):
-    """One direction, untouched, until the source is done.
+class Requests:
+    """The client's half of a kept-alive plain-HTTP connection, framed as the
+    bytes turn up rather than by blocking until they do.
 
-    With watch_for_407 the bytes are still forwarded verbatim, but the status
-    lines going past are looked at. A 407 in the response direction is the
-    exit refusing us, not the client refusing anything - and a client pointed
-    at a local proxy it was given no credentials for can only drop the
-    connection and open another. It is the one failure that must never leave
-    looking like "the connection just closed".
+    The same framing the two-thread version did, and for the same reason -
+    every request on the connection needs credentials of its own, not only
+    the first - but driven one buffer at a time, so that a single thread can
+    carry both directions. carry_http says why that matters.
+
+    feed() returns False when the connection cannot be carried any further,
+    which is the caller's cue to close both ends.
     """
-    tail = b''
-    try:
+
+    def __init__(self, upstream, exit_, note):
+        self.up, self.exit, self.note = upstream, exit_, note
+        self.buf = b''
+        self.state = 'head'
+        self.left = 0           # bytes of body, or of chunk-and-its-CRLF
+        self.last = False       # the zero chunk has gone past
+
+    def _send(self, data):
+        self.up.sendall(data)
+        self.note.moved('up', len(data))
+
+    def feed(self, data):
+        self.buf += data
         while True:
-            chunk = src.recv(65536)
-            if not chunk:
-                return
-            dst.sendall(chunk)              # forward first, look afterwards
-            if direction and note:
-                note.moved(direction, len(chunk))
-            if watch_for_407:
-                tail = (tail + chunk)[-2048:]
-                for line in tail.split(b'\r\n'):
-                    if line.startswith(b'HTTP/1.') and b' 407 ' in line:
-                        log('WARN', 'the exit answered 407 mid-connection')
-                        tail = b''
-                        break
-    except (OSError, ssl.SSLError) as e:
-        log('WARN', f'relay stopped: {e.__class__.__name__}: {e}')
-    finally:
-        # The other half of this connection is blocked on a read. Without
-        # this it stays blocked with nothing left at the far end to answer it.
-        #
-        # SHUT_WR, never SHUT_RDWR. Shutting the read half of a socket the
-        # other thread is still reading throws away the reply in flight; and
-        # a peer that keeps sending into a half we have stopped acknowledging
-        # gets the connection reset, which loses whatever was still queued to
-        # go out. Closing our writing end says the same thing without either.
-        try:
-            dst.shutdown(socket.SHUT_WR)
-        except OSError:
-            pass
+            if self.state == 'head':
+                if HEAD_END not in self.buf:
+                    if len(self.buf) > MAX_HEAD:
+                        log('WARN', f'client: head grew past {MAX_HEAD} bytes')
+                        return False
+                    return True
+                head, _, self.buf = self.buf.partition(HEAD_END)
+                # Each request names its own host on a kept-alive connection,
+                # so where this is going is asked again rather than remembered.
+                self.note.going_to(head_host(head))
+                size = body_size(head)
+                if size is CANNOT_TELL:
+                    log('WARN', 'refusing a request whose framing does not parse')
+                    return False
+                self._send(with_our_auth(head, self.exit))
+                if size is None:
+                    self.state, self.last = 'chunk-line', False
+                elif size:
+                    self.state, self.left = 'body', size
+                # A bodyless request stays in 'head', ready for the next one.
+
+            elif self.state in ('body', 'chunk-data'):
+                take, self.buf = self.buf[:self.left], self.buf[self.left:]
+                if take:
+                    self._send(take)
+                    self.left -= len(take)
+                if self.left:
+                    return True
+                # After the zero chunk, whatever follows is the next head,
+                # which is how this has always read it: trailers are not
+                # something any client here sends.
+                self.state = ('head' if self.state == 'body' or self.last
+                              else 'chunk-line')
+
+            else:                                       # chunk-line
+                if b'\r\n' not in self.buf:
+                    return True
+                line, _, self.buf = self.buf.partition(b'\r\n')
+                self._send(line + b'\r\n')
+                try:
+                    n = int(line.split(b';')[0].strip(), 16)
+                except ValueError:
+                    log('WARN', f'chunk length {line[:32]!r} is not a number')
+                    return False
+                # The chunk, and then its CRLF.
+                self.state, self.left, self.last = 'chunk-data', n + 2, n == 0
 
 
-def forward_chunked(client, upstream, pending, note):
-    """A chunked body, frame by frame, stopping after the zero chunk.
+def carry_http(client, upstream, exit_, head, rest, note, quiet, verb):
+    """Both directions of a plain-HTTP connection, on this thread alone.
 
-    Nothing is rewritten - the frames go across exactly as they arrive. The
-    only reason to read them at all is to know where the body ends, so that
-    the next request head can be found and given credentials of its own.
+    This used to be two threads - one pumping the exit's bytes down to the
+    client while this one pushed requests up - and that is a read and a write
+    running at the same moment on one ssl.SSLSocket. Python drops the GIL
+    around the OpenSSL call, so both threads really are inside SSL_read and
+    SSL_write on the same SSL* at once, which OpenSSL does not support. It
+    did not corrupt anything loudly; it hung. Measured against one exit, on a
+    connection dialled fresh, 8 of 12 plain-HTTP requests stalled until the
+    client gave up, while HTTPS through the same proxy at the same moment was
+    12 for 12 - because CONNECT is carried by relay(), which has always been
+    one thread and a select().
 
-    Returns whatever was read past the end of the body, or None if the
-    framing ran out before the zero chunk did.
+    Worst on a cold connection, which is the tell: a fresh TLS 1.3 session
+    has the server's NewSessionTicket arriving just as the first request is
+    written, so the two sides of the socket are busy at the same instant.
+    Once a pooled connection has been idle a while there is nothing left
+    in flight and the collision mostly stops happening.
+
+    So: same select() shape as relay(), with the per-request framing and
+    credentials folded into the client-to-exit side.
+
+    Returns (served, asked_again): whether any of the exit's answer reached
+    the client, and whether anything past the first head was read from it.
+    Both false means this connection carried nothing and left no trace, which
+    is what makes the one retry in serve_http safe to take.
     """
-    while True:
-        while b'\r\n' not in pending:
-            chunk = client.recv(65536)
-            if not chunk:
-                return None
-            pending += chunk
-        line, _, pending = pending.partition(b'\r\n')
-        upstream.sendall(line + b'\r\n')
-        note.moved('up', len(line) + 2)
-        try:
-            n = int(line.split(b';')[0].strip(), 16)
-        except ValueError:
-            log('WARN', f'chunk length {line[:32]!r} is not a number')
-            return None
-        need = n + 2                        # the chunk, and then its CRLF
-        while need:
-            if not pending:
-                pending = client.recv(65536)
-                if not pending:
-                    return None
-            take, pending = pending[:need], pending[need:]
-            upstream.sendall(take)
-            note.moved('up', len(take))
-            need -= len(take)
-        if n == 0:
-            return pending                  # trailers, then the next head
+    requests = Requests(upstream, exit_, note)
+    tail = b''
+    ends = [client, upstream]
+    served = False              # some of the answer has reached the client
+    asked_again = False         # the client has been read past the first head
 
-
-def pump_requests(client, upstream, exit_, head, pending, note):
-    """Every request this connection carries, each one with our credentials -
-    not just the first.
-
-    This is the difference between a browser and a chat client, and it is why
-    Telegram dropped and reconnected about once a second while a browser on
-    the same proxy was fine. A browser asking for HTTPS sends one CONNECT and
-    everything after it is an opaque tunnel, so the credentials go out once
-    and the question never comes up again. Something speaking plain HTTP down
-    a kept-alive connection asks again and again - and an exit that
-    authenticates every request, which is every real proxy, answers 407 to
-    the second one. The client's only move then is to drop the connection and
-    open another, which buys it exactly one more request.
-
-    Returns when the client is done or the framing runs out; the caller closes
-    both ends.
-    """
-    while True:
-        # Each request names its own host on a kept-alive connection, so
-        # where this is going is asked again rather than remembered.
-        note.going_to(head_host(head))
-        size = body_size(head)
-        if size is CANNOT_TELL:
-            log('WARN', 'refusing a request whose framing does not parse')
-            return
-
-        if size is None:
-            # Chunked. This used to hand the rest of the connection over as a
-            # plain pipe, which is right for this request and wrong for every
-            # one after it: none of those gets a Proxy-Authorization again,
-            # the exit answers 407 to the next, and the connection is back to
-            # the behaviour the per-request auth above exists to prevent.
-            # Following the frames costs a few lines and keeps the loop.
-            authed = with_our_auth(head, exit_)
-            upstream.sendall(authed)
-            note.moved('up', len(authed))
-            pending = forward_chunked(client, upstream, pending, note)
-            if pending is None:
+    def watch(chunk):
+        """407 in the response direction is the exit refusing us, not the
+        client refusing anything, and is the one failure that must never
+        leave looking like the connection simply closed."""
+        nonlocal tail
+        tail = (tail + chunk)[-2048:]
+        for line in tail.split(b'\r\n'):
+            if line.startswith(b'HTTP/1.') and b' 407 ' in line:
+                log('WARN', 'the exit answered 407 mid-connection')
+                tail = b''
                 return
-        else:
-            body, pending = pending[:size], pending[size:]
-            # One write, so one TLS record and one segment. A chat client's
-            # messages are a few hundred bytes each, and sending the head and
-            # the body separately doubled the packets on the hot path for no
-            # gain - and handed the line's DPI two small flights to look at
-            # where there could have been one.
-            out = with_our_auth(head, exit_) + body
-            upstream.sendall(out)
-            note.moved('up', len(out))
-            left = size - len(body)
-            while left > 0:
-                chunk = client.recv(min(65536, left))
+
+    try:
+        # The head that was already read, put back in front of the stream.
+        if not requests.feed(head + HEAD_END + rest):
+            return served, asked_again
+        while True:
+            # Anything OpenSSL has already decrypted is invisible to
+            # select(): it lives in the SSL buffer, not the kernel queue.
+            readable = [s for s in ends if getattr(s, 'pending', lambda: 0)()]
+            if not readable:
+                readable, _, failed = select.select(ends, [], ends, IDLE)
+                if failed:
+                    log('WARN', 'connection reported failed by select')
+                    return served, asked_again
+                if not readable:
+                    log('WARN', f'idle {IDLE}s - closing')
+                    return served, asked_again
+            for s in readable:
+                chunk = s.recv(65536)
                 if not chunk:
-                    return
-                upstream.sendall(chunk)
-                note.moved('up', len(chunk))
-                left -= len(chunk)
-
-        head, pending = read_head(client, pending)
-        if head is None:
-            return
+                    if s is upstream:
+                        return served, asked_again   # nothing more can come back
+                    # The client is done asking. The exit may still owe a
+                    # reply - MTProto's HTTP transport parks a poll for up to
+                    # 25 seconds - so stop reading this end and keep the
+                    # other until it says it is finished.
+                    #
+                    # Nothing is shut down here. The two-thread version put a
+                    # SHUT_WR on the client at this point, which closes the
+                    # very direction the outstanding reply has to travel; it
+                    # went unnoticed because a client that is waiting for an
+                    # answer does not half-close, so the branch almost never
+                    # ran.
+                    ends.remove(client)
+                    continue
+                if s is client:
+                    asked_again = True
+                    if not requests.feed(chunk):
+                        return served, asked_again
+                else:
+                    client.sendall(chunk)
+                    served = True
+                    note.moved('down', len(chunk))
+                    watch(chunk)
+    except (OSError, ssl.SSLError) as e:
+        log('WARN', f'{verb}: {e.__class__.__name__}: {e}')
+        if not quiet:
+            print(f'  {verb:<8} {e}', file=sys.stderr, flush=True)
+    return served, asked_again
 
 
 def recv_exactly(sock, n):
@@ -1616,7 +1652,7 @@ def serve_http(client, exit_, quiet, first, note):
         return
 
     try:
-        upstream, _ = exit_.take()
+        upstream, warm = exit_.take()
     except (OSError, ssl.SSLError) as e:
         log('FAIL', f'{verb}: {e}')
         if not quiet:
@@ -1630,34 +1666,39 @@ def serve_http(client, exit_, quiet, first, note):
         client.close()
         return
 
-    for sock in (client, upstream):
+    # The retry take() has been handing out a licence for all along, and that
+    # open_tunnel takes for CONNECT. _spent() drops the pooled connections
+    # that closed politely; this is for the ones that did not, which look
+    # alive right up until the answer never comes.
+    #
+    # Narrower than open_tunnel's, and it has to be: a CONNECT that went
+    # unanswered left nothing behind at the far end, while a plain request
+    # may have been forwarded before the connection died. So it is taken only
+    # when the method is one that may be repeated, nothing of the answer has
+    # reached the client, and the client has not been read past the head we
+    # still have in hand to send again.
+    for attempt in (1, 2):
+        for sock in (client, upstream):
+            try:
+                sock.settimeout(IDLE)
+            except OSError:
+                pass
+
+        served, asked_again = carry_http(client, upstream, exit_, head, rest,
+                                         note, quiet, verb)
+
+        if served or asked_again or not warm or attempt == 2:
+            break
+        if verb not in IDEMPOTENT:
+            break
+        log('WARN', f'a connection held ready carried no {verb} - dialling')
+        shut(upstream)
         try:
-            sock.settimeout(IDLE)
-        except OSError:
-            pass
+            upstream, warm = exit_._dial(), False
+        except (OSError, ssl.SSLError) as e:
+            log('WARN', f'{verb}: nothing to replace it with: {e}')
+            break
 
-    back = threading.Thread(target=pump_bytes,
-                            args=(upstream, client, 'down', True, note),
-                            daemon=True)
-    back.start()
-    try:
-        pump_requests(client, upstream, exit_, head, rest, note)
-    except (OSError, ssl.SSLError) as e:
-        log('WARN', f'{verb}: {e.__class__.__name__}: {e}')
-        if not quiet:
-            print(f'  {verb:<8} {e}', file=sys.stderr, flush=True)
-
-    # The client has stopped sending. The exit may still owe a reply, and
-    # MTProto's HTTP transport parks a poll for up to 25 seconds - so wait on
-    # the response side itself rather than on a stopwatch. This was two
-    # seconds, which is shorter than a long poll is allowed to be and threw
-    # away the answer whenever one was outstanding. The socket timeouts set
-    # above already bound how long the wait can be.
-    try:
-        client.shutdown(socket.SHUT_WR)
-    except OSError:
-        pass
-    back.join(IDLE)
     note.leave()
     shut(client, upstream)
 
