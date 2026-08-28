@@ -50,6 +50,7 @@ import argparse
 import base64
 import collections
 import concurrent.futures as cf
+import difflib
 import json
 import os
 import re
@@ -258,8 +259,17 @@ def find_config(fragment, folder):
     hits = [f for f in sorted(os.listdir(folder))
             if f.endswith('.ovpn') and fragment.lower() in f.lower()]
     if not hits:
+        # A plain word that matched no config is as likely to have been meant
+        # as a command as a place - `ovpn proxy foo` reaches here rather than
+        # read_verb, which only refuses the words near enough to a command to
+        # name one. Said only on the miss: while it matches a config, `ovpn
+        # proxy uk` is a config name and nothing needs explaining.
+        commands = (f'\nOr one of the commands: '
+                    f'{", ".join(v for v, _ in VERB_LINE)}'
+                    if fragment.isalpha() else '')
         die(f'nothing in {folder} matches {fragment!r}',
-            'Check the spelling, or list what is there:  ls ' + folder)
+            'Check the spelling, or list what is there:  ls '
+            + folder + commands)
     if len(hits) > 1:
         # One address per exit name is the usual case, and picking between
         # two addresses for the same exit is not a decision worth stopping
@@ -2647,14 +2657,49 @@ def serve(listen_host, listen_port, exit_, quiet):
 VERBS = {'connect': [], 'sweep': ['--sweep'], 'env': ['--env'],
          'status': ['--status'], 'stop': ['--stop'], 'help': ['--usage']}
 
+# One line each, in the order they are usually typed rather than
+# alphabetically. The help page lists these, and so does the message for a
+# word that was meant to be one of them.
+VERB_LINE = (
+    ('connect', 'serve a proxy through an exit'),
+    ('status',  'what is running, and through which exit'),
+    ('stop',    'end one of them, or all of them'),
+    ('sweep',   'ask a folder of exits what they serve, and rank them'),
+    ('env',     'print the exports that send a terminal through it'),
+    ('help',    'this page, or one command on its own'),
+)
+
+# `ovpn` has verbs of its own and the two sets are not the same, so one of
+# them typed after `proxy` is a wrong guess rather than a config name. It
+# used to be neither: `ovpn proxy switch` went looking for a config called
+# "switch" and complained about the folder, which says nothing about the
+# actual mistake.
+OVPN_ONLY = {
+    'switch':    'ovpn switch <name>  moves the tunnel. A proxy moves by\n'
+                 'connecting again:  ovpn proxy connect <name>',
+    'unlock':    'ovpn unlock  takes the kill switch off. A proxy sets none.',
+    'dns-check': 'ovpn dns-check  is about the tunnel\'s resolver. A proxy\n'
+                 'resolves nothing here - the exit does it.',
+    'pin':       'ovpn pin', 'sync': 'ovpn sync', 'who': 'ovpn who',
+    'check':     'ovpn check', 'service': 'ovpn service',
+    'install':   'ovpn install', 'uninstall': 'ovpn uninstall',
+    'where':     'ovpn where', 'version': 'ovpn version', 'menu': 'ovpn',
+}
+
 
 def do_help():
     h, d, b, o = C['head'], C['dim'], C['bold'], C['off']
+    listing = '\n'.join(f'    {b}{v}{o}{" " * (9 - len(v))}{d}{line}{o}'
+                        for v, line in VERB_LINE)
     print(phrase(f"""
   {h}{b}ovpn proxy{o} - reach the web through an exit's HTTPS proxy on 443,
   {d}instead of through an OpenVPN tunnel the line throttles.{o}
 
   {h}{b}The commands{o}
+
+{listing}
+
+    {d}Any one of them on its own:  {o}{b}ovpn proxy connect -h{o}
 
     {b}ovpn proxy{o}
         What is running, and through which exit. Starts nothing.
@@ -2806,21 +2851,219 @@ def do_help():
     return 0
 
 
+def verb_help(verb):
+    """One command on its own, with only the flags that reach it.
+
+    The long page is the whole subject at once, which is the right shape for
+    reading it through and the wrong one for `what does stop take again`.
+    Both are written rather than generated, for the same reason: argparse
+    prints thirty flags in one alphabet and says nothing about which of them
+    the command you typed will even look at.
+    """
+    h, d, b, o = C['head'], C['dim'], C['bold'], C['off']
+
+    pages = {
+
+'connect': f"""
+  {h}{b}ovpn proxy connect{o} [name] - serve a proxy on 127.0.0.1:8888 that
+  reaches the web through one exit's HTTPS proxy on 443. {d}HTTP and SOCKS5
+  both, on the one port - the first byte a client sends decides which.{o}
+
+    With no name it asks around 140 exits which will take the credentials
+    and serves the quickest that will. {d}That is the way to use it: a good
+    many refuse at any one time and nothing in the config says which.{o}
+
+    A name is a whole filename, enough of one to be unambiguous, or a bare
+    address. {d}A bare address carries no name to check a certificate
+    against, so that form needs --host.{o}
+
+    It asks the exit before it listens, so a refusal lands here rather than
+    coming up healthy and answering 502 to everything.
+
+  {h}{b}Flags{o}
+
+    {b}--port{o} N          listen somewhere other than 8888
+    {b}--detach{o}          leave it running and come back {d}(output goes to
+                      .state/proxy-N.out){o}
+    {b}--host{o} NAME       the name the certificate must serve {d}(read from
+                      the config's pin comment when you do not say){o}
+    {b}--bind{o} ADDR       which address to leave from. {d}Needed when a tunnel
+                      owns the default route, or this goes out through the
+                      very thing it exists to avoid{o}
+    {b}--listen{o} ADDR     which address to listen on {d}(127.0.0.1){o}
+    {b}--warm{o} N          connections opened to the exit before they are
+                      asked for {d}(2, at most 4, 0 off). Takes two round
+                      trips off every new connection: 343 ms down to
+                      140 ms, one at a time{o}
+    {b}--auth{o} FILE       credentials, one per line {d}(.ovpn-auth){o}
+    {b}--dir{o} DIR         which folder of configs to use {d}(pinned/){o}
+    {b}--exit-port{o} N     the exit's proxy port {d}(443){o}
+    {b}--timeout{o} N       seconds to wait on an exit {d}(20){o}
+    {b}--jobs{o} N          how many to ask at once when no name is given {d}(12){o}
+    {b}--quiet{o}           do not report failed connections
+
+  {h}{b}A second one{o}
+
+    {b}ovpn proxy connect{o}                              {d}browser, port 8888{o}
+    {b}ovpn proxy connect de-ber --port 8899 --detach{o}
+
+    Each proxy is a port and an exit, and they know nothing of each other -
+    starting, stopping or reconnecting one leaves the other serving. {d}Worth
+    doing when something wants an exit that does not move under it - a
+    terminal, a chat client - while the browser's keeps being changed.{o}
+
+    {b}--detach{o} is what makes the second one worth having: it comes back
+    rather than holding the terminal, and having no terminal of its own it
+    survives that one closing, and logging out. {d}The exit is proved before
+    anything is detached, so a failure is reported here rather than
+    disappearing into a log.{o}
+""",
+
+'sweep': f"""
+  {h}{b}ovpn proxy sweep{o} - ask every config in a folder what its exit serves,
+  and rank them by how quickly they answered. {d}Forty at a time. Sweeping
+  several hundred stops measuring the exits and starts measuring how hard
+  you have been sweeping.{o}
+
+    It acts on a whole folder, so it takes no name. {d}Narrow it with
+    --one-per or --first, or point --dir somewhere else.{o}
+
+    What served is copied into proxy-ok/, named so that sorting the folder
+    by name puts the quickest first. The numbers go to
+    {d}.state/proxy-exits.tsv{o}.
+
+  {h}{b}Flags{o}
+
+    {b}--connect-only{o}    stop at the proxy, fetch nothing. {d}Fast, and says
+                      only that an exit will talk to you{o}
+    {b}--site{o} a.com,b.com  also ask each exit for those. {d}An exit has to
+                      serve all of them to be kept{o}
+    {b}--one-per{o}         one address per exit rather than all of them
+    {b}--first{o} N         stop after N {d}(overrides the forty-at-a-time cap){o}
+    {b}--jobs{o} N          how many at once {d}(12){o}
+    {b}--timeout{o} N       seconds to wait on an exit {d}(20){o}
+    {b}--out{o} DIR         where what served gets copied {d}(proxy-ok/){o}
+    {b}--dir{o} DIR         which folder to sweep {d}(pinned/){o}
+    {b}--auth{o} FILE       credentials, one per line {d}(.ovpn-auth){o}
+    {b}--bind{o} ADDR       which address to leave from
+    {b}--quiet{o}           do not report failed connections
+
+    {d}A sweep always runs at --warm 0. Warming is there to make one proxy
+    quick to use, and a sweep is measuring exits rather than using them.{o}
+""",
+
+'status': f"""
+  {h}{b}ovpn proxy status{o} - what is running, and through which exit. Starts
+  nothing, and is what a bare {b}ovpn proxy{o} does.
+
+    One block per proxy: the address to point something at, the exit's
+    address and name, the pid, and when it came up.
+
+    It also names any copy of itself that is running which no record
+    accounts for - {d}started by an older copy, or by a shell since closed.{o}
+    A forgotten one holds its port either way, so it is worth saying rather
+    than leaving {b}connect{o} to discover it.
+
+    Takes no flags.
+""",
+
+'stop': f"""
+  {h}{b}ovpn proxy stop{o} - end a running proxy, and say which one it ended.
+
+    With more than one up it will not guess.
+
+  {h}{b}Flags{o}
+
+    {b}--port{o} N          end the one on that port
+    {b}--all{o}             end every one of them {d}(including any copy no
+                      record accounts for){o}
+
+    {d}There is nothing to put back: a proxy changes no routes, no DNS and
+    no system proxy setting while it runs.{o}
+""",
+
+'env': f"""
+  {h}{b}ovpn proxy env{o} - print the exports that send a terminal through a
+  running proxy. {d}Meant to be eval-ed, not read.{o}
+
+    This is what {b}px{o} calls. It prints them rather than applying them
+    because nothing run as a child can change the shell that started it -
+    which is also why {b}px{o} is a shell function and not a command.
+
+  {h}{b}Flags{o}
+
+    {b}--port{o} N          which proxy, when more than one is up
+    {b}--off{o}             print the unsets instead
+    {b}--show{o}            say what this shell is set to now
+    {b}--powershell{o}      print $env: lines {d}(the default on Windows){o}
+    {b}--sh{o}              print export lines {d}(needed for Git Bash on
+                      Windows, where the default guesses PowerShell){o}
+
+    Everything meant for you to read goes to stderr, so stdout is shell and
+    nothing else. {d}A stray line of prose in among the exports would be run
+    as a command.{o}
+""",
+
+'help': f"""
+  {h}{b}ovpn proxy help{o} [command] - the written page, rather than the flags in
+  one alphabet.
+
+    {b}ovpn proxy help{o}            all of it
+    {b}ovpn proxy help connect{o}    one command on its own
+    {b}ovpn proxy connect -h{o}      the same thing
+
+    {d}The commands are: {o}{', '.join(v for v, _ in VERB_LINE)}
+""",
+    }
+
+    print(phrase(pages[verb]))
+    return 0
+
+
 def read_verb(argv):
     # Ahead of argparse, so that the written page is what people see rather
     # than a wall of generated flags.
+    listing = ', '.join(v for v, _ in VERB_LINE)
+
     if argv and argv[0] in ('-h', '--help', 'help'):
+        asked = argv[1] if len(argv) > 1 else ''
+        if asked in VERBS:
+            raise SystemExit(verb_help(asked))
+        if asked:
+            die(f'no help for  ovpn proxy {asked}',
+                f'The commands are: {listing}')
         raise SystemExit(do_help())
+
     if argv and argv[0] in VERBS:
+        # `ovpn proxy connect -h` is the command asking about itself, which is
+        # a different question from `ovpn proxy -h` - and used to be answered
+        # by argparse, which knows neither. Caught anywhere after the verb,
+        # because -h is what you reach for at the point you get stuck, and
+        # that is rarely the next word.
+        if any(a in ('-h', '--help') for a in argv[1:]):
+            raise SystemExit(verb_help(argv[0]))
         return VERBS[argv[0]] + argv[1:]
+
+    word = argv[0] if argv else ''
+
+    # `ovpn` and `ovpn proxy` have different verbs, and one of the first
+    # typed after the second is a wrong guess rather than a config name.
+    # Left to fall through, `ovpn proxy switch` went looking for a config
+    # called "switch" and complained about the folder - which is true, and
+    # says nothing about the mistake.
+    if word in OVPN_ONLY:
+        die(f'ovpn proxy has no {word!r}',
+            f'{OVPN_ONLY[word]}\nThe commands here are: {listing}')
+
     # A bare word that is nearly a verb is a typo worth catching, not a config
     # name to go hunting for.
-    if argv and argv[0].isalpha() and len(argv[0]) > 3:
-        near = [v for v in VERBS if v.startswith(argv[0][:3])]
-        if near and argv[0] not in near:
-            die(f'no such thing as  ovpn proxy {argv[0]}',
+    if word.isalpha() and len(word) > 3:
+        near = (difflib.get_close_matches(word, VERBS, n=1, cutoff=0.6)
+                or [v for v in VERBS if v.startswith(word[:3])])
+        if near and word not in near:
+            die(f'no such thing as  ovpn proxy {word}',
                 f'Did you mean  ovpn proxy {near[0]} ?\n'
-                f'The verbs are: {", ".join(sorted(VERBS))}')
+                f'The commands are: {listing}')
     return argv
 
 

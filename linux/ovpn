@@ -337,7 +337,10 @@ usage() {
   ${C_CYAN}When the tunnel connects but crawls${C_OFF}
 
     ovpn proxy
-        What is running, and through which exit. Starts nothing.
+        What is running, and through which exit. Starts nothing. It has
+        commands of its own - connect, status, stop, sweep, env - and
+        \`ovpn proxy help\` lists them. Any one on its own:
+        \`ovpn proxy sweep -h\`.
 
     ovpn proxy connect [name]
         Serve a browser proxy through an exit. With no name it asks around
@@ -666,13 +669,22 @@ prx() {
     # untouched, so the verb stays at the front where ovpn-proxy.py looks for
     # it, and a mistyped one gets named there rather than here.
     [ $# -eq 0 ] && set -- status
-    case ${1:-} in -h|--help|help) exec "$(find_python)" "$PRX" help ;; esac
 
     # So that the messages can say `ovpn proxy stop` rather than `python3
     # ovpn-proxy.py stop`. Told, not guessed: the script is perfectly usable
     # without this wrapper - on Windows there is nothing else - and it should
     # not name a command that only exists when it was started this way.
+    #
+    # Set above the help case rather than below it, which is where it was:
+    # the pages name the command on nearly every line, and `ovpn proxy help`
+    # is the one place you are certain to be reading rather than typing.
     export OVPN_DISPATCHER=1
+
+    # "$@" rather than a bare `help`, so that `ovpn proxy help connect` keeps
+    # the word that says which page. use_cwd is skipped for the same reason
+    # `env` skips it: a help page reads no configs, so there is no folder to
+    # work out and no "folder: ..." line to print above it.
+    case ${1:-} in -h|--help|help) exec "$py" "$PRX" "$@" ;; esac
 
     # `env` prints shell for `eval` to read, so nothing else may reach stdout
     # on its way out - use_cwd's "folder: ..." line would be eval'd as a
@@ -722,14 +734,15 @@ case $cmd in
             folders|folder|where)          help_folders ;;
             connect|sweep|stop|status|switch|dns-check|c|s) exec bash "$CON" --help ;;
             pin|sync|who|check|p)          exec bash "$PIN" --help ;;
-            proxy|px)                      prx help ;;
+            proxy|px)                      shift; prx help "$@" ;;
             '')                            usage ;;
             *) die "no help for '$1'. Try one of:
          ovpn help            every command, and what it does
          ovpn help folders    which folder it acts on, and what gets written
          ovpn help connect    every flag ovpn-connect.sh takes
          ovpn help pin        every flag resolve-ovpn-remote.sh takes
-         ovpn help proxy      every flag ovpn-proxy.py takes" ;;
+         ovpn help proxy      the proxy, and the commands it has of its own
+         ovpn help proxy stop one of those on its own" ;;
         esac ;;
 
     # Not a subcommand. Either a flag, which belongs to ovpn-connect.sh, or a
