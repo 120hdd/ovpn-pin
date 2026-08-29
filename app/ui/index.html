@@ -256,9 +256,20 @@
        it, so the list can be ordered by what works instead of by name. -->
   <div class="reach" id="reach">
     <button class="btn btn--quiet btn--auto" id="reachGo" type="button">Test</button>
-    <p class="note" id="reachSaid">Times are from the last test.</p>
+    <!-- Answering-first sits underneath all three: a blocked exit is not a
+         good answer to "sort by name" either. -->
+    <div class="pair pair--sort" id="sortBy" role="tablist">
+      <button class="pair__opt" type="button" data-sort="ping"
+              role="tab" aria-selected="true">Fastest</button>
+      <button class="pair__opt" type="button" data-sort="load"
+              role="tab" aria-selected="false">Emptiest</button>
+      <button class="pair__opt" type="button" data-sort="name"
+              role="tab" aria-selected="false">A–Z</button>
+      <i class="pair__slide" aria-hidden="true"></i>
+    </div>
     <i class="reach__bar" id="reachBar" aria-hidden="true"></i>
   </div>
+  <p class="note reach__said" id="reachSaid">Times are from the last test.</p>
 
   <div class="sheet__list" id="list"></div>
 </dialog>

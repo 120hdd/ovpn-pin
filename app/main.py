@@ -455,6 +455,9 @@ class Api:
                 'port': self._engine.port,
                 'defaultPort': engine.DEFAULT_PORT,
                 'picked': self._settings.get('picked', 'auto'),
+                'favourites': self._settings.get('favourites') or [],
+                'sortBy': self._settings.get('sortBy', 'ping'),
+                'keepOnClose': bool(self._settings.get('keepOnClose')),
                 'hasCredentials': self._has_credentials(),
                 'username': self._engine.username(),
                 'about': (f'{APP_NAME}  -  port {self._engine.port}'
@@ -1223,10 +1226,53 @@ class Api:
         return {'ok': True}
 
     def exitsIn(self, country, provider=None):
-        """The individual exits behind one country, with their times."""
+        """The individual exits behind one country or city, with their times."""
         where, _, via = (country or '').partition(':')
+        city = None
+        if '/' in where:
+            where, city = where.split('/', 1)
         return {'ok': True,
-                'exits': self._engine.exits(where, provider or via or None)}
+                'exits': self._engine.exits(where, provider or via or None,
+                                            city)}
+
+    # -- the ones worth keeping ------------------------------------------
+
+    def favourites(self):
+        return {'ok': True, 'codes': self._settings.get('favourites') or []}
+
+    def toggleFavourite(self, code):
+        """Star a place, or unstar it.
+
+        Kept as picker codes rather than as countries, so that whatever can
+        be picked can be starred: a country, a city inside it, one provider's
+        share of a country, or a single exit. They are the same strings the
+        connect button already understands, which is what stops a favourite
+        meaning something the app cannot act on.
+        """
+        codes = list(self._settings.get('favourites') or [])
+        if code in codes:
+            codes.remove(code)
+            on = False
+        else:
+            codes.append(code)
+            on = True
+        self._settings['favourites'] = codes
+        save_settings(self._settings)
+        return {'ok': True, 'codes': codes, 'on': on}
+
+    def setSort(self, kind=None):
+        """How the list is ordered. Answering-first stays underneath every
+        one of them: a blocked exit is not a good answer to "sort by name"
+        either."""
+        kind = kind if kind in ('ping', 'name', 'load') else 'ping'
+        self._settings['sortBy'] = kind
+        save_settings(self._settings)
+        return {'ok': True, 'sortBy': kind}
+
+    def setKeepOnClose(self, on=False):
+        self._settings['keepOnClose'] = bool(on)
+        save_settings(self._settings)
+        return {'ok': True, 'keepOnClose': bool(on)}
 
     def remember(self, code):
         self._settings['picked'] = code
@@ -1252,13 +1298,19 @@ class Api:
         # "file:<config>" is one named exit, picked off a list that had its
         # measured time beside it - so racing its neighbours instead would be
         # answering a question nobody asked.
-        only = None
+        only, city = None, None
         if (country or '').startswith('file:'):
             only = country[5:]
             where, want = None, None
         else:
             where, _, want = (country or '').partition(':')
             want = want if want in accounts.PROVIDERS else None
+            # "fr/par" is one city inside France. A slash rather than another
+            # colon so that the two never have to be told apart by counting
+            # them - a city and a provider are different kinds of narrowing
+            # and reading them wrong connects somewhere else entirely.
+            if '/' in where:
+                where, city = where.split('/', 1)
         # A saved pick can outlive the provider it names - switched off in
         # the roster, or its account removed. Asking for it anyway is
         # guaranteed to find nothing and to say so in terms of folders, which
@@ -1271,7 +1323,7 @@ class Api:
             try:
                 result = self._engine.connect(
                     where, lambda p: self._emit('Progress', p),
-                    provider=want, only=only)
+                    provider=want, only=only, city=city)
                 self._since = time.time()
                 self._retray('on')
                 self._emit('Connected', result)
@@ -1344,6 +1396,19 @@ def install_safety(api):
     file on disk is for.
     """
     def undo(*_):
+        # The proxy is a detached process on purpose, so that a wedged
+        # connection cannot take the window down with it. The cost of that is
+        # this: closing the window restores the Windows proxy but leaves the
+        # worker listening, so the tunnel is up and nothing is using it - and
+        # only the registry says so.
+        #
+        # Off by default, then. Somebody who wants the connection to outlive
+        # the window can say so, and the setting is where they would look.
+        if not api._settings.get('keepOnClose'):
+            try:
+                api._engine.disconnect(quiet=True)
+            except Exception:
+                pass
         try:
             api._sysproxy.restore()
         except Exception:
@@ -2183,6 +2248,74 @@ def ui_check(window):
             " r.scrollIntoView({block: 'center'});"
             " return r.dataset.code; })()")
         time.sleep(0.7)
+        # -- cities, marks, stars and order ---------------------------
+        #
+        # The four things Windscribe's own list has that ours did not, and
+        # three of them come off data we were already downloading and
+        # throwing away.
+        said['cityRows'] = window.evaluate_js(
+            "document.querySelectorAll('.row--city').length")
+        said['cityNicks'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row--city .row__nick'))"
+            ".slice(0, 4).map(e => e.textContent)")
+        said['cityMarks'] = window.evaluate_js(
+            "(() => { const r = document.querySelector('.row--city');"
+            " if (!r) return null;"
+            " return { load: !!r.querySelector('.load'),"
+            "          marks: Array.from(r.querySelectorAll('.mark'))"
+            "                      .map(m => m.textContent) }; })()")
+        # A star is inside a row that would otherwise take the click and
+        # connect somewhere, so the one thing worth asserting is that it
+        # does not - and that the row it names goes to the top.
+        # From a known state, and put back afterwards. A test that toggles
+        # leaves the toggle where it left it, so the next run starts from the
+        # opposite of what this one assumed and asserts the reverse.
+        window.evaluate_js(
+            "(async () => { for (const c of state.favourites.slice())"
+            "   await window.pywebview.api.toggleFavourite(c);"
+            " state.favourites = []; })()")
+        time.sleep(0.8)
+        said['starBefore'] = window.evaluate_js(
+            "(document.querySelectorAll('.row[data-code]')[1] || {}).dataset"
+            " && document.querySelectorAll('.row[data-code]')[1].dataset.code")
+        window.evaluate_js(
+            "(() => { const rows = document.querySelectorAll('.row[data-code]');"
+            " const s = rows[1] && rows[1].querySelector('[data-star]');"
+            " if (s) s.click(); return !!s; })()")
+        time.sleep(1.0)
+        said['starDidNotConnect'] = window.evaluate_js(
+            "document.getElementById('picker').open && state.mode !== 'busy'")
+        # Past the "Fastest available" row, which is always first and is not
+        # a place - so the starred one is the first country, not the first
+        # row.
+        said['starFloatsUp'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row[data-code]'))"
+            ".map(r => r.dataset.code).filter(c => c !== 'auto')[0]")
+        said['starKept'] = window.evaluate_js('state.favourites.slice(0, 3)')
+        # And unstarred again, so the roster this check leaves behind is the
+        # one it found.
+        window.evaluate_js(
+            "(() => { const s = document.querySelector('[data-star][data-on=true]');"
+            " if (s) s.click(); })()")
+        time.sleep(0.6)
+        said['starCleared'] = window.evaluate_js('state.favourites.length')
+        # And the order really is a choice now.
+        window.evaluate_js(
+            "document.querySelector('#sortBy [data-sort=name]').click()")
+        time.sleep(0.8)
+        said['sortedByName'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row:not(.row--city)"
+            "[data-code]')).slice(0, 4).map(r => r.dataset.code)")
+        # If the picker has closed by here, something in the steps above
+        # picked a row - which is worth knowing about, because none of them
+        # is supposed to.
+        said['pickerStillOpen'] = window.evaluate_js(
+            "document.getElementById('picker').open")
+        said['modeNow'] = window.evaluate_js('state.mode')
+        said['citiesShot'] = shot('picker-cities')
+        window.evaluate_js(
+            "document.querySelector('#sortBy [data-sort=ping]').click()")
+
         # -- which answered, and how fast -----------------------------
         #
         # Read off the real list rather than a synthetic one, because the

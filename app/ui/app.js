@@ -28,6 +28,8 @@ const state = {
   pinPlan: null,
   providers: null,      // which providers the exit list is drawn from
   testing: false,       // a reachability test is running
+  favourites: [],       // picker codes kept at the top of the list
+  sortBy: 'ping',       // ping | name | load
   openExits: null,      // which row has its individual exits showing
   exits: {},            // and those exits, once fetched, by that row's code
 };
@@ -327,7 +329,8 @@ function drawList(query) {
     list.append(auto);
   }
 
-  const found = q ? state.fuse.search(q).map((r) => r.item) : state.countries;
+  const found = sortCountries(
+    q ? state.fuse.search(q).map((r) => r.item) : state.countries);
   if (!found.length) {
     const e = document.createElement('p');
     e.className = 'empty';
@@ -379,7 +382,14 @@ function drawList(query) {
     const out = from.length < 2
       ? [build(c)]
       : [build(c, null, true), ...from.map((via) => build(c, via))];
-    if (c.count > 1) out.push(buildMore(c, c.code));
+    // The cities inside it, when there is more than one. A country with a
+    // single city is already that city, and saying so twice is noise.
+    const cityList = c.cityList || [];
+    if (cityList.length > 1) {
+      for (const city of cityList) out.push(buildCity(c, city));
+    } else if (c.count > 1) {
+      out.push(buildMore(c, c.code));
+    }
     return out;
   };
 
@@ -453,6 +463,7 @@ function drawList(query) {
     }
     // No tick. The chosen row is outlined instead - see .row.is-picked.
     row.append(copy);
+    if (!heads) row.append(starFor(code));
     return row;
   };
 
@@ -1311,6 +1322,9 @@ async function refreshPrefs() {
     keys: ['name', 'code', 'alias'], threshold: 0.4, ignoreLocation: true,
   });
   paintPrefs(info);
+  state.favourites = info.favourites || state.favourites;
+  state.sortBy = info.sortBy || state.sortBy;
+  paintSort();
   paintUse(info);
   // Its own call, and allowed to fail on its own. Who this app signs in as
   // is a question for the roster, and folding it into info() would mean an
@@ -1974,6 +1988,10 @@ $('more').addEventListener('click', () => {
 // One listener on the list rather than one per row, so a re-render cannot
 // leave a stale handler behind.
 $('list').addEventListener('click', (e) => {
+  // The star first, because it lives inside a row that would otherwise take
+  // the click and connect somewhere.
+  const star = e.target.closest('[data-star]');
+  if (star) { e.stopPropagation(); toggleFavourite(star.dataset.star); return; }
   // An exit row picks that one exit; the row that opens them is not a pick
   // at all and is handled where the opening is.
   const exit = e.target.closest('.exit');
@@ -3138,4 +3156,156 @@ async function toggleExits(code, after) {
 $('list').addEventListener('click', (e) => {
   const more = e.target.closest('.row--more');
   if (more) toggleExits(more.dataset.for, more);
+});
+
+/* ------------------------------------------------ cities, stars and order */
+
+/* Windscribe's own client groups country -> city, and the city is the level
+   worth having: "Paris" is a place somebody means, where
+   "fr-030.totallyacdn.com" is an address it happens to be at that week. It
+   also carries the things their list carries and ours was throwing away -
+   the nickname every group has, how loaded it is, whether the link is 10
+   Gbps, whether P2P is allowed - all of which we already download. */
+
+function loadSaid(pc) {
+  if (pc === null || pc === undefined) return '';
+  return `${pc}%`;
+}
+
+/* A star that is not a button, because the row it sits in is one. Clicks on
+   it are caught by the list's own listener before the row sees them. */
+function starFor(code) {
+  const star = document.createElement('span');
+  star.className = 'star';
+  star.dataset.star = code;
+  star.dataset.on = String(isFavourite(code));
+  star.setAttribute('role', 'button');
+  star.setAttribute('aria-label', 'Keep this one at the top');
+  star.textContent = isFavourite(code) ? '★' : '☆';
+  return star;
+}
+
+function isFavourite(code) {
+  return (state.favourites || []).includes(code);
+}
+
+async function toggleFavourite(code) {
+  const r = await window.pywebview.api.toggleFavourite(code);
+  if (!r.ok) return;
+  state.favourites = r.codes;
+  $('list').dataset.key = '';
+  drawList($('search').value.trim());
+}
+
+/* The order. Answering-first stays underneath all three, because a blocked
+   exit is not a good answer to "sort by name" either - and starred places
+   come above everything, which is the whole point of starring one. */
+function sortCountries(list) {
+  const kind = state.sortBy || 'ping';
+  const dead = (c) => (c.tested && !c.ok ? 1 : 0);
+  const fav = (c) => (isFavourite(c.code) ? 0 : 1);
+  const cmp = {
+    ping: (a, b) => (a.ping === null) - (b.ping === null)
+      || (a.ping || 0) - (b.ping || 0) || a.name.localeCompare(b.name),
+    name: (a, b) => a.name.localeCompare(b.name),
+    load: (a, b) => {
+      const la = cityLoad(a);
+      const lb = cityLoad(b);
+      return (la === null) - (lb === null) || (la || 0) - (lb || 0)
+        || a.name.localeCompare(b.name);
+    },
+  }[kind];
+  return list.slice().sort((a, b) =>
+    fav(a) - fav(b) || dead(a) - dead(b) || cmp(a, b));
+}
+
+function cityLoad(c) {
+  const loads = (c.cityList || []).map((x) => x.load)
+    .filter((x) => x !== null && x !== undefined);
+  return loads.length ? Math.min(...loads) : null;
+}
+
+/* -- a city row -------------------------------------------------------- */
+
+function buildCity(c, city) {
+  const code = `${c.code}/${city.code}`;
+  const row = document.createElement('button');
+  row.type = 'button';
+  row.className = 'row row--city' + (state.picked === code ? ' is-picked' : '');
+  row.dataset.code = code;
+  row.dataset.state = !city.tested ? 'untested'
+    : city.ok ? (city.ok < city.count ? 'some' : 'ok') : 'blocked';
+
+  const copy = document.createElement('span');
+  copy.className = 'row__copy';
+
+  const name = document.createElement('span');
+  name.className = 'row__name';
+  name.textContent = city.name;
+  // Windscribe names every one of its cities - Paris is Seine, Dallas is
+  // Ranch, South Bend is Hawkins - and it is the only part of their list
+  // that is theirs rather than a fact about geography. Worth keeping.
+  if (city.nick) {
+    const nick = document.createElement('i');
+    nick.className = 'row__nick';
+    nick.textContent = city.nick;
+    name.append(' ', nick);
+  }
+
+  const meta = document.createElement('span');
+  meta.className = 'row__meta';
+  const bits = [`${city.count} relay${city.count === 1 ? '' : 's'}`];
+  if (city.ping !== null && city.ping !== undefined) bits.push(msSaid(city.ping));
+  if (city.tested && !city.ok) bits.push('blocked here');
+  else if (city.tested && city.ok < city.count) bits.push(`${city.ok}/${city.count} answering`);
+  meta.textContent = bits.join(' · ');
+  copy.append(name, meta);
+
+  const marks = document.createElement('span');
+  marks.className = 'row__marks';
+  // Load is the number that decides between two cities that both answer, and
+  // the one that goes stale fastest - it was read when the list was fetched.
+  if (city.load !== null && city.load !== undefined) {
+    const load = document.createElement('span');
+    load.className = 'load';
+    load.dataset.level = city.load >= 60 ? 'high' : city.load >= 25 ? 'mid' : 'low';
+    load.style.setProperty('--at', `${Math.min(100, city.load)}%`);
+    load.title = `${loadSaid(city.load)} loaded when the list was fetched`;
+    marks.append(load);
+  }
+  if (city.gbps === 10) {
+    const fast = document.createElement('span');
+    fast.className = 'mark';
+    fast.textContent = '10G';
+    fast.title = '10 Gbps link';
+    marks.append(fast);
+  }
+  if (city.p2p) {
+    const p2p = document.createElement('span');
+    p2p.className = 'mark';
+    p2p.textContent = 'P2P';
+    p2p.title = 'P2P allowed here';
+    marks.append(p2p);
+  }
+
+  row.append(copy, marks, starFor(code));
+  return row;
+}
+
+/* -- the controls above the list --------------------------------------- */
+
+function paintSort() {
+  for (const b of $('sortBy').querySelectorAll('.pair__opt')) {
+    b.setAttribute('aria-selected', String(b.dataset.sort === (state.sortBy || 'ping')));
+  }
+}
+
+$('sortBy').addEventListener('click', async (e) => {
+  const opt = e.target.closest('.pair__opt');
+  if (!opt) return;
+  state.sortBy = opt.dataset.sort;
+  paintSort();
+  $('list').dataset.key = '';
+  drawList($('search').value.trim());
+  await window.pywebview.api.setSort(state.sortBy);
 });

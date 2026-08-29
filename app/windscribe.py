@@ -88,6 +88,20 @@ AUTH_FILE = os.path.join(paths.DATA_DIR, '.windscribe-auth')
 # already offers to read. Pinning them is the existing machinery, unchanged.
 CONFIG_DIR = os.path.join(paths.DATA_DIR, 'windscribe')
 
+# What the published list says about an exit beyond where it is: the name
+# the city is known by, how loaded it is, how fast the link is, whether P2P
+# is allowed there.
+#
+# A sidecar rather than more filename, and that is a real departure: until
+# now the filename said everything, which is what let the pinning scripts,
+# the sweep and the engine all agree without being introduced. But a load
+# figure goes stale in minutes and a nickname has spaces in it, and neither
+# belongs in a name that a shell script has to match on. So the filename
+# still says what an exit *is* - country, city, provider, address - and this
+# says what it was *like* when the list was fetched. Nothing breaks if it is
+# missing; the rows simply say less.
+META_PATH = os.path.join(paths.STATE_DIR, 'windscribe-meta.json')
+
 # What marks a config as Windscribe's, in the filename and nowhere else. The
 # app decides two things from it - which credential to use, and whether a
 # `200` can be believed - and one folder can hold either provider, so the
@@ -551,6 +565,16 @@ def servers(timeout=TIMEOUT):
             out.append({'country': code, 'city': city,
                         'code': codes[(code, city)],
                         'hostname': hostname,
+                        # What the list says about the place rather than the
+                        # address. `nick` is Windscribe's own name for it -
+                        # every group has one - and `health` is how loaded
+                        # it was when the list was fetched, which is the one
+                        # number here that goes stale in minutes.
+                        'nick': group.get('nick') or '',
+                        'load': group.get('health'),
+                        'gbps': 10 if str(group.get('link_speed')) == '10000'
+                        else 1,
+                        'p2p': bool(country.get('p2p')),
                         # The country's flag and not the group's. Every group
                         # in the list carries pro=1, including the ones in the
                         # thirteen countries a free account can reach, so
@@ -601,7 +625,7 @@ def write_configs(dest=None, free_only=False, per_city=None):
                 capped.append(s)
         fleet = capped
 
-    written = []
+    written, note = [], {}
     for s in fleet:
         name = f"{s['country']}-{s['code']}{MARK}{s['hostname']}.ovpn"
         try:
@@ -609,8 +633,26 @@ def write_configs(dest=None, free_only=False, per_city=None):
                       encoding='utf-8', newline='\n') as f:
                 f.write(config_text(s['hostname']))
             written.append(name)
+            # Filed under the part of the name that survives pinning, so the
+            # row still finds it after an address has been appended.
+            note[config_stem(name)] = {
+                'city': s['city'], 'nick': s['nick'], 'load': s['load'],
+                'gbps': s['gbps'], 'p2p': s['p2p'],
+                'premium': s['premium'], 'host': s['hostname']}
         except OSError:
             continue
+
+    # Written whole and moved into place, and never fatal: a fleet on disk
+    # with no notes beside it is a list that says less, not a broken one.
+    try:
+        os.makedirs(paths.STATE_DIR, exist_ok=True)
+        tmp = f'{META_PATH}.{os.getpid()}'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(note, f)
+        os.replace(tmp, META_PATH)
+    except OSError:
+        pass
+
     return {'folder': dest, 'written': len(written),
             'countries': len({s['country'] for s in fleet}),
             'total': len(fleet)}
@@ -622,6 +664,35 @@ def write_configs(dest=None, free_only=False, per_city=None):
 def is_windscribe(name):
     """Whether a config filename came from here."""
     return MARK in (name or '')
+
+
+# "01.8s-fr-par.ws.fr-030.totallyacdn.com_146.70.253.194.ovpn" is the same
+# exit as "fr-par.ws.fr-030.totallyacdn.com.ovpn" was before it was pinned
+# and before a sweep timed it. Both ends move - a measured time goes on the
+# front, an address goes on the back - and what survives both is the middle.
+STEM_HEAD = re.compile(r'^\d+\.\d+s-')
+STEM_TAIL = re.compile(r'_\d{1,3}(?:\.\d{1,3}){3}\.ovpn$')
+
+
+def config_stem(name):
+    """The part of a config filename that survives pinning and sweeping.
+
+    This is the key everything about an exit is filed under, because it is
+    the only part of the name nothing rewrites.
+    """
+    name = STEM_HEAD.sub('', name or '')
+    name = STEM_TAIL.sub('', name)
+    return name[:-5] if name.endswith('.ovpn') else name
+
+
+def meta():
+    """What the published list said about each exit, by config stem."""
+    try:
+        with open(META_PATH, encoding='utf-8') as f:
+            got = json.load(f)
+        return got if isinstance(got, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def verify_tunnel(px, ip, host, user, password, timeout=15):

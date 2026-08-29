@@ -227,8 +227,44 @@ class Engine:
         reads; seventy-five countries is a thing people already have opinions
         about. Which city inside one is our problem, not theirs."""
         found = self.reach()
+        notes = windscribe.meta()
         by_country = {}
+        cities = {}
         for s in self.servers():
+            note = notes.get(windscribe.config_stem(s.file)) or {}
+            # The city is the level Windscribe's own client groups by, and it
+            # is the one worth having: "Paris" is a place somebody means,
+            # where "fr-030.totallyacdn.com" is an address it happens to be
+            # at. The three-letter code comes out of the filename, and the
+            # name and nickname out of the notes beside it - so a city still
+            # groups correctly when the notes are missing, it just reads as
+            # its code.
+            city = cities.setdefault((s.country, s.city), {
+                'code': s.city, 'country': s.country,
+                'name': note.get('city') or city_name(s.city),
+                'nick': note.get('nick') or '',
+                'count': 0, 'tested': 0, 'ok': 0, 'ping': None,
+                'load': note.get('load'), 'gbps': note.get('gbps'),
+                'p2p': note.get('p2p'), 'by': {}})
+            city['count'] += 1
+            city['by'][s.provider] = city['by'].get(s.provider, 0) + 1
+            # The least loaded of the group is the honest figure for a city
+            # that has more than one: it is the one the connection would be
+            # handed if it asked now.
+            if note.get('load') is not None and (
+                    city['load'] is None or note['load'] < city['load']):
+                city['load'] = note['load']
+
+            rec_city = found.get(s.file)
+            if rec_city:
+                city['tested'] += 1
+                if rec_city.get('ok'):
+                    city['ok'] += 1
+                    ms = rec_city.get('ms')
+                    if ms is not None and (city['ping'] is None
+                                           or ms < city['ping']):
+                        city['ping'] = ms
+
             c = by_country.setdefault(s.country, {'code': s.country,
                                                   'cities': set(),
                                                   'count': 0,
@@ -273,6 +309,15 @@ class Engine:
                         'name': country_name(code),
                         'alias': aliases(code),
                         'cities': len(c['cities']),
+                        # The cities themselves, quickest first, so that
+                        # opening a country shows the one worth taking at the
+                        # top rather than whichever is alphabetically first.
+                        'cityList': sorted(
+                            (v for k, v in cities.items() if k[0] == code),
+                            key=lambda x: (x['tested'] and not x['ok'],
+                                           x['ping'] is None,
+                                           x['ping'] if x['ping'] is not None
+                                           else 0, x['name'])),
                         'count': c['count'],
                         'by': c['by'],
                         'tested': c['tested'],
@@ -479,7 +524,7 @@ class Engine:
 
     # -- choosing one ------------------------------------------------------
 
-    def candidates(self, country, provider=None, only=None):
+    def candidates(self, country, provider=None, only=None, city=None):
         """The addresses worth asking, in the order worth asking them.
 
         The rule differs by what was asked for, and getting this wrong made
@@ -504,7 +549,8 @@ class Engine:
             return [s for s in self.servers() if s.file == only]
         pool = [s for s in self.servers()
                 if (country in (None, 'auto') or s.country == country)
-                and (provider is None or s.provider == provider)]
+                and (provider is None or s.provider == provider)
+                and (city is None or s.city == city)]
         pool.sort(key=lambda s: (s.seconds is None, s.seconds or 0))
         if country in (None, 'auto'):
             seen, out = set(), []
@@ -516,7 +562,7 @@ class Engine:
             return out[:140]
         return pool[:80]
 
-    def exits(self, country, provider=None):
+    def exits(self, country, provider=None, city=None):
         """Every individual exit in one country, with what is known about it.
 
         The list has always been countries, because ninety-one endpoints is
@@ -526,19 +572,26 @@ class Engine:
         questions about a server, not about a place.
         """
         found = self.reach()
+        notes = windscribe.meta()
         out = []
         for s in self.servers():
             if s.country != country:
                 continue
             if provider and s.provider != provider:
                 continue
+            if city and s.city != city:
+                continue
             rec = found.get(s.file) or {}
             try:
                 ip, host = px.read_config(s.path)
             except SystemExit:
                 ip, host = None, None
-            out.append({'file': s.file, 'city': s.city, 'cityName':
-                        city_name(s.city), 'provider': s.provider,
+            note = notes.get(windscribe.config_stem(s.file)) or {}
+            out.append({'file': s.file, 'city': s.city,
+                        'cityName': note.get('city') or city_name(s.city),
+                        'nick': note.get('nick') or '',
+                        'load': note.get('load'), 'gbps': note.get('gbps'),
+                        'p2p': note.get('p2p'), 'provider': s.provider,
                         'host': host or '', 'ip': ip or '',
                         'ok': rec.get('ok'), 'ms': rec.get('ms'),
                         'why': rec.get('why', ''), 'at': rec.get('at')})
@@ -690,7 +743,7 @@ class Engine:
             pass
 
     def find_exit(self, country, progress, width=8, timeout=6,
-                  provider=None, only=None):
+                  provider=None, only=None, city=None):
         """Race the candidates and take the first that says yes.
 
         First rather than best. An earlier version waited for two so it could
@@ -710,7 +763,7 @@ class Engine:
         bad moment when only one exit in twenty is accepting still works
         through the list, just over a few more rounds.
         """
-        ordered = self.candidates(country, provider, only)
+        ordered = self.candidates(country, provider, only, city)
         if not ordered:
             raise RuntimeError('no-servers')
         ordered, creds = self.with_credentials(ordered)
@@ -796,12 +849,14 @@ class Engine:
                 pass
         raise RuntimeError(f'did-not-start: {said[-400:]}')
 
-    def connect(self, country, progress, provider=None, only=None):
+    def connect(self, country, progress, provider=None, only=None,
+                city=None):
         with self.lock:
             self.disconnect(quiet=True)
 
             took, server, ip, host = self.find_exit(
-                country, progress, provider=provider, only=only)
+                country, progress, provider=provider, only=only,
+                city=city)
             progress({'phase': 'starting', 'country': server.country,
                       'city': server.city})
 

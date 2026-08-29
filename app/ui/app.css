@@ -3549,3 +3549,73 @@ canvas.blob__body {
   font-size: 11.5px;
   border-radius: 999px;
 }
+
+/* --------------------------------------- cities, their marks, and stars */
+
+.reach__said { margin: 0; padding: 0 16px 8px; }
+.pair--sort { flex: 1; min-width: 0; }
+
+/* A city sits under its country: indented, and without a flag of its own -
+   repeating the flag once per city would make one country look like six. */
+.row--city {
+  margin-left: 22px;
+  width: calc(100% - 22px);
+  height: 52px;
+}
+.row--city::before { opacity: 0.10; }
+.row--city .row__name { font-size: 12.5px; font-weight: 550; }
+
+/* The name Windscribe gives the place, which is theirs rather than a fact
+   about geography - so it is said quietly, beside the real one. */
+.row__nick {
+  font-style: normal;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-off);
+}
+
+.row__marks { flex: none; display: flex; align-items: center; gap: 5px; }
+
+/* Load, as a bar rather than a number: which of two cities is emptier is the
+   question, and the exact percentage is a tooltip's business. */
+.load {
+  width: 22px; height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.10);
+  overflow: hidden;
+  position: relative;
+}
+.load::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--at, 0%);
+  background: var(--ok);
+}
+.load[data-level="mid"]::after { background: var(--work, #d9a441); }
+.load[data-level="high"]::after { background: var(--fail); }
+
+.mark {
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-off);
+}
+
+/* Starred rows go to the top of the list, so the star has to be reachable
+   without picking the row it sits in - the list catches it first. */
+.star {
+  flex: none;
+  width: 22px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-off);
+  cursor: pointer;
+  transition: color var(--fade), transform 90ms ease;
+}
+.star:hover { color: var(--text); transform: scale(1.15); }
+.star[data-on="true"] { color: var(--work, #e5c454); }
