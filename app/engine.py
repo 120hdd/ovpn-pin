@@ -301,13 +301,37 @@ class Engine:
 
     # -- credentials -------------------------------------------------------
 
-    def credentials(self):
+    @staticmethod
+    def read_auth(path):
+        """The two lines of a credentials file, or a RuntimeError.
+
+        Not px.read_auth, for the reason this file gives at the top about
+        pick_live: that one is written for a command line, where the way to
+        report a missing file is to print four lines about where to get one
+        and exit. Behind a window it still prints them - to the console in a
+        terminal run, and into the diagnostics file in a built copy - and
+        then the caller catches the exception and carries on perfectly well.
+        So the app was answering "not signed in" correctly while spraying
+
+            [fail] cannot read credentials from ...\\.ovpn-auth
+
+        every time the settings sheet opened, which reads as the thing that
+        just went wrong rather than as a question that was asked and
+        answered. Nothing was wrong; a provider simply had no account.
+
+        Same two lines, same rule about blanks, no opinions about it.
+        """
         try:
-            return px.read_auth(self.auth_file)
-        except SystemExit:
-            raise RuntimeError('no-credentials')
+            with open(path, encoding='utf-8') as f:
+                lines = [line.strip() for line in f if line.strip()]
         except OSError:
             raise RuntimeError('no-credentials')
+        if len(lines) < 2:
+            raise RuntimeError('no-credentials')
+        return lines[0], lines[1]
+
+    def credentials(self):
+        return self.read_auth(self.auth_file)
 
     def auth_file_for(self, server):
         """Which credentials file opens this exit.
@@ -328,8 +352,10 @@ class Engine:
         if path == self.auth_file:
             return self.credentials()
         try:
-            return px.read_auth(path)
-        except (SystemExit, OSError):
+            return self.read_auth(path)
+        except RuntimeError:
+            # Named apart from the other one because the fix is different:
+            # this credential is signed in for, not typed.
             raise RuntimeError('no-windscribe-credentials')
 
     def username(self):

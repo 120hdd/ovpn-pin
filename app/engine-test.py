@@ -104,6 +104,60 @@ class _NoProxy:
         return None
 
 
+def test_missing_credential_is_quiet():
+    section('a credential that is not there')
+    import contextlib
+    import io as _io
+
+    with tempfile.TemporaryDirectory() as tmp:
+        e = engine.Engine(_NoProxy(), folder=tmp)
+        e.auth_file = os.path.join(tmp, 'nothing-here')
+
+        buf = _io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            try:
+                e.credentials()
+                said = 'it returned something'
+            except RuntimeError as exc:
+                said = str(exc)
+            name = e.username()
+        noise = buf.getvalue()
+
+        check('it says no-credentials', said == 'no-credentials', said)
+        check('and username is None rather than a crash', name is None)
+        # The point. px.read_auth prints four lines about the Surfshark
+        # manual-setup page and exits, which is right for a command line and
+        # wrong behind a window: the caller catches it and carries on, having
+        # already printed [fail] where somebody can read it and conclude that
+        # something broke.
+        check('and nothing at all is printed', noise == '',
+              repr(noise[:60]) if noise else '')
+
+        # A file that exists but is not two lines is the same answer.
+        half = os.path.join(tmp, 'half')
+        with open(half, 'w', encoding='utf-8') as f:
+            f.write('only-a-username\n')
+        e.auth_file = half
+        buf = _io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            try:
+                e.credentials()
+                said = 'it returned something'
+            except RuntimeError as exc:
+                said = str(exc)
+        check('half a credentials file is no credentials',
+              said == 'no-credentials', said)
+        check('and that is quiet too', buf.getvalue() == '')
+
+        # And a real one still reads, blank lines and all.
+        good = os.path.join(tmp, 'good')
+        with open(good, 'w', encoding='utf-8') as f:
+            f.write('\nuser-here\n\npass-here\n\n')
+        e.auth_file = good
+        check('a real one comes back', e.credentials() == ('user-here', 'pass-here'),
+              str(e.credentials()))
+
+
 def test_provider_routing():
     section('which exits belong to whom')
     with tempfile.TemporaryDirectory() as tmp:
@@ -175,6 +229,7 @@ def main():
     print(__doc__.strip().splitlines()[0])
     test_alive()
     test_state_file_forgets_the_dead()
+    test_missing_credential_is_quiet()
     test_provider_routing()
     test_two_folders()
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
