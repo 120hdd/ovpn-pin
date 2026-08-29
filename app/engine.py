@@ -27,7 +27,7 @@ import urllib.request
 import accounts
 import paths
 import windscribe
-from countries import aliases, city_name, country_name
+from countries import aliases, canon, city_name, country_name
 
 HERE = paths.APP_DIR
 ROOT = paths.DATA_DIR
@@ -219,7 +219,10 @@ class Engine:
                 seen.add(name)
                 out.append(Server(os.path.join(folder, name), name,
                                   float(m.group(1)) if m.group(1) else None,
-                                  m.group(2).lower(), m.group(3).lower()))
+                                  # canon, because one provider writes `uk`
+                                  # and the other `gb`, and they are one
+                                  # country wherever they were pinned.
+                                  canon(m.group(2)), m.group(3).lower()))
         return out
 
     def catalogue(self):

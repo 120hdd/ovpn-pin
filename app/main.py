@@ -2253,8 +2253,20 @@ def ui_check(window):
         # The four things Windscribe's own list has that ours did not, and
         # three of them come off data we were already downloading and
         # throwing away.
+        # Shut by default now, which is the point - every country's cities
+        # at once was a list of cities pretending to be a list of countries.
+        said['citiesShutAtRest'] = window.evaluate_js(
+            "document.querySelectorAll('.row--city').length")
+        said['expandersOffered'] = window.evaluate_js(
+            "document.querySelectorAll('[data-expand]').length")
+        window.evaluate_js(
+            "(() => { const p = document.querySelector('[data-expand]');"
+            " if (p) p.click(); return !!p; })()")
+        time.sleep(0.9)
         said['cityRows'] = window.evaluate_js(
             "document.querySelectorAll('.row--city').length")
+        said['expandDidNotConnect'] = window.evaluate_js(
+            "document.getElementById('picker').open && state.mode !== 'busy'")
         said['cityNicks'] = window.evaluate_js(
             "Array.from(document.querySelectorAll('.row--city .row__nick'))"
             ".slice(0, 4).map(e => e.textContent)")
@@ -2313,6 +2325,36 @@ def ui_check(window):
             "document.getElementById('picker').open")
         said['modeNow'] = window.evaluate_js('state.mode')
         said['citiesShot'] = shot('picker-cities')
+
+        # -- picking one connects to it -------------------------------
+        #
+        # Stubbed, because the assertion is that choosing calls connect with
+        # the code that was chosen - not that this machine can reach Austria
+        # right now. Letting it through would also leave the check having
+        # moved the Windows proxy, which is not a thing a check should do.
+        window.evaluate_js("""
+            (function () {
+              window.__realConnect = window.pywebview.api.connect;
+              window.__connectedTo = null;
+              window.pywebview.api.connect = (code) => {
+                window.__connectedTo = code;
+                return Promise.resolve({ok: true});
+              };
+            })()""")
+        window.evaluate_js(
+            "(() => { const r = Array.from("
+            "document.querySelectorAll('.row[data-code]'))"
+            ".find(r => r.dataset.code !== 'auto');"
+            " if (r) r.click(); return r && r.dataset.code; })()")
+        time.sleep(1.0)
+        said['pickConnected'] = window.evaluate_js('window.__connectedTo')
+        said['pickClosedSheet'] = window.evaluate_js(
+            "!document.getElementById('picker').open")
+        window.evaluate_js(
+            'window.pywebview.api.connect = window.__realConnect;'
+            "state.mode = 'off'")
+        window.evaluate_js("document.getElementById('pick').click()")
+        time.sleep(0.8)
         window.evaluate_js(
             "document.querySelector('#sortBy [data-sort=ping]').click()")
 
@@ -2333,7 +2375,7 @@ def ui_check(window):
             ".filter(e => / ms| s$|blocked here/.test(e.textContent)).length")
         # Opening one country's exits, which is the "each server" half.
         window.evaluate_js(
-            "(() => { const m = document.querySelector('.row--more');"
+            "(() => { const m = document.querySelector('[data-exits]');"
             " if (m) m.click(); return !!m; })()")
         time.sleep(1.2)
         said['exitsOpened'] = window.evaluate_js(

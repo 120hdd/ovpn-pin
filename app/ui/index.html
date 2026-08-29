@@ -255,7 +255,13 @@
        asks every time and throws the answer away; this asks once and keeps
        it, so the list can be ordered by what works instead of by name. -->
   <div class="reach" id="reach">
-    <button class="btn btn--quiet btn--auto" id="reachGo" type="button">Test</button>
+    <!-- An icon, because it sits beside the sort control and a word there
+         reads as a fourth way to sort. The gauge is the one in the sprite
+         that means "measure something". -->
+    <button class="icon icon--go" id="reachGo" type="button"
+            aria-label="Time every exit" title="Time every exit">
+      <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg>
+    </button>
     <!-- Answering-first sits underneath all three: a blocked exit is not a
          good answer to "sort by name" either. -->
     <div class="pair pair--sort" id="sortBy" role="tablist">

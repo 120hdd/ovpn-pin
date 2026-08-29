@@ -30,6 +30,7 @@ const state = {
   testing: false,       // a reachability test is running
   favourites: [],       // picker codes kept at the top of the list
   sortBy: 'ping',       // ping | name | load
+  openCities: new Set(),  // countries showing their cities
   openExits: null,      // which row has its individual exits showing
   exits: {},            // and those exits, once fetched, by that row's code
 };
@@ -301,7 +302,9 @@ function drawList(query) {
   // countries lets the list keep rows for a provider that has been switched
   // off, with counts from before it was.
   const key = `${q}|${state.picked}|${state.countries.length}`
-    + `|${(state.providers || []).join(',')}`;
+    + `|${(state.providers || []).join(',')}`
+    + `|${[...state.openCities].sort().join(',')}`
+    + `|${state.sortBy}|${(state.favourites || []).join(',')}`;
   if (list.dataset.key === key) return;
   list.dataset.key = key;
 
@@ -350,45 +353,41 @@ function drawList(query) {
      The country's own row stays, and stays first, because it means
      "whichever answers" - which is what most people want most of the time.
      The rows under it are for when it is not. */
-  /* The row that opens the exits behind a country.
-
-     A row of its own rather than a control inside the country's row: that
-     row is a <button> that picks the place, and a button inside a button is
-     not a thing. It only appears where there is something to open - one
-     exit is already the whole story. */
-  const buildMore = (c, code) => {
-    const more = document.createElement('button');
-    more.type = 'button';
-    more.className = 'row row--more';
-    more.dataset.for = code;
-    more.dataset.open = String(state.openExits === code);
-    const n = code.includes(':')
-      ? (c.by || {})[code.split(':')[1]] || 0 : c.count;
-    const said_ = document.createElement('span');
-    said_.className = 'row__meta';
-    said_.textContent = `${n} server${n === 1 ? '' : 's'}, one by one`;
-    const chev = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    chev.setAttribute('class', 'ico row__chev');
-    chev.setAttribute('aria-hidden', 'true');
-    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
-    use.setAttribute('href', '#i-chev-down');
-    chev.appendChild(use);
-    more.append(said_, chev);
-    return more;
-  };
-
   const buildGroup = (c) => {
     const from = Object.keys(c.by || {}).filter((k) => c.by[k] > 0).sort();
     const out = from.length < 2
       ? [build(c)]
       : [build(c, null, true), ...from.map((via) => build(c, via))];
-    // The cities inside it, when there is more than one. A country with a
-    // single city is already that city, and saying so twice is noise.
+
+    /* The cities inside it, and only when asked for.
+
+       Every country's cities laid out at once was sixty-nine rows of them
+       above the fold, which is a list of cities pretending to be a list of
+       countries. Windscribe's own client keeps them shut until you open one,
+       and the plus on the row is the whole affordance.
+
+       A country with one city is already that city; opening it would show
+       the same place again with a smaller font. */
     const cityList = c.cityList || [];
-    if (cityList.length > 1) {
-      for (const city of cityList) out.push(buildCity(c, city));
-    } else if (c.count > 1) {
-      out.push(buildMore(c, c.code));
+    if (cityList.length > 1 && state.openCities.has(c.code)) {
+      let at = 0;
+      for (const city of cityList) {
+        // Both providers in one city is two ways into one place, the same
+        // as it is for a country - so it splits the same way rather than
+        // merging into a row that cannot say which you would get.
+        const ways = Object.keys(city.by || {}).filter((k) => city.by[k] > 0);
+        if (ways.length > 1) {
+          for (const via of ways.sort()) {
+            const r = buildCity(c, city, via);
+            r.style.setProperty('--i', at++);
+            out.push(r);
+          }
+        } else {
+          const r = buildCity(c, city);
+          r.style.setProperty('--i', at++);
+          out.push(r);
+        }
+      }
     }
     return out;
   };
@@ -463,6 +462,21 @@ function drawList(query) {
     }
     // No tick. The chosen row is outlined instead - see .row.is-picked.
     row.append(copy);
+    // A plus rather than a chevron, and inside the row rather than under it:
+    // it is the same control Windscribe puts there, and a row that opens is
+    // more obviously openable with a + on it than with a line beneath.
+    if (!via) {
+      const many = (c.cityList || []).length > 1;
+      // A country with cities opens into them; one without opens straight
+      // into its hosts, because there is no middle to show. Either way it is
+      // the same plus in the same place - what it reveals is the row's
+      // business, not the reader's.
+      if (many || c.count > 1) {
+        row.append(expander(many ? 'expand' : 'exits', c.code,
+                            many ? state.openCities.has(c.code)
+                                 : state.openExits === c.code));
+      }
+    }
     if (!heads) row.append(starFor(code));
     return row;
   };
@@ -507,11 +521,36 @@ function markCursor() {
   all[state.cursor].scrollIntoView({ block: 'nearest' });
 }
 
-function choose(code) {
+async function choose(code) {
   state.picked = code;
   $('picker').close();
   render();
   window.pywebview.api.remember(code);
+
+  /* And connect to it, because that is what picking one is for.
+
+     It used to close the sheet and leave the Connect button lit, which is a
+     second decision about a choice already made - and the sheet was opened
+     from that same button, so the round trip was: press Connect, choose a
+     place, press Connect. Choosing is the answer to the question the button
+     asked.
+
+     Already connected, it moves rather than stopping: disconnect first, then
+     connect to the new one, so that picking somewhere else while a tunnel is
+     up does the obvious thing instead of nothing. */
+  if (state.mode === 'busy') return;
+  if (state.mode === 'on') {
+    setStatus('SWITCHING', 'busy', 'Leaving the old one', '');
+    try {
+      await window.pywebview.api.disconnect();
+    } catch (_) { /* going anyway */ }
+  }
+  state.mode = 'busy';
+  render();
+  setStatus('CONNECTING', 'busy', 'Looking for a server', '');
+  setHint('');
+  const r = await window.pywebview.api.connect(code);
+  if (!r.ok) { state.mode = 'off'; render(); }
 }
 
 /* --------------------------------------------------- events from the app */
@@ -1992,12 +2031,28 @@ $('list').addEventListener('click', (e) => {
   // the click and connect somewhere.
   const star = e.target.closest('[data-star]');
   if (star) { e.stopPropagation(); toggleFavourite(star.dataset.star); return; }
+  const hosts = e.target.closest('[data-exits]');
+  if (hosts) {
+    e.stopPropagation();
+    toggleExits(hosts.dataset.exits, hosts.closest('.row'));
+    return;
+  }
+  const open = e.target.closest('[data-expand]');
+  if (open) {
+    e.stopPropagation();
+    const code = open.dataset.expand;
+    if (state.openCities.has(code)) state.openCities.delete(code);
+    else state.openCities.add(code);
+    $('list').dataset.key = '';
+    drawList($('search').value.trim());
+    return;
+  }
   // An exit row picks that one exit; the row that opens them is not a pick
   // at all and is handled where the opening is.
   const exit = e.target.closest('.exit');
   if (exit) { choose(exit.dataset.code); return; }
   const row = e.target.closest('.row');
-  if (row && !row.classList.contains('row--more')) choose(row.dataset.code);
+  if (row) choose(row.dataset.code);
 });
 
 $('picker').addEventListener('keydown', (e) => {
@@ -3062,7 +3117,8 @@ async function startReach() {
   const r = await window.pywebview.api.testReach();
   if (!r.ok) { said($('reachSaid'), r.error, 'bad'); return; }
   state.testing = true;
-  $('reachGo').textContent = 'Stop';
+  $('reachGo').dataset.busy = 'true';
+  $('reachGo').setAttribute('aria-label', 'Stop timing');
   said($('reachSaid'), `Asking ${r.total}…`);
 }
 
@@ -3077,7 +3133,8 @@ window.onReach = (p) => {
 
 window.onReachDone = (r) => {
   state.testing = false;
-  $('reachGo').textContent = 'Test';
+  $('reachGo').dataset.busy = 'false';
+  $('reachGo').setAttribute('aria-label', 'Time every exit');
   $('reachBar').style.setProperty('--at', '0%');
   if (!r.ok) { said($('reachSaid'), r.error || 'Could not test.', 'bad'); return; }
   state.countries = r.countries || state.countries;
@@ -3106,8 +3163,10 @@ async function toggleExits(code, after) {
   const open = state.openExits === code;
   state.openExits = open ? null : code;
   for (const el of document.querySelectorAll('.exits')) el.remove();
-  for (const b of document.querySelectorAll('.row--more')) {
-    b.dataset.open = String(b.dataset.for === state.openExits);
+  for (const b of document.querySelectorAll('[data-exits]')) {
+    const on = b.dataset.exits === state.openExits;
+    b.dataset.on = String(on);
+    b.textContent = on ? '−' : '+';
   }
   if (open) return;
 
@@ -3122,10 +3181,12 @@ async function toggleExits(code, after) {
 
   const box = document.createElement('div');
   box.className = 'exits';
+  let at = 0;
   for (const x of list) {
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'exit';
+    row.style.setProperty('--i', at++);
     row.dataset.code = `file:${x.file}`;
     row.dataset.state = x.ok === true ? 'ok' : x.ok === false ? 'blocked' : 'untested';
 
@@ -3153,10 +3214,7 @@ async function toggleExits(code, after) {
   after.insertAdjacentElement('afterend', box);
 }
 
-$('list').addEventListener('click', (e) => {
-  const more = e.target.closest('.row--more');
-  if (more) toggleExits(more.dataset.for, more);
-});
+
 
 /* ------------------------------------------------ cities, stars and order */
 
@@ -3227,8 +3285,23 @@ function cityLoad(c) {
 
 /* -- a city row -------------------------------------------------------- */
 
-function buildCity(c, city) {
-  const code = `${c.code}/${city.code}`;
+/* The plus on a row. `kind` is what it opens - the cities inside a country,
+   or the hosts behind one place - and the list catches it before the row it
+   sits in, which is the only reason a control can live inside a button. */
+function expander(kind, code, on) {
+  const el = document.createElement('span');
+  el.className = 'expand';
+  el.dataset[kind === 'expand' ? 'expand' : 'exits'] = code;
+  el.dataset.on = String(!!on);
+  el.setAttribute('role', 'button');
+  el.setAttribute('aria-label', kind === 'expand'
+    ? 'Show the cities in this country' : 'Show the servers here');
+  el.textContent = on ? '−' : '+';
+  return el;
+}
+
+function buildCity(c, city, via) {
+  const code = `${c.code}/${city.code}` + (via ? `:${via}` : '');
   const row = document.createElement('button');
   row.type = 'button';
   row.className = 'row row--city' + (state.picked === code ? ' is-picked' : '');
@@ -3242,6 +3315,12 @@ function buildCity(c, city) {
   const name = document.createElement('span');
   name.className = 'row__name';
   name.textContent = city.name;
+  if (via) {
+    const who = document.createElement('i');
+    who.className = 'row__via';
+    who.textContent = PROVIDER_NAMES[via] || via;
+    name.append(' ', who);
+  }
   // Windscribe names every one of its cities - Paris is Seine, Dallas is
   // Ranch, South Bend is Hawkins - and it is the only part of their list
   // that is theirs rather than a fact about geography. Worth keeping.
@@ -3254,7 +3333,8 @@ function buildCity(c, city) {
 
   const meta = document.createElement('span');
   meta.className = 'row__meta';
-  const bits = [`${city.count} relay${city.count === 1 ? '' : 's'}`];
+  const n = via ? (city.by || {})[via] || 0 : city.count;
+  const bits = [`${n} relay${n === 1 ? '' : 's'}`];
   if (city.ping !== null && city.ping !== undefined) bits.push(msSaid(city.ping));
   if (city.tested && !city.ok) bits.push('blocked here');
   else if (city.tested && city.ok < city.count) bits.push(`${city.ok}/${city.count} answering`);
@@ -3288,7 +3368,8 @@ function buildCity(c, city) {
     marks.append(p2p);
   }
 
-  row.append(copy, marks, starFor(code));
+  row.append(copy, marks, expander('exits', code, state.openExits === code),
+             starFor(code));
   return row;
 }
 
