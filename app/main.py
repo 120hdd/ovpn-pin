@@ -150,6 +150,20 @@ def _tray_importable():
         return False
 
 
+def px_live_elsewhere(port):
+    """Whether another copy of this app has a proxy up on a different port.
+
+    Two of these share a data folder, so they share the record of what is
+    running and the stash of what Windows looked like beforehand. Neither
+    file is wrong; the mistake would be reading either as ours.
+    """
+    try:
+        return any(str(r.get('port')) != str(port)
+                   for r in engine.px.read_states())
+    except Exception:
+        return False
+
+
 def run_selftest():
     """Say what this copy can see, without opening a window.
 
@@ -470,7 +484,11 @@ class Api:
 
     def boot(self):
         recovered = False
-        if self._sysproxy.stashed() and not self._engine.running():
+        # A stash with no proxy of ours running is the wreckage of a copy
+        # that was killed - unless another copy is up and using it right now,
+        # in which case it is not wreckage, it is theirs.
+        if (self._sysproxy.stashed() and not self._engine.running()
+                and not px_live_elsewhere(self._engine.port)):
             recovered = self._sysproxy.restore()
         status = self._engine.status()
         self._retray('on' if status.get('state') == 'on' else 'off')
@@ -1410,7 +1428,11 @@ def install_safety(api):
             except Exception:
                 pass
         try:
-            api._sysproxy.restore()
+            # Same rule as disconnect: only ours to put back if the machine
+            # is pointed at our port. Another copy of this app, on another
+            # port, is somebody's live connection and not our business.
+            if api._sysproxy.engaged_for(api._engine.port):
+                api._sysproxy.restore()
         except Exception:
             pass
         # A pinning run is an ordinary child of this process rather than
@@ -2206,6 +2228,13 @@ def ui_check(window):
         # The head still means "whichever answers", and says so.
         said['splitHeadSays'] = window.evaluate_js(
             "(document.querySelector('.row--heads .row__meta')||{}).textContent")
+        # The rows must all be one height. Tags used to sit under the name,
+        # so a country that had them was half a row taller than one that did
+        # not, for a reason nothing on screen explained.
+        said['rowHeights'] = window.evaluate_js(
+            "Array.from(new Set(Array.from("
+            "document.querySelectorAll('.row:not(.row--auto)'))"
+            ".map(r => Math.round(r.getBoundingClientRect().height)))).sort()")
         said['splitViaNames'] = window.evaluate_js(
             "Array.from(document.querySelectorAll('.row--via .row__name'))"
             ".map(e => e.textContent)")

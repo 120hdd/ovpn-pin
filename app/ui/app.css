@@ -3612,59 +3612,20 @@ canvas.blob__body {
   flex: none;
   display: grid;
   place-items: center;
-  width: 22px; height: 22px;
+  width: 24px; height: 24px;
   border-radius: 7px;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1;
   color: var(--text-off);
   cursor: pointer;
-  transition: color var(--fade), background var(--fade), transform 120ms
-              cubic-bezier(0.2, 1.4, 0.4, 1);
 }
-.expand { font-size: 15px; font-weight: 500; }
+.expand { font-size: 17px; font-weight: 400; }
 .expand:hover, .star:hover {
   color: var(--text);
   background: rgba(255, 255, 255, 0.07);
 }
 .expand[data-on="true"] { color: var(--ok); }
-.expand:active, .star:active { transform: scale(0.86); }
-/* A star going on is worth a moment; going off is not. */
-.star[data-on="true"] { color: var(--work, #e5c454); animation: pop 260ms var(--ease, ease); }
-@keyframes pop {
-  0%   { transform: scale(0.6) rotate(-24deg); }
-  55%  { transform: scale(1.28) rotate(6deg); }
-  100% { transform: none; }
-}
-
-/* Cities arriving under the country that was opened. Staggered by index,
-   which the row builder sets, so they land in reading order rather than all
-   at once - the difference between a list that opened and one that flashed.
-   Capped, because past a dozen the stagger is just latency. */
-.row--city, .exit {
-  animation: slidein 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-  animation-delay: calc(min(var(--i, 0), 12) * 22ms);
-}
-@keyframes slidein {
-  from { opacity: 0; transform: translateY(-6px); }
-  to   { opacity: 1; transform: none; }
-}
-
-/* The measure button, which has no word on it any more - so it says it is
-   working by turning. */
-.icon--go .ico { transition: transform 200ms var(--ease, ease); }
-.icon--go:hover .ico { transform: rotate(-18deg); }
-.icon--go[data-busy="true"] .ico { animation: sweep 1.1s linear infinite; }
-@keyframes sweep {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
-}
-
-/* Nobody asked for any of this to move. */
-@media (prefers-reduced-motion: reduce) {
-  .row--city, .exit { animation: none; }
-  .star[data-on="true"] { animation: none; }
-  .icon--go[data-busy="true"] .ico { animation: none; }
-}
+.star[data-on="true"] { color: var(--work, #e5c454); }
 
 .row__via {
   font-style: normal;
@@ -3674,3 +3635,95 @@ canvas.blob__body {
   color: var(--text-off);
   text-transform: uppercase;
 }
+
+/* ============================================ the locations, plainly ==== */
+
+/* Windscribe's own list is a flag, a name, and a plus, on a flat row with a
+   hairline under it. Ours had become a name floating on a quarter-page of
+   tinted flag, which was fine when the row said "France - 24 relays" and is
+   not now that it says a time, a load, how many answered and which provider.
+   The picture moves to a chip and the line gets its room back. */
+.sheet__list .row {
+  height: auto;
+  min-height: 46px;
+  margin: 0;
+  padding: 9px 14px;
+  gap: 10px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  contain-intrinsic-size: auto 46px;
+}
+.sheet__list .row:hover { background: rgba(255, 255, 255, 0.035); }
+.sheet__list .row.is-picked {
+  background: rgba(74, 229, 195, 0.07);
+  box-shadow: inset 2px 0 0 var(--ok);
+}
+/* The wash is gone. It is the whole of what made this look unlike the app it
+   is modelled on, and every row now carries its flag as an object instead. */
+.sheet__list .row::before { display: none; }
+
+.chip {
+  flex: none;
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background-image: var(--flag);
+  background-size: cover;
+  background-position: center;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+/* A city has no flag of its own - it is in the country above it - so it gets
+   a mark that holds the same column. */
+.chip--dot {
+  width: 26px; height: 26px;
+  background: none;
+  box-shadow: none;
+  position: relative;
+}
+.chip--dot::after {
+  content: '';
+  position: absolute;
+  left: 11px; top: 11px;
+  width: 4px; height: 4px;
+  border-radius: 50%;
+  background: var(--text-off);
+}
+
+/* Indented by the chip's width, so a city's name starts under its country's
+   name rather than under its flag. */
+.row--city { margin-left: 0; width: 100%; padding-left: 30px; }
+.row--city .chip--dot { width: 22px; }
+
+.row__copy { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.row__name { font-size: 13px; font-weight: 600; }
+.row--city .row__name { font-size: 12.5px; font-weight: 550; }
+.row__meta { font-size: 10.5px; }
+
+/* The count above the list, which is the one number about the list itself. */
+.listhead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 16px 6px;
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-off);
+}
+.listhead__n {
+  font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+  letter-spacing: 0;
+  color: var(--text-muted);
+}
+
+/* Tags sit with the other marks on the right. Under the name they pushed
+   every row that had them to two and a half lines while the rows that did
+   not stayed at one, so a list of countries had two different heights for a
+   reason nobody could see. */
+.row__tags { flex: none; margin: 0; align-self: center; }
+
+/* A provider row is the same country seen one way, so it lines up with the
+   cities rather than repeating the flag above it. */
+.row--via { padding-left: 30px; }

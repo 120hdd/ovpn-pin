@@ -400,6 +400,15 @@ function drawList(query) {
       + (via ? ' row--via' : '') + (heads ? ' row--heads' : '');
     row.dataset.code = code;
     row.style.setProperty('--flag', flagUrl(c.code));
+    // The flag as a thing on the row rather than a wash behind it. A
+    // quarter of the row tinted the colour of a flag is a decoration that
+    // reads as a state - and with a time, a load and a verdict now on the
+    // same line, the line needs the room more than it needs the picture.
+    const chip = document.createElement('span');
+    chip.className = via ? 'chip chip--dot' : 'chip';
+    if (!via) chip.style.setProperty('--flag', flagUrl(c.code));
+    row.append(chip);
+
     const copy = document.createElement('span');
     copy.className = 'row__copy';
     const name = document.createElement('span');
@@ -424,8 +433,9 @@ function drawList(query) {
       row.dataset.state = !c.tested ? 'untested'
         : ok ? (ok < n ? 'some' : 'ok') : 'blocked';
     } else if (heads) {
-      meta.textContent = meta.textContent + ' · whichever answers'
-        + reachSaid(c);
+      // Short, because the rows underneath say it better and this line
+      // now has to hold a time as well.
+      meta.textContent = meta.textContent + ' · any' + reachSaid(c);
       row.dataset.state = reachState(c);
     } else {
       // What the last test found, after the count: a time when it answered,
@@ -442,6 +452,7 @@ function drawList(query) {
     // Only on a plain row. Under a group the provider is the row's own name
     // and a tag repeating it is noise; on the group's head, tags would claim
     // one exit of each, which is what the rows below it say properly.
+    let tagsFor = null;
     const by = c.by || {};
     const from = Object.keys(by).filter((k) => by[k] > 0).sort();
     if (from.length && !via && !heads) {
@@ -458,10 +469,12 @@ function drawList(query) {
           + ' · ' + by[key] + ' relay' + (by[key] === 1 ? '' : 's');
         tags.append(t);
       }
-      copy.append(tags);
+      row.dataset.tags = '1';
+      tagsFor = tags;
     }
     // No tick. The chosen row is outlined instead - see .row.is-picked.
     row.append(copy);
+    if (tagsFor) row.append(tagsFor);
     // A plus rather than a chevron, and inside the row rather than under it:
     // it is the same control Windscribe puts there, and a row that opens is
     // more obviously openable with a + on it than with a line beneath.
@@ -486,6 +499,8 @@ function drawList(query) {
   // and sixty-seven of them are below the fold, where nobody is waiting for
   // them. content-visibility already stops those being painted; this stops
   // them being built in the frame that matters.
+  $('listCount').textContent = String(found.length);
+
   const AT_ONCE = 14;
   for (const c of found.slice(0, AT_ONCE)) list.append(...buildGroup(c));
   markCursor();
@@ -3122,13 +3137,37 @@ async function startReach() {
   said($('reachSaid'), `Asking ${r.total}…`);
 }
 
+/* Each result as it lands, written straight onto the row it belongs to.
+
+   Redrawing the list per result would be 125 rebuilds of ninety rows, and
+   would also re-sort under the reader's hands halfway through - so the row's
+   own text is patched and the order is left until the run is over. */
+function patchRow(file, rec) {
+  const country = file.slice(0, 2);
+  const row = document.querySelector(`.row[data-code="${country}"] .row__meta`);
+  if (!row) return;
+  if (rec.ms !== null && rec.ms !== undefined) {
+    const was = row.dataset.best ? Number(row.dataset.best) : null;
+    if (was === null || rec.ms < was) {
+      row.dataset.best = String(rec.ms);
+      const base = row.textContent.split(' · ')[0];
+      row.textContent = `${base} · ${msSaid(rec.ms)}`;
+    }
+  } else if (rec.ok === false && !row.dataset.best) {
+    const base = row.textContent.split(' · ')[0];
+    row.textContent = `${base} · no answer`;
+  }
+}
+
 window.onReach = (p) => {
   // Eight at a time, so the count moves in steps rather than smoothly. It is
   // still the only honest thing to show: a bar would have to guess at how
   // long the ones still in flight are going to take, and the slow ones are
   // exactly the ones that are about to time out.
-  said($('reachSaid'), `${p.done} of ${p.total} asked…`);
+  const what = p.phase === 'pinging' ? 'timed' : 'checked';
+  said($('reachSaid'), `${p.done} of ${p.total} ${what}…`);
   $('reachBar').style.setProperty('--at', `${(p.done / (p.total || 1)) * 100}%`);
+  if (p.file && p.result) patchRow(p.file, p.result);
 };
 
 window.onReachDone = (r) => {
@@ -3308,6 +3347,12 @@ function buildCity(c, city, via) {
   row.dataset.code = code;
   row.dataset.state = !city.tested ? 'untested'
     : city.ok ? (city.ok < city.count ? 'some' : 'ok') : 'blocked';
+
+  // A dot where the country has its flag, so the names line up in one
+  // column rather than stepping in and out under it.
+  const dot = document.createElement('span');
+  dot.className = 'chip chip--dot';
+  row.append(dot);
 
   const copy = document.createElement('span');
   copy.className = 'row__copy';

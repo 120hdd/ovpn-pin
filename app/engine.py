@@ -630,6 +630,34 @@ class Engine:
                 raise RuntimeError(sorted(missing.values())[0])
         return pool, creds
 
+    @staticmethod
+    def tcp_ping(ip, port=443, timeout=4, bind=None):
+        """How long the address takes to answer, and nothing else.
+
+        This is the number that belongs beside a location, and it was not
+        the number being shown. What was shown was the whole of ask_exit -
+        open a socket, negotiate TLS, verify a certificate by hand, send a
+        CONNECT, and for Windscribe tunnel a request and read a page back.
+        That is four round trips and a handshake, and on this line it came
+        to 1.2-2.6 seconds, which is a true measurement of something nobody
+        asked about. A single round trip to Europe from here is nearer 60ms.
+
+        Deliberately its own connection rather than a phase of the other one:
+        the verdict wants a full handshake and the ping wants none of it, and
+        timing part of a longer conversation would keep giving the answer
+        that conversation had rather than the one the address has.
+        """
+        began = time.monotonic()
+        sock = socket.create_connection(
+            (ip, port), timeout=timeout,
+            source_address=(bind, 0) if bind else None)
+        took = time.monotonic() - began
+        try:
+            sock.close()
+        except OSError:
+            pass
+        return took
+
     def ask_exit(self, server, creds, timeout=6):
         """Whether this one exit takes the credentials, and how long it took.
 
@@ -655,8 +683,12 @@ class Engine:
             # dials at up to 4.7s, which is inside six seconds only just -
             # and an exit failed for being slow is one the race never comes
             # back to.
+            # Twice the budget, capped. A successful open measured 1.1s to
+            # 6.7s on this line, so eight seconds loses almost nothing real -
+            # and a blocked address spends every one of them, which is what
+            # the tail of a run is made of.
             took = windscribe.verify_tunnel(
-                px, ip, host, user, password, timeout * 2)['ttfb']
+                px, ip, host, user, password, min(timeout * 2, 8))['ttfb']
         else:
             took = px.can_connect(
                 px.Exit(ip, 443, host, user, password), timeout)
@@ -673,7 +705,7 @@ class Engine:
         except (OSError, ValueError):
             return {}
 
-    def test_reach(self, progress, width=8, timeout=6, only=None):
+    def test_reach(self, progress, width=24, timeout=5, only=None):
         """Ask every exit on offer whether it answers, and how fast.
 
         This is the thing the app could never say. An exit that is filtered
@@ -697,31 +729,87 @@ class Engine:
         done, total = 0, len(pool)
         progress({'phase': 'testing', 'done': 0, 'total': total})
 
-        def ask(s):
+        """Two passes, because the two questions cost different amounts.
+
+        A ping is one round trip and comes back in a tenth of a second. The
+        verdict - does this exit take the credentials - is a TLS handshake, a
+        certificate checked by hand, a CONNECT, and for Windscribe a request
+        tunnelled through and read back; on a blocked address it is a
+        timeout, and the timeouts are what the whole run used to wait for.
+
+        Asked together, every ping arrived at the speed of the slowest thing
+        beside it, and the list sat empty for a minute before filling in at
+        once. Asked apart, the times land in the first few seconds and the
+        verdicts follow.
+        """
+        def ping_one(s):
             if self.cancelled.is_set():
                 raise OSError('cancelled')
-            took, ip, _host = self.ask_exit(s, creds, timeout)
-            return s, took, ip
+            ip, _host = px.read_config(s.path)
+            return self.tcp_ping(ip, timeout=timeout), ip
 
-        ex = cf.ThreadPoolExecutor(max_workers=width)
+        answered = []
+        ex = cf.ThreadPoolExecutor(max_workers=max(width, 24))
         try:
-            futures = {ex.submit(ask, s): s for s in pool}
+            futures = {ex.submit(ping_one, s): s for s in pool}
             for fut in cf.as_completed(list(futures)):
                 done += 1
                 s = futures[fut]
                 try:
-                    _s, took, ip = fut.result()
-                    found[s.file] = {'ok': True, 'ms': int(took * 1000),
-                                     'ip': ip, 'at': int(time.time())}
+                    ms, ip = fut.result()
+                    rec = {'ok': None, 'ms': int(ms * 1000), 'ip': ip,
+                           'at': int(time.time())}
+                    answered.append(s)
                 except Exception as e:
-                    # Why it refused is worth keeping. "filtered here" and
-                    # "no proxy for this account" are the same red dot and
-                    # completely different problems.
-                    found[s.file] = {'ok': False, 'ms': None,
-                                     'why': str(e).strip()[:60] or 'no answer',
-                                     'at': int(time.time())}
-                if done % 4 == 0 or done == total:
-                    progress({'phase': 'testing', 'done': done, 'total': total})
+                    # No answer at the address at all: there is nothing to
+                    # ask a second question of, so it does not go through the
+                    # slow pass and does not wait out a TLS timeout that was
+                    # never going to complete.
+                    rec = {'ok': False, 'ms': None,
+                           'why': str(e).strip()[:60] or 'no answer',
+                           'at': int(time.time())}
+                found[s.file] = rec
+                progress({'phase': 'pinging', 'done': done, 'total': total,
+                          'file': s.file, 'result': rec})
+                if self.cancelled.is_set():
+                    break
+        finally:
+            for f in futures:
+                f.cancel()
+            ex.shutdown(wait=False, cancel_futures=True)
+            self._save_reach(found)
+
+        # -- and then whether they take the credentials -------------------
+
+        def verify_one(s):
+            if self.cancelled.is_set():
+                raise OSError('cancelled')
+            return self.ask_exit(s, creds, timeout)
+
+        done = 0
+        # Wide, and measured that way: narrowing this to twelve made each
+        # handshake quicker and the run half as fast again, because what
+        # the tail is made of is timeouts waiting in line rather than
+        # handshakes competing.
+        ex = cf.ThreadPoolExecutor(max_workers=width)
+        try:
+            futures = {ex.submit(verify_one, s): s for s in answered}
+            for fut in cf.as_completed(list(futures)):
+                done += 1
+                s = futures[fut]
+                rec = found.get(s.file) or {}
+                try:
+                    took, _ip, _host = fut.result()
+                    rec['ok'] = True
+                    rec['opened'] = round(took, 3)
+                except Exception as e:
+                    rec['ok'] = False
+                    rec['why'] = str(e).strip()[:60] or 'no answer'
+                rec['at'] = int(time.time())
+                found[s.file] = rec
+                progress({'phase': 'testing', 'done': done,
+                          'total': len(answered), 'file': s.file,
+                          'result': rec})
                 if self.cancelled.is_set():
                     break
         finally:
@@ -892,7 +980,16 @@ class Engine:
         failing for as long as the restore takes, and if anything goes wrong
         in between, it leaves it failing for good.
         """
-        self.sysproxy.restore()
+        # Only put Windows back if Windows is currently pointed at *us*.
+        #
+        # Two copies of this app share a data folder, and so share the file
+        # that remembers what the proxy settings were before one of them
+        # touched them. A second copy running on its own port would otherwise
+        # find that stash on disconnect and "restore" it - taking the machine
+        # off the first copy's connection, which is somebody's actual VPN.
+        # Ours to put back means ours to have changed.
+        if self.sysproxy.engaged_for(self.port):
+            self.sysproxy.restore()
         rec = px.read_state(self.port)
         if rec:
             try:
