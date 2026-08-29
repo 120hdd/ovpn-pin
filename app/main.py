@@ -1988,6 +1988,13 @@ def ui_check(window):
         window.evaluate_js('wsHideCaptcha()')
         said['wsCleared'] = window.evaluate_js(
             "!document.getElementById('wsCapDlg').open && ws.token === null")
+        # And the form it opened over. Left up, it is a modal covering every
+        # screenshot taken after this point - which is how the exits shot
+        # came back showing the add-account dialog.
+        window.evaluate_js('acctShowForm(false)')
+        time.sleep(0.4)
+        said['formClosedAfterCaptcha'] = window.evaluate_js(
+            "!document.getElementById('acctDlg').open")
         said['sweep'] = window.evaluate_js(
             "document.getElementById('sweepSaid').textContent")
         said['sweepFolder'] = window.evaluate_js(
@@ -2299,10 +2306,20 @@ def ui_check(window):
             "document.querySelectorAll('.row--city').length")
         said['expandersOffered'] = window.evaluate_js(
             "document.querySelectorAll('[data-expand]').length")
+        # From partway down, because the bug was that opening one threw the
+        # list back to the top and lost the row that had just been clicked.
         window.evaluate_js(
-            "(() => { const p = document.querySelector('[data-expand]');"
+            "document.getElementById('list').scrollTop = 320")
+        time.sleep(0.4)
+        said['scrollBefore'] = window.evaluate_js(
+            "document.getElementById('list').scrollTop")
+        window.evaluate_js(
+            "(() => { const ps = document.querySelectorAll('[data-expand]');"
+            " const p = ps[Math.min(3, ps.length - 1)];"
             " if (p) p.click(); return !!p; })()")
         time.sleep(0.9)
+        said['scrollAfter'] = window.evaluate_js(
+            "document.getElementById('list').scrollTop")
         said['cityRows'] = window.evaluate_js(
             "document.querySelectorAll('.row--city').length")
         said['expandDidNotConnect'] = window.evaluate_js(
@@ -2390,11 +2407,20 @@ def ui_check(window):
         said['pickConnected'] = window.evaluate_js('window.__connectedTo')
         said['pickClosedSheet'] = window.evaluate_js(
             "!document.getElementById('picker').open")
+        # Put it all back: the real call, the idle state, and the status
+        # line, which choose() had set to CONNECTING and which nothing else
+        # resets while the connection it describes never happened.
         window.evaluate_js(
             'window.pywebview.api.connect = window.__realConnect;'
-            "state.mode = 'off'")
-        window.evaluate_js("document.getElementById('pick').click()")
-        time.sleep(0.8)
+            "state.mode = 'off'; render();"
+            "setStatus('DISCONNECTED', 'off', '', '');"
+            'openPicker()')
+        time.sleep(1.0)
+        # Asserted, because the rows stay in the DOM whether the sheet is up
+        # or not - so every check after this one passed while the screenshots
+        # showed the window behind it.
+        said['pickerBackOpen'] = window.evaluate_js(
+            "document.getElementById('picker').open")
         window.evaluate_js(
             "document.querySelector('#sortBy [data-sort=ping]').click()")
 
@@ -2426,6 +2452,14 @@ def ui_check(window):
         said['exitsSay'] = window.evaluate_js(
             "Array.from(document.querySelectorAll('.exit')).slice(0, 4).map("
             "e => e.dataset.state + ' ' + e.querySelector('.exit__ping').textContent)")
+        # Which provider each exit is, and that opening one did not throw
+        # the reader back to the top of the list.
+        said['exitSigns'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.exit .row__tag'))"
+            ".slice(0, 4).map(t => t.textContent + ':' + t.dataset.state)")
+        said['exitNames'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.exit__name'))"
+            ".slice(0, 3).map(e => e.textContent)")
         said['exitsShot'] = shot('picker-exits')
         # A country whose every address was refused. It has to read as
         # different from one nobody has asked yet - that difference is the

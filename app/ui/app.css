@@ -3776,3 +3776,9 @@ canvas.blob__body {
   border-color: color-mix(in srgb, var(--fail) 40%, transparent);
 }
 /* Untested keeps the default: dim, and plainly not a verdict. */
+
+/* The provider sign on an individual exit, at the head of the row where the
+   eye lands first - "es-006" and "es-mad" are the same kind of nothing until
+   you know whose numbering each one is. */
+.exit .row__tag { flex: none; width: 16px; height: 16px; font-size: 8.5px; }
+.exit__name { flex: 1; min-width: 0; }

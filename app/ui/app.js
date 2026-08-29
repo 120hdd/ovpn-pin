@@ -320,6 +320,10 @@ function drawList(query) {
   if (list.dataset.key === key) return;
   list.dataset.key = key;
 
+  // Where the reader was. replaceChildren() empties the list, which drops
+  // the scroll to nothing - so opening a country halfway down the list threw
+  // the page back to the top and lost the row that had just been clicked.
+  const wasAt = list.scrollTop;
   list.replaceChildren();
 
   if (!q) {
@@ -520,6 +524,10 @@ function drawList(query) {
   const AT_ONCE = 14;
   for (const c of found.slice(0, AT_ONCE)) list.append(...buildGroup(c));
   markCursor();
+  // Restored after the first batch, and again once the tail lands: the list
+  // is not tall enough to hold the old position until the rest of it is
+  // there, and a scrollTop set past the end is silently clamped.
+  if (wasAt) list.scrollTop = wasAt;
 
   // And the tail a handful at a time. Appending all sixty-one in one idle
   // callback only moved the long frame later - the sheet arrived instantly
@@ -536,6 +544,7 @@ function drawList(query) {
     const batch = document.createDocumentFragment();
     for (const c of rest.slice(at, at + AT_ONCE)) batch.append(...buildGroup(c));
     list.append(batch);
+    if (wasAt && list.scrollTop !== wasAt) list.scrollTop = wasAt;
     at += AT_ONCE;
     if (at < rest.length) later(more);
   };
@@ -3254,14 +3263,26 @@ async function toggleExits(code, after) {
     row.dataset.code = `file:${x.file}`;
     row.dataset.state = x.ok === true ? 'ok' : x.ok === false ? 'blocked' : 'untested';
 
+    // Which provider this exit is, first, because "es-006" and "es-mad"
+    // are the same kind of nothing until you know one is Windscribe's
+    // numbering and the other is Surfshark's.
+    const sign = document.createElement('span');
+    sign.className = 'row__tag';
+    sign.dataset.provider = x.provider;
+    sign.dataset.state = x.ok === true ? 'ok'
+      : x.ok === false ? 'blocked' : 'untested';
+    sign.textContent = (PROVIDER_NAMES[x.provider] || x.provider).slice(0, 1);
+    sign.title = PROVIDER_NAMES[x.provider] || x.provider;
+
     const name = document.createElement('span');
     name.className = 'exit__name';
-    // The short name off the front of the host. Surfshark pins several
-    // addresses to one hostname, so a column of them read
-    // "ad-leu.prod.surfshark.com" four times over, identical, with the one
-    // thing that differed - the address - pushed off the end of the row.
-    // The full host is still there to hover.
-    name.textContent = (x.host || x.file).split('.')[0] || x.host;
+    // The place, then the provider's own name for the box. Six rows reading
+    // "es-mad" told you nothing about which of them you were looking at;
+    // "Madrid · es-mad" at least says what the six have in common, and the
+    // address beside it is what tells them apart.
+    const short = (x.host || x.file).split('.')[0] || x.host;
+    const where = x.nick ? `${x.cityName} ${x.nick}` : x.cityName;
+    name.textContent = where && where !== short ? `${where} · ${short}` : short;
     name.title = x.host || '';
 
     const meta = document.createElement('span');
@@ -3275,7 +3296,7 @@ async function toggleExits(code, after) {
         : 'not tested';
     if (x.ok === false) said_.title = x.why || '';
 
-    row.append(name, meta, said_);
+    row.append(sign, name, meta, said_);
     box.append(row);
   }
   after.insertAdjacentElement('afterend', box);

@@ -2087,11 +2087,14 @@ def strays():
         try:
             import subprocess
             out = subprocess.run(
+                # Same reason as kill(): a console conjured for a child that
+                # writes nothing to it is a window nobody asked for.
                 ['powershell', '-NoProfile', '-Command',
                  "Get-CimInstance Win32_Process | Where-Object "
                  "{ $_.CommandLine -like '*ovpn-proxy.py*' } | "
                  "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"],
-                capture_output=True, text=True, timeout=15)
+                capture_output=True, text=True, timeout=15,
+                creationflags=0x08000000)
             for line in out.stdout.splitlines():
                 pid, _, cmd = line.partition('\t')
                 cmd = cmd.strip()
@@ -2180,8 +2183,13 @@ def do_status():
 def kill(pid):
     if os.name == 'nt':
         import subprocess
+        # CREATE_NO_WINDOW, because this runs behind a window with no console
+        # of its own - and without it taskkill is given a brand new one,
+        # which appears on screen as a black rectangle and vanishes again.
+        # Every disconnect flashed one.
         subprocess.run(['taskkill', '/PID', str(pid), '/F'],
-                       capture_output=True, check=True)
+                       capture_output=True, check=True,
+                       creationflags=0x08000000)
     else:
         import signal
         os.kill(pid, signal.SIGTERM)

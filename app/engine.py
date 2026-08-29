@@ -104,6 +104,21 @@ def clean_port(value):
     return port
 
 
+def city_key(name):
+    """One city, one key, whatever each provider's filename calls it.
+
+    Warsaw is `waw` to one and `war` to the other; Prague is `prg` and `pra`;
+    Marseille `mrs` and `mar`. Twenty-four of a hundred and eighty city rows
+    were the same place listed twice, each holding half its servers and
+    neither saying the other existed - the United Kingdom problem again, one
+    level down and twenty-four times over.
+
+    The name is what both agree on, so the name is the identity. Squashed to
+    letters and digits because it has to survive being a code in a picker.
+    """
+    return re.sub(r'[^a-z0-9]', '', (name or '').lower()) or 'x'
+
+
 def port_holder(port, host='127.0.0.1'):
     """Whether anything already has that port, and our own record of it if
     the thing holding it is one of ours.
@@ -242,8 +257,9 @@ class Engine:
             # name and nickname out of the notes beside it - so a city still
             # groups correctly when the notes are missing, it just reads as
             # its code.
-            city = cities.setdefault((s.country, s.city), {
-                'code': s.city, 'country': s.country,
+            key = city_key(note.get('city') or city_name(s.city))
+            city = cities.setdefault((s.country, key), {
+                'code': key, 'country': s.country,
                 'name': note.get('city') or city_name(s.city),
                 'nick': note.get('nick') or '',
                 'count': 0, 'tested': 0, 'ok': 0, 'ping': None,
@@ -561,7 +577,7 @@ class Engine:
         pool = [s for s in self.servers()
                 if (country in (None, 'auto') or s.country == country)
                 and (provider is None or s.provider == provider)
-                and (city is None or s.city == city)]
+                and (city is None or self.city_of(s)[0] == city)]
         pool.sort(key=lambda s: (s.seconds is None, s.seconds or 0))
         if country in (None, 'auto'):
             seen, out = set(), []
@@ -572,6 +588,13 @@ class Engine:
                     out.append(s)
             return out[:140]
         return pool[:80]
+
+    def city_of(self, server, notes=None):
+        """The key and the display name of the city an exit is in."""
+        notes = windscribe.meta() if notes is None else notes
+        note = notes.get(windscribe.config_stem(server.file)) or {}
+        name = note.get('city') or city_name(server.city)
+        return city_key(name), name
 
     def exits(self, country, provider=None, city=None):
         """Every individual exit in one country, with what is known about it.
@@ -590,7 +613,7 @@ class Engine:
                 continue
             if provider and s.provider != provider:
                 continue
-            if city and s.city != city:
+            if city and self.city_of(s, notes)[0] != city:
                 continue
             rec = found.get(s.file) or {}
             try:
