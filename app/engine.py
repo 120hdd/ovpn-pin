@@ -277,6 +277,7 @@ class Engine:
                                                   'ok': 0,
                                                   'ping': None,
                                                   'byOk': {},
+                                                  'byTested': {},
                                                   'byPing': {}})
             c['cities'].add(s.city)
             c['count'] += 1
@@ -288,6 +289,12 @@ class Engine:
             rec = found.get(s.file)
             if rec:
                 c['tested'] += 1
+                # Per provider as well, because "this country was tested" is
+                # not "this provider's share of it was". Windscribe's exits
+                # measured and Surfshark's never asked left every Surfshark
+                # row reading "blocked here" - which is not a softer way of
+                # saying untested, it is the opposite of true.
+                c['byTested'][s.provider] = c['byTested'].get(s.provider, 0) + 1
                 if rec.get('ok'):
                     c['ok'] += 1
                     c['byOk'][s.provider] = c['byOk'].get(s.provider, 0) + 1
@@ -327,6 +334,7 @@ class Engine:
                         'ok': c['ok'],
                         'ping': c['ping'],
                         'byOk': c['byOk'],
+                        'byTested': c['byTested'],
                         'byPing': c['byPing'],
                         'best': c['best']})
         # Answering first, then quickest, then the rest.

@@ -3727,3 +3727,22 @@ canvas.blob__body {
 /* A provider row is the same country seen one way, so it lines up with the
    cities rather than repeating the flag above it. */
 .row--via { padding-left: 30px; }
+
+/* An empty control keeping its column. */
+.expand--empty { pointer-events: none; }
+.expand--empty:hover { background: none; }
+
+/* Everything down the right-hand edge in one column, whatever a row happens
+   to carry: the star, then the plus, both the same width, both last. */
+.row__marks, .row__tags { margin-left: auto; }
+.star, .expand { margin-left: 0; }
+
+/* The auto row is one line like the rest of them. Three lines of prose about
+   racing every location was the tallest thing in a list whose whole job is
+   to be scanned. */
+.row--auto .row__sub {
+  font-size: 10.5px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

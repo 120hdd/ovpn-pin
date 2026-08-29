@@ -210,9 +210,14 @@ function nameOf(code) {
       .replace(/_\d{1,3}(?:\.\d{1,3}){3}\.ovpn$/, '');
     return `${c ? c.name : file.slice(0, 2).toUpperCase()} · ${host}`;
   }
-  const [where, via] = (code || '').toLowerCase().split(':');
+  const [place, via] = (code || '').toLowerCase().split(':');
+  const [where, city] = place.split('/');
   const c = state.countries.find((x) => x.code === where);
-  const name = c ? c.name : (where || '').toUpperCase();
+  let name = c ? c.name : (where || '').toUpperCase();
+  if (city) {
+    const found = (c && c.cityList || []).find((x) => x.code === city);
+    name = found ? `${name} · ${found.name}` : `${name} · ${city.toUpperCase()}`;
+  }
   return via ? `${name} · ${PROVIDER_NAMES[via] || via}` : name;
 }
 
@@ -241,9 +246,16 @@ function render() {
     $('more').setAttribute('aria-expanded', 'false');
   }
 
-  const c = state.countries.find((x) => x.code === state.picked);
+  // Through nameOf, which knows the four shapes a pick can take. Looking
+  // the code up in the country list only ever worked for the plainest of
+  // them, so choosing France-through-Windscribe put the string
+  // "fr:windscribe" on the front of the app.
+  const where = String(state.picked || '').startsWith('file:')
+    ? state.picked.slice(5, 7)
+    : String(state.picked || '').split(/[:/]/)[0];
+  const c = state.countries.find((x) => x.code === where);
   $('pickLabel').textContent = state.picked === 'auto'
-    ? 'Fastest available' : (c ? c.name : state.picked);
+    ? 'Fastest available' : nameOf(state.picked);
   $('pickFlag').style.backgroundImage = c ? flagUrl(c.code) : '';
 }
 
@@ -425,17 +437,28 @@ function drawList(query) {
       // by the row directly above it.
       name.textContent = PROVIDER_NAMES[via] || via;
       const n = (c.by || {})[via] || 0;
-      const ok = (c.byOk || {})[via];
+      const ok = (c.byOk || {})[via] || 0;
       const ping = (c.byPing || {})[via];
+      // This provider's own tally. The country's would call a provider
+      // nobody has asked about blocked, on the strength of the other one
+      // having been measured.
+      const tried = (c.byTested || {})[via] || 0;
       meta.textContent = `${n} relay${n === 1 ? '' : 's'}`
         + (ping !== undefined && ping !== null ? ` · ${msSaid(ping)}` : '')
-        + (c.tested && !ok ? ' · blocked here' : '');
-      row.dataset.state = !c.tested ? 'untested'
-        : ok ? (ok < n ? 'some' : 'ok') : 'blocked';
+        + (tried && !ok ? (tried >= n ? ' · blocked here'
+          : ` · 0/${tried} so far`) : '')
+        + (tried && ok && ok < n ? ` · ${ok}/${n}` : '');
+      row.dataset.state = !tried ? 'untested'
+        : ok ? (ok < tried ? 'some' : 'ok')
+          : (tried >= n ? 'blocked' : 'some');
     } else if (heads) {
       // Short, because the rows underneath say it better and this line
       // now has to hold a time as well.
-      meta.textContent = meta.textContent + ' · any' + reachSaid(c);
+      // "any" only when there is nothing better to say. Once there is a
+      // time on the line it is the rows underneath that mean "any", and the
+      // word was only pushing the time off the end.
+      const said_ = reachSaid(c);
+      meta.textContent = meta.textContent + (said_ || ' · any');
       row.dataset.state = reachState(c);
     } else {
       // What the last test found, after the count: a time when it answered,
@@ -484,13 +507,17 @@ function drawList(query) {
       // into its hosts, because there is no middle to show. Either way it is
       // the same plus in the same place - what it reveals is the row's
       // business, not the reader's.
+      if (!heads) row.append(starFor(code));
       if (many || c.count > 1) {
         row.append(expander(many ? 'expand' : 'exits', c.code,
                             many ? state.openCities.has(c.code)
                                  : state.openExits === c.code));
+      } else {
+        row.append(slot());
       }
+    } else if (!heads) {
+      row.append(starFor(code), slot());
     }
-    if (!heads) row.append(starFor(code));
     return row;
   };
 
@@ -3109,17 +3136,26 @@ function msSaid(ms) {
 /* What a row says about itself once it has been tested: nothing at all
    before, a time when it answered, and why not when it did not. Kept short -
    this sits after the relay count on one line. */
+/* "Blocked here" has to mean everything here was asked and nothing answered.
+
+   Anything less is a guess wearing a fact's clothes: a country with three
+   exits where one was measured and refused was being called blocked while
+   two of them had never been asked at all. If some are still unasked it says
+   how many answered and leaves the rest open. */
 function reachSaid(c) {
   if (!c || !c.tested) return '';
-  if (!c.ok) return ' · blocked here';
-  const some = c.ok < c.count ? ` · ${c.ok}/${c.count} answering` : '';
+  if (!c.ok) {
+    return c.tested >= c.count ? ' · blocked here'
+      : ` · 0/${c.tested} so far`;
+  }
+  const some = c.ok < c.tested ? ` · ${c.ok}/${c.tested}` : '';
   return c.ping === null ? some : ` · ${msSaid(c.ping)}${some}`;
 }
 
 function reachState(c) {
   if (!c || !c.tested) return 'untested';
-  if (!c.ok) return 'blocked';
-  return c.ok < c.count ? 'some' : 'ok';
+  if (!c.ok) return c.tested >= c.count ? 'blocked' : 'some';
+  return c.ok < c.tested ? 'some' : 'ok';
 }
 
 /* -- running one ------------------------------------------------------- */
@@ -3231,10 +3267,13 @@ async function toggleExits(code, after) {
 
     const name = document.createElement('span');
     name.className = 'exit__name';
-    // The host, because that is what the address was pinned from and what
-    // the certificate is checked against - the filename is ours, the host is
-    // the provider's.
-    name.textContent = x.host || x.file;
+    // The short name off the front of the host. Surfshark pins several
+    // addresses to one hostname, so a column of them read
+    // "ad-leu.prod.surfshark.com" four times over, identical, with the one
+    // thing that differed - the address - pushed off the end of the row.
+    // The full host is still there to hover.
+    name.textContent = (x.host || x.file).split('.')[0] || x.host;
+    name.title = x.host || '';
 
     const meta = document.createElement('span');
     meta.className = 'exit__meta';
@@ -3327,6 +3366,15 @@ function cityLoad(c) {
 /* The plus on a row. `kind` is what it opens - the cities inside a country,
    or the hosts behind one place - and the list catches it before the row it
    sits in, which is the only reason a control can live inside a button. */
+/* An empty one of the same size. Rows without a plus would otherwise pull
+   their star a control's width to the right, and nothing down the right-hand
+   edge of the list would line up with anything. */
+function slot() {
+  const el = document.createElement('span');
+  el.className = 'expand expand--empty';
+  return el;
+}
+
 function expander(kind, code, on) {
   const el = document.createElement('span');
   el.className = 'expand';
@@ -3346,7 +3394,8 @@ function buildCity(c, city, via) {
   row.className = 'row row--city' + (state.picked === code ? ' is-picked' : '');
   row.dataset.code = code;
   row.dataset.state = !city.tested ? 'untested'
-    : city.ok ? (city.ok < city.count ? 'some' : 'ok') : 'blocked';
+    : city.ok ? (city.ok < city.tested ? 'some' : 'ok')
+      : (city.tested >= city.count ? 'blocked' : 'some');
 
   // A dot where the country has its flag, so the names line up in one
   // column rather than stepping in and out under it.
@@ -3381,8 +3430,12 @@ function buildCity(c, city, via) {
   const n = via ? (city.by || {})[via] || 0 : city.count;
   const bits = [`${n} relay${n === 1 ? '' : 's'}`];
   if (city.ping !== null && city.ping !== undefined) bits.push(msSaid(city.ping));
-  if (city.tested && !city.ok) bits.push('blocked here');
-  else if (city.tested && city.ok < city.count) bits.push(`${city.ok}/${city.count} answering`);
+  if (city.tested && !city.ok) {
+    bits.push(city.tested >= city.count ? 'blocked here'
+      : `0/${city.tested} so far`);
+  } else if (city.tested && city.ok < city.tested) {
+    bits.push(`${city.ok}/${city.tested}`);
+  }
   meta.textContent = bits.join(' · ');
   copy.append(name, meta);
 
@@ -3413,8 +3466,8 @@ function buildCity(c, city, via) {
     marks.append(p2p);
   }
 
-  row.append(copy, marks, expander('exits', code, state.openExits === code),
-             starFor(code));
+  row.append(copy, marks, starFor(code),
+             expander('exits', code, state.openExits === code));
   return row;
 }
 
