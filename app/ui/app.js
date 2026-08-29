@@ -366,10 +366,14 @@ function drawList(query) {
      "whichever answers" - which is what most people want most of the time.
      The rows under it are for when it is not. */
   const buildGroup = (c) => {
-    const from = Object.keys(c.by || {}).filter((k) => c.by[k] > 0).sort();
-    const out = from.length < 2
-      ? [build(c)]
-      : [build(c, null, true), ...from.map((via) => build(c, via))];
+    /* One row per place, and a sign for who backs it.
+
+       A country reached by both used to split into a row per provider, and
+       the rows underneath said less than the sign does: "Surfshark, 23
+       relays" with nothing measured about any of them, taking a line each
+       and pushing the next country off the screen. Which provider an exit
+       comes from is a fact about the row, not another row. */
+    const out = [build(c)];
 
     /* The cities inside it, and only when asked for.
 
@@ -387,18 +391,9 @@ function drawList(query) {
         // Both providers in one city is two ways into one place, the same
         // as it is for a country - so it splits the same way rather than
         // merging into a row that cannot say which you would get.
-        const ways = Object.keys(city.by || {}).filter((k) => city.by[k] > 0);
-        if (ways.length > 1) {
-          for (const via of ways.sort()) {
-            const r = buildCity(c, city, via);
-            r.style.setProperty('--i', at++);
-            out.push(r);
-          }
-        } else {
-          const r = buildCity(c, city);
-          r.style.setProperty('--i', at++);
-          out.push(r);
-        }
+        const r = buildCity(c, city);
+        r.style.setProperty('--i', at++);
+        out.push(r);
       }
     }
     return out;
@@ -482,15 +477,9 @@ function drawList(query) {
       const tags = document.createElement('span');
       tags.className = 'row__tags';
       for (const key of from) {
-        const t = document.createElement('span');
-        t.className = 'row__tag';
-        t.dataset.provider = key;
-        // An initial each, so a country backed by both is one glance rather
-        // than two words competing with the country's own name.
-        t.textContent = (PROVIDER_NAMES[key] || key).slice(0, 1);
-        t.title = (PROVIDER_NAMES[key] || key)
-          + ' · ' + by[key] + ' relay' + (by[key] === 1 ? '' : 's');
-        tags.append(t);
+        tags.append(providerTag(key, by[key], (c.byTested || {})[key] || 0,
+                                (c.byOk || {})[key] || 0,
+                                (c.byPing || {})[key]));
       }
       row.dataset.tags = '1';
       tagsFor = tags;
@@ -3144,12 +3133,12 @@ function msSaid(ms) {
    how many answered and leaves the rest open. */
 function reachSaid(c) {
   if (!c || !c.tested) return '';
-  if (!c.ok) {
-    return c.tested >= c.count ? ' · blocked here'
-      : ` · 0/${c.tested} so far`;
-  }
-  const some = c.ok < c.tested ? ` · ${c.ok}/${c.tested}` : '';
-  return c.ping === null ? some : ` · ${msSaid(c.ping)}${some}`;
+  // The ratio has moved to the sign, which is beside the name and coloured
+  // by it. Saying it here as well cost the end of the line - "PL - 12
+  // relays - 139 ms - ..." with the number that mattered cut off - to
+  // repeat what a green letter already said.
+  if (!c.ok) return c.tested >= c.count ? ' · blocked here' : '';
+  return c.ping === null ? '' : ` · ${msSaid(c.ping)}`;
 }
 
 function reachState(c) {
@@ -3321,6 +3310,31 @@ function starFor(code) {
   return star;
 }
 
+/* The sign that says who backs a place, and how that provider is doing there.
+
+   It replaces a row per provider. The row said "Surfshark - 23 relays" and
+   nothing else, because nothing about those twenty-three had been measured;
+   the sign says the same thing in one letter and says it beside the name,
+   where the eye already is. Its colour is that provider's own tally and not
+   the country's, which is the distinction that had every Surfshark row
+   reading blocked on the strength of Windscribe having been tested. */
+function providerTag(key, count, tested, ok, ping) {
+  const t = document.createElement('span');
+  t.className = 'row__tag';
+  t.dataset.provider = key;
+  t.dataset.state = !tested ? 'untested'
+    : ok ? (ok < tested ? 'some' : 'ok')
+      : (tested >= count ? 'blocked' : 'some');
+  t.textContent = (PROVIDER_NAMES[key] || key).slice(0, 1);
+  const name = PROVIDER_NAMES[key] || key;
+  const said_ = !tested ? 'not tested yet'
+    : ok ? `${ok} of ${tested} answered`
+      + (ping !== undefined && ping !== null ? `, best ${msSaid(ping)}` : '')
+      : `none of ${tested} answered`;
+  t.title = `${name} · ${count} relay${count === 1 ? '' : 's'} · ${said_}`;
+  return t;
+}
+
 function isFavourite(code) {
   return (state.favourites || []).includes(code);
 }
@@ -3430,11 +3444,8 @@ function buildCity(c, city, via) {
   const n = via ? (city.by || {})[via] || 0 : city.count;
   const bits = [`${n} relay${n === 1 ? '' : 's'}`];
   if (city.ping !== null && city.ping !== undefined) bits.push(msSaid(city.ping));
-  if (city.tested && !city.ok) {
-    bits.push(city.tested >= city.count ? 'blocked here'
-      : `0/${city.tested} so far`);
-  } else if (city.tested && city.ok < city.tested) {
-    bits.push(`${city.ok}/${city.tested}`);
+  if (city.tested && !city.ok && city.tested >= city.count) {
+    bits.push('blocked here');
   }
   meta.textContent = bits.join(' · ');
   copy.append(name, meta);
@@ -3466,6 +3477,17 @@ function buildCity(c, city, via) {
     marks.append(p2p);
   }
 
+  const from = Object.keys(city.by || {}).filter((k) => city.by[k] > 0).sort();
+  if (from.length) {
+    const tags = document.createElement('span');
+    tags.className = 'row__tags';
+    for (const key of from) {
+      // A city's own numbers are not split per provider, so the sign says
+      // how many are there and leaves the verdict to the country's.
+      tags.append(providerTag(key, city.by[key], 0, 0, null));
+    }
+    marks.append(tags);
+  }
   row.append(copy, marks, starFor(code),
              expander('exits', code, state.openExits === code));
   return row;

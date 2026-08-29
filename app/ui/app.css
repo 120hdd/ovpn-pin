@@ -3746,3 +3746,33 @@ canvas.blob__body {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+
+/* The provider sign, beside the name, in the state that provider is in here.
+   It replaced a row each, which said less and cost a line apiece. */
+.row__tag {
+  display: grid;
+  place-items: center;
+  width: 17px; height: 17px;
+  padding: 0;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--text-off);
+  background: rgba(255, 255, 255, 0.03);
+}
+.row__tag[data-state="ok"] {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+.row__tag[data-state="some"] {
+  color: var(--work, #e5c454);
+  border-color: color-mix(in srgb, var(--work, #e5c454) 40%, transparent);
+}
+.row__tag[data-state="blocked"] {
+  color: var(--fail);
+  border-color: color-mix(in srgb, var(--fail) 40%, transparent);
+}
+/* Untested keeps the default: dim, and plainly not a verdict. */

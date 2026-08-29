@@ -2222,12 +2222,26 @@ def ui_check(window):
               drawList('');
             })()""")
         time.sleep(0.6)
+        # One row per place now, with a sign for each provider that backs
+        # it - the rows-per-provider said less than the signs do and cost a
+        # line each, on a list whose whole job is to be scanned.
         said['splitRows'] = window.evaluate_js(
             "Array.from(document.querySelectorAll('.row[data-code]'))"
             ".map(r => r.dataset.code).filter(c => c.startsWith('z'))")
-        # The head still means "whichever answers", and says so.
-        said['splitHeadSays'] = window.evaluate_js(
-            "(document.querySelector('.row--heads .row__meta')||{}).textContent")
+        said['splitSigns'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row[data-code=zz]"
+            " .row__tag')).map(t => t.textContent + ':' + t.dataset.state)")
+        said['splitOneSign'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row[data-code=zy]"
+            " .row__tag')).map(t => t.textContent)")
+        # And the sign's colour is that provider's own tally, which is the
+        # whole reason it replaced the rows: a provider nobody asked about
+        # must not inherit the other one's verdict.
+        said['signStates'] = window.evaluate_js(
+            "(() => { const n = {};"
+            " for (const t of document.querySelectorAll('.row__tag'))"
+            "   n[t.dataset.state] = (n[t.dataset.state] || 0) + 1;"
+            " return n; })()")
         # The rows must all be one height. Tags used to sit under the name,
         # so a country that had them was half a row taller than one that did
         # not, for a reason nothing on screen explained.
@@ -2235,12 +2249,9 @@ def ui_check(window):
             "Array.from(new Set(Array.from("
             "document.querySelectorAll('.row:not(.row--auto)'))"
             ".map(r => Math.round(r.getBoundingClientRect().height)))).sort()")
-        said['splitViaNames'] = window.evaluate_js(
-            "Array.from(document.querySelectorAll('.row--via .row__name'))"
-            ".map(e => e.textContent)")
-        said['splitViaCounts'] = window.evaluate_js(
-            "Array.from(document.querySelectorAll('.row--via .row__meta'))"
-            ".map(e => e.textContent)")
+        said['splitSignTitles'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row[data-code=zz]"
+            " .row__tag')).map(t => t.title)")
         # A country only one provider reaches stays a single plain row - if
         # everything split, the split would mean nothing.
         said['splitLeavesSingles'] = window.evaluate_js(
