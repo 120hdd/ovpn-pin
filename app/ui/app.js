@@ -199,15 +199,26 @@ function setHint(text, bad) {
   el.classList.toggle('is-bad', !!bad);
 }
 
+// The app files the United Kingdom under `uk`; Windscribe's filenames say
+// `gb`. The engine folds them together, so anything reading a code out of a
+// filename has to fold it the same way or it will look for a country that is
+// not in the list.
+const CANON = { gb: 'uk' };
+const canonCode = (c) => CANON[(c || '').toLowerCase()] || (c || '').toLowerCase();
+
 function nameOf(code) {
   // A named exit says the country and the host it was pinned from. The
   // filename carries both - "at-vie.ws.at-007.totallyacdn.com_1.2.3.4.ovpn" -
   // which is why it can be read back without the exits list to hand.
   if ((code || '').startsWith('file:')) {
-    const file = code.slice(5);
-    const c = state.countries.find((x) => x.code === file.slice(0, 2));
+    // The sweep writes its measured time onto the front of a filename, so
+    // "05.2s-id-jak.prod..." begins with the time and not the country - and
+    // reading the first two characters put "05" on the front of the app.
+    const file = code.slice(5).replace(/^\d+\.\d+s-/, '');
+    const c = state.countries.find((x) => x.code === canonCode(file.slice(0, 2)));
     const host = file.replace(/^[a-z]{2}-[a-z0-9]{3}\.(?:prod|ws)\./i, '')
-      .replace(/_\d{1,3}(?:\.\d{1,3}){3}\.ovpn$/, '');
+      .replace(/_\d{1,3}(?:\.\d{1,3}){3}\.ovpn$/, '')
+      .split('.')[0];
     return `${c ? c.name : file.slice(0, 2).toUpperCase()} · ${host}`;
   }
   const [place, via] = (code || '').toLowerCase().split(':');
@@ -251,7 +262,7 @@ function render() {
   // them, so choosing France-through-Windscribe put the string
   // "fr:windscribe" on the front of the app.
   const where = String(state.picked || '').startsWith('file:')
-    ? state.picked.slice(5, 7)
+    ? canonCode(state.picked.slice(5).replace(/^\d+\.\d+s-/, '').slice(0, 2))
     : String(state.picked || '').split(/[:/]/)[0];
   const c = state.countries.find((x) => x.code === where);
   $('pickLabel').textContent = state.picked === 'auto'
@@ -444,8 +455,7 @@ function drawList(query) {
       const tried = (c.byTested || {})[via] || 0;
       meta.textContent = `${n} relay${n === 1 ? '' : 's'}`
         + (ping !== undefined && ping !== null ? ` · ${msSaid(ping)}` : '')
-        + (tried && !ok ? (tried >= n ? ' · blocked here'
-          : ` · 0/${tried} so far`) : '')
+        + (tried && !ok ? (tried >= n ? ' · blocked' : '') : '')
         + (tried && ok && ok < n ? ` · ${ok}/${n}` : '');
       row.dataset.state = !tried ? 'untested'
         : ok ? (ok < tried ? 'some' : 'ok')
@@ -3146,7 +3156,7 @@ function reachSaid(c) {
   // by it. Saying it here as well cost the end of the line - "PL - 12
   // relays - 139 ms - ..." with the number that mattered cut off - to
   // repeat what a green letter already said.
-  if (!c.ok) return c.tested >= c.count ? ' · blocked here' : '';
+  if (!c.ok) return c.tested >= c.count ? ' · blocked' : '';
   return c.ping === null ? '' : ` · ${msSaid(c.ping)}`;
 }
 
@@ -3177,7 +3187,27 @@ async function startReach() {
    would also re-sort under the reader's hands halfway through - so the row's
    own text is patched and the order is left until the run is over. */
 function patchRow(file, rec) {
-  const country = file.slice(0, 2);
+  /* The exit's own row first, if it happens to be open. This is the one the
+     eye is on while a test runs - a list of servers reading "not tested"
+     while their country's time is being rewritten above them is the app
+     disagreeing with itself in public. */
+  const ex = document.querySelector(
+    `.exit[data-code="file:${(window.CSS && CSS.escape) ? CSS.escape(file) : file}"]`);
+  if (ex) {
+    ex.dataset.state = rec.ok === true ? 'ok'
+      : rec.ok === false ? 'blocked' : 'untested';
+    const cell = ex.querySelector('.exit__ping');
+    if (cell) {
+      cell.textContent = rec.ok === false ? (rec.why || 'no answer')
+        : rec.ms !== null && rec.ms !== undefined ? msSaid(rec.ms)
+          : 'not tested';
+      cell.title = rec.why || '';
+    }
+    const sign = ex.querySelector('.row__tag');
+    if (sign) sign.dataset.state = ex.dataset.state;
+  }
+
+  const country = canonCode(file.replace(/^\d+\.\d+s-/, '').slice(0, 2));
   const row = document.querySelector(`.row[data-code="${country}"] .row__meta`);
   if (!row) return;
   if (rec.ms !== null && rec.ms !== undefined) {
@@ -3211,6 +3241,7 @@ window.onReachDone = (r) => {
   $('reachBar').style.setProperty('--at', '0%');
   if (!r.ok) { said($('reachSaid'), r.error || 'Could not test.', 'bad'); return; }
   state.countries = r.countries || state.countries;
+  const wasOpen = state.openExits;
   state.exits = {};            // measured again, so the old detail is stale
   said($('reachSaid'),
     r.cancelled ? `Stopped after ${r.tested}. ${r.ok} answered.`
@@ -3220,6 +3251,14 @@ window.onReachDone = (r) => {
   // because answering ones sort above blocked ones.
   $('list').dataset.key = '';
   drawList($('search').value.trim());
+  // And re-open whatever was open, against the new answers. Clearing the
+  // cache only stops the *next* open being stale; the one already on screen
+  // stays exactly as it was until it is rebuilt.
+  if (wasOpen) {
+    state.openExits = null;
+    const holder = document.querySelector(`[data-exits="${wasOpen}"]`);
+    if (holder) toggleExits(wasOpen, holder.closest('.row'));
+  }
   render();
 };
 
@@ -3254,6 +3293,10 @@ async function toggleExits(code, after) {
 
   const box = document.createElement('div');
   box.className = 'exits';
+  // Whether every row here carries the same box name, in which case it
+  // tells nobody anything.
+  const shared = new Set(list.map(
+    (x) => (x.host || x.file).split('.')[0])).size < list.length;
   let at = 0;
   for (const x of list) {
     const row = document.createElement('button');
@@ -3282,7 +3325,12 @@ async function toggleExits(code, after) {
     // address beside it is what tells them apart.
     const short = (x.host || x.file).split('.')[0] || x.host;
     const where = x.nick ? `${x.cityName} ${x.nick}` : x.cityName;
-    name.textContent = where && where !== short ? `${where} · ${short}` : short;
+    // The box's own name only when it distinguishes one row from another.
+    // Surfshark pins several addresses to one host, so a column of them read
+    // "Jakarta - id-jak" eight times over: the city said eight times, and
+    // the address - the only thing that differed - crowded to the edge.
+    name.textContent = (where && shared) ? where
+      : where && where !== short ? `${where} · ${short}` : short;
     name.title = x.host || '';
 
     const meta = document.createElement('span');
@@ -3466,7 +3514,7 @@ function buildCity(c, city, via) {
   const bits = [`${n} relay${n === 1 ? '' : 's'}`];
   if (city.ping !== null && city.ping !== undefined) bits.push(msSaid(city.ping));
   if (city.tested && !city.ok && city.tested >= city.count) {
-    bits.push('blocked here');
+    bits.push('blocked');
   }
   meta.textContent = bits.join(' · ');
   copy.append(name, meta);

@@ -2471,6 +2471,166 @@ def ui_check(window):
             "      + r.querySelector('.row__meta').textContent; })()")
         time.sleep(0.7)
         said['blockedShot'] = shot('picker-blocked')
+        # -- a sweep of the whole list ---------------------------------
+        #
+        # Asked of the rendered page rather than of the code, because every
+        # one of these has been wrong at some point in a way the code read
+        # correctly: a row two pixels wider than the list, a control that
+        # lost its column, a name that came out as its own filename.
+        said['audit'] = window.evaluate_js(r"""
+            (function () {
+              const list = document.getElementById('list');
+              const box = list.getBoundingClientRect();
+              // Only the rows actually on screen. The list uses
+              // content-visibility, so anything scrolled out of view reports
+              // its contain-intrinsic-size placeholder rather than a height
+              // anything has measured - and comparing those against real
+              // ones invents a difference that is not on the page.
+              const rows = Array.from(list.querySelectorAll('.row[data-code]'))
+                .filter((r) => {
+                  const b = r.getBoundingClientRect();
+                  return b.bottom > box.top && b.top < box.bottom;
+                });
+              const heights = new Set();
+              const bad = [];
+              let noName = 0, noChip = 0, escaped = 0, rawCode = 0;
+              for (const r of rows) {
+                const rb = r.getBoundingClientRect();
+                heights.add(Math.round(rb.height));
+                if (rb.right > box.right + 0.5 || rb.left < box.left - 0.5) {
+                  bad.push(r.dataset.code);
+                }
+                const n = r.querySelector('.row__name');
+                if (!n || !n.textContent.trim()) noName++;
+                // A name that still looks like a filename or a code.
+                if (n && /\.ovpn|\.prod\.|totallyacdn/.test(n.textContent)) rawCode++;
+                if (!r.querySelector('.chip')) noChip++;
+                if (r.querySelector('.row__meta') &&
+                    r.querySelector('.row__meta').scrollWidth
+                      > r.querySelector('.row__meta').clientWidth + 1) escaped++;
+              }
+              // The right-hand controls must all start at the same x, or the
+              // column reads as ragged however tidy each row is on its own.
+              const starXs = new Set(Array.from(
+                list.querySelectorAll('.row > .star'))
+                .map(e => Math.round(e.getBoundingClientRect().left)));
+              return {
+                rows: rows.length,
+                heights: [...heights].sort((a, b) => a - b),
+                overflowing: bad.slice(0, 4),
+                // What sticks out, which is the only sideways overflow a
+                // person can see. Not scrollWidth against clientWidth, which
+                // differ by the list's own padding and by the width a
+                // vertical scrollbar takes back after the rows were sized
+                // without it; and not scrollLeft, which moves under script
+                // even on a box whose overflow-x is hidden. Both of those
+                // report eight pixels of nothing on a list where no row
+                // overhangs by one.
+                sideways: (function () {
+                  let by = 0;
+                  for (const el of list.querySelectorAll('.row, .exit')) {
+                    const b = el.getBoundingClientRect();
+                    by = Math.max(by, b.right - box.right, box.left - b.left);
+                  }
+                  return Math.round(by);
+                })(),
+                withoutName: noName,
+                withoutFlag: noChip,
+                nameIsAFilename: rawCode,
+                metaTruncated: escaped,
+                starColumns: [...starXs].sort((a, b) => a - b),
+                // And if the list scrolls sideways at all, which element is
+                // sticking out. "8px of overflow" is not actionable; the
+                // class of the thing causing it is.
+                overflowX: getComputedStyle(list).overflowX,
+                padding: getComputedStyle(list).paddingLeft + '/'
+                  + getComputedStyle(list).paddingRight,
+                widest: (function () {
+                  let worst = null, by = 0;
+                  for (const el of list.querySelectorAll('*')) {
+                    const over = el.getBoundingClientRect().right - box.right;
+                    if (over > by) { by = over; worst = el; }
+                  }
+                  for (const el of list.querySelectorAll('*')) {
+                    const under = box.left - el.getBoundingClientRect().left;
+                    if (under > by) { by = under; worst = el; }
+                  }
+                  return worst
+                    ? `${worst.className} ${Math.round(by)}px` : 'nothing';
+                })(),
+              };
+            })()""")
+        said['whyTall'] = window.evaluate_js("""
+            (function () {
+              const pick = (sel) => document.querySelector(sel);
+              const shape = (r) => {
+                if (!r) return null;
+                const cs = getComputedStyle(r);
+                const copy = r.querySelector('.row__copy');
+                const meta = r.querySelector('.row__meta');
+                return {
+                  code: r.dataset.code,
+                  h: Math.round(r.getBoundingClientRect().height),
+                  pad: cs.paddingTop + '/' + cs.paddingBottom,
+                  copyH: copy ? Math.round(copy.getBoundingClientRect().height) : 0,
+                  metaH: meta ? Math.round(meta.getBoundingClientRect().height) : 0,
+                  metaW: meta ? Math.round(meta.getBoundingClientRect().width) : 0,
+                  metaScroll: meta ? meta.scrollWidth : 0,
+                  kids: Array.from(r.children).map(k => k.className),
+                };
+              };
+              const rows = Array.from(
+                document.querySelectorAll('.row[data-code]'));
+              const short = rows.find(r =>
+                Math.round(r.getBoundingClientRect().height) < 60);
+              const tall = rows.find(r =>
+                Math.round(r.getBoundingClientRect().height) >= 60);
+              return {short: shape(short), tall: shape(tall)};
+            })()""")
+        said['auditDetail'] = window.evaluate_js("""
+            (function () {
+              const out = {tall: [], cut: []};
+              const lb = document.getElementById('list').getBoundingClientRect();
+              for (const r of document.querySelectorAll('.row[data-code]')) {
+                const b = r.getBoundingClientRect();
+                if (b.bottom <= lb.top || b.top >= lb.bottom) continue;
+                const h = Math.round(b.height);
+                if (h !== 53) out.tall.push(r.dataset.code + ':' + h);
+                const m = r.querySelector('.row__meta');
+                if (m && m.scrollWidth > m.clientWidth + 1) {
+                  out.cut.push(r.dataset.code + ' :: ' + m.textContent);
+                }
+              }
+              return out;
+            })()""")
+        # Search, which is the other way into the same list.
+        window.evaluate_js(
+            "document.getElementById('search').value = 'net';"
+            "drawList('net')")
+        time.sleep(0.6)
+        said['searchFound'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row[data-code]'))"
+            ".map(r => r.dataset.code).slice(0, 5)")
+        said['searchKeepsControls'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row[data-code]'))"
+            ".every(r => r.querySelector('.star'))")
+        window.evaluate_js(
+            "document.getElementById('search').value = ''; drawList('')")
+        time.sleep(0.5)
+        # Each sort really reorders, and none of them loses a row.
+        said['sortCounts'] = window.evaluate_js("""
+            (function () {
+              const out = {};
+              for (const k of ['ping', 'load', 'name']) {
+                document.querySelector(`#sortBy [data-sort=${k}]`).click();
+                const rows = Array.from(
+                  document.querySelectorAll('.row[data-code]'))
+                  .map(r => r.dataset.code).filter(c => c !== 'auto');
+                out[k] = [rows.length, rows.slice(0, 3).join(',')];
+              }
+              document.querySelector('#sortBy [data-sort=ping]').click();
+              return out;
+            })()""")
         said['pickedShot'] = shot('picker-picked')
         said['errorsAfter'] = window.evaluate_js('window.__errs')
     except Exception as e:

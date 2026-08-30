@@ -3782,3 +3782,32 @@ canvas.blob__body {
    you know whose numbering each one is. */
 .exit .row__tag { flex: none; width: 16px; height: 16px; font-size: 8.5px; }
 .exit__name { flex: 1; min-width: 0; }
+
+/* The sort control, as three icons. Words there made a row of four things
+   that all read as buttons doing the same kind of job; the shapes separate
+   the choice from the action beside it. */
+.pair--sort { flex: none; }
+.pair--sort .pair__opt {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  padding: 0;
+}
+.pair--sort .ico { width: 15px; height: 15px; }
+.pair--sort .pair__opt[aria-selected="true"] { color: var(--text); }
+.pair--sort .pair__opt[aria-selected="false"] { color: var(--text-off); }
+
+/* The note about when the times were taken goes back on the same line, now
+   that the control beside it is three icons wide instead of three words. */
+.reach { flex-wrap: wrap; }
+
+/* Nothing in this list is ever meant to be reached by scrolling sideways.
+   It could be, by eight pixels: a vertical scrollbar takes its width out of
+   clientWidth after the rows have already been sized at 100% of the width
+   before it appeared. No row overhangs either edge - there is simply eight
+   pixels of nothing to slide to, which is untidy in the one direction the
+   list has no business moving in. */
+.sheet__list { overflow-x: clip; }
+/* clip rather than hidden: a `hidden` box is still a scroll container and
+   still moves when something sets scrollLeft, it just does not offer a bar
+   to do it with. clip is the one that means it cannot happen. */

@@ -43,6 +43,7 @@
   <symbol id="i-socket" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 8v1" /> <path d="M14 8v1" /> <path d="M18 8v1" /> <path d="M6 8v1" /> <path d="M19 17a2 2 0 0 0-1.765 1.059l-.47.882A2 2 0 0 1 15 20H9a2 2 0 0 1-1.765-1.059l-.47-.882A2 2 0 0 0 5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2z" /></symbol>
   <symbol id="i-activity" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" /></symbol>
   <symbol id="i-arrow" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 1.8v8.4" /> <path d="M2.6 6.8 6 10.2l3.4-3.4" /></symbol>
+  <symbol id="i-az" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 16 4 4 4-4" /> <path d="M7 4v16" /> <path d="M15 4h5l-5 6h5" /> <path d="M15 20v-3.5a2.5 2.5 0 0 1 5 0V20" /> <path d="M20 18h-5" /></symbol>
   <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" /> <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" /> <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" /></symbol>
 </svg>
 
@@ -260,17 +261,27 @@
          that means "measure something". -->
     <button class="icon icon--go" id="reachGo" type="button"
             aria-label="Time every exit" title="Time every exit">
-      <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg>
+      <svg class="ico" aria-hidden="true"><use href="#i-activity"/></svg>
     </button>
     <!-- Answering-first sits underneath all three: a blocked exit is not a
          good answer to "sort by name" either. -->
     <div class="pair pair--sort" id="sortBy" role="tablist">
-      <button class="pair__opt" type="button" data-sort="ping"
-              role="tab" aria-selected="true">Fastest</button>
-      <button class="pair__opt" type="button" data-sort="load"
-              role="tab" aria-selected="false">Emptiest</button>
-      <button class="pair__opt" type="button" data-sort="name"
-              role="tab" aria-selected="false">A–Z</button>
+      <!-- Icons, because three words beside a fourth control made a row of
+           four things that all looked like buttons doing the same kind of
+           job. Each keeps its word as a tooltip and as its label for anyone
+           not reading by eye. -->
+      <button class="pair__opt" type="button" data-sort="ping" role="tab"
+              aria-selected="true" aria-label="Fastest first" title="Fastest first">
+        <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg>
+      </button>
+      <button class="pair__opt" type="button" data-sort="load" role="tab"
+              aria-selected="false" aria-label="Emptiest first" title="Emptiest first">
+        <svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg>
+      </button>
+      <button class="pair__opt" type="button" data-sort="name" role="tab"
+              aria-selected="false" aria-label="By name" title="By name">
+        <svg class="ico" aria-hidden="true"><use href="#i-az"/></svg>
+      </button>
       <i class="pair__slide" aria-hidden="true"></i>
     </div>
     <i class="reach__bar" id="reachBar" aria-hidden="true"></i>
