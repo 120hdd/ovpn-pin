@@ -336,6 +336,8 @@ import sweep                                                 # noqa: E402
 import webview                                               # noqa: E402
 import winproxy                                              # noqa: E402
 import accounts                                              # noqa: E402
+import uishot                                                # noqa: E402
+import surfshark                                             # noqa: E402
 import windscribe                                            # noqa: E402
 from engine import Engine                                    # noqa: E402
 
@@ -916,6 +918,29 @@ class Api:
         except OSError as e:
             return {'ok': False,
                     'error': f'Could not write into {windscribe.CONFIG_DIR}: {e}'}
+        out['ok'] = True
+        return out
+
+    def surfsharkServers(self):
+        """Fetch the published cluster list and fill in what the folder is
+        missing.
+
+        The same shape as windscribeServers and for the same reason: these
+        are hostnames, and a hostname is the thing this line answers
+        dishonestly, so they go through the same pinning as everything else
+        rather than being resolved here.
+
+        Additive. A config already in the folder is left alone - it may be
+        the user's own download - so this is safe to press twice, and safe
+        to press on a folder somebody has curated.
+        """
+        try:
+            out = surfshark.write_configs()
+        except surfshark.ApiError as e:
+            return {'ok': False, 'error': str(e)}
+        except OSError as e:
+            return {'ok': False,
+                    'error': f'Could not write into {surfshark.CONFIG_DIR}: {e}'}
         out['ok'] = True
         return out
 
@@ -1645,61 +1670,9 @@ def ui_check(window):
     said = {}
 
     def shot(name):
-        """Our own window, asked to draw itself.
-
-        PrintWindow rather than a screen grab, and the difference is not a
-        detail. A grab of the rectangle our window occupies captures whatever
-        is actually on those pixels - and this runs while the person's own
-        windows still have focus, so the first two versions of this wrote
-        somebody's chat window to disk under our name. Asking the window to
-        render itself can only ever produce the window. It also works while it
-        is behind something, which a check running in the background always is.
-
-        PW_RENDERFULLCONTENT, because WebView2 draws through DWM and the plain
-        call comes back with the page missing.
-        """
-        try:
-            from PIL import Image
-            user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
-            handle = user32.FindWindowW(None, APP_NAME)
-            if not handle:
-                return 'no picture: our window was not found by title'
-            rect = ctypes.wintypes.RECT()
-            user32.GetWindowRect(handle, ctypes.byref(rect))
-            w, h = rect.right - rect.left, rect.bottom - rect.top
-
-            screen = user32.GetDC(0)
-            dc = gdi32.CreateCompatibleDC(screen)
-            bitmap = gdi32.CreateCompatibleBitmap(screen, w, h)
-            gdi32.SelectObject(dc, bitmap)
-            drawn = user32.PrintWindow(handle, dc, 2)
-
-            buf = ctypes.create_string_buffer(w * h * 4)
-            info = ctypes.create_string_buffer(40)
-            ctypes.memmove(info, int(40).to_bytes(4, 'little')
-                           + w.to_bytes(4, 'little')
-                           + (-h & 0xFFFFFFFF).to_bytes(4, 'little')
-                           + int(1).to_bytes(2, 'little')
-                           + int(32).to_bytes(2, 'little')
-                           + bytes(20), 40)
-            gdi32.GetDIBits(dc, bitmap, 0, h, buf, info, 0)
-            image = Image.frombuffer('RGBA', (w, h), buf, 'raw', 'BGRA', 0, 1)
-
-            gdi32.DeleteObject(bitmap)
-            gdi32.DeleteDC(dc)
-            user32.ReleaseDC(0, screen)
-
-            path = os.path.join(out, f'{name}.png')
-            image.convert('RGB').save(path)
-            size = f'{w}x{h}'
-            if h < 300:
-                # Worth saying rather than leaving as a picture of a title
-                # bar: a window this short is a window that was not ready,
-                # and the shot is of nothing.
-                return f'{path} ({size} - too short to be the window)'
-            return f'{path} ({size})' if drawn else f'{path} ({size}, PrintWindow said no)'
-        except Exception as e:
-            return f'no picture: {e!r}'
+        """Our own window, asked to draw itself. In uishot, so that the
+        layout audit takes the same photographs rather than its own."""
+        return uishot.shot(name, out, APP_NAME)
 
     try:
         time.sleep(2.5)
@@ -2200,16 +2173,17 @@ def ui_check(window):
         # switched on it is decoration, and with two it is the only thing
         # that says which credential is about to open the exit.
         said['rowsTagged'] = window.evaluate_js(
-            "document.querySelectorAll('.row .row__tag').length")
+            "document.querySelectorAll('.row .row__tag:not(.row__tag--none)').length")
         said['rowsWithBoth'] = window.evaluate_js(
             "Array.from(document.querySelectorAll('.row'))"
-            ".filter(r => r.querySelectorAll('.row__tag').length > 1).length")
+            ".filter(r => r.querySelectorAll("
+            "'.row__tag:not(.row__tag--none)').length > 1).length")
         said['tagLetters'] = window.evaluate_js(
             "Array.from(new Set(Array.from("
-            "document.querySelectorAll('.row__tag')).map(t => t.textContent)))"
-            ".sort()")
+            "document.querySelectorAll('.row__tag:not(.row__tag--none)'))"
+            ".map(t => t.textContent))).sort()")
         said['tagSaysWhich'] = window.evaluate_js(
-            "(document.querySelector('.row__tag') || {}).title")
+            "(document.querySelector('.row__tag:not(.row__tag--none)') || {}).title")
 
         # -- one country, two ways into it ----------------------------
         #
@@ -2237,16 +2211,16 @@ def ui_check(window):
             ".map(r => r.dataset.code).filter(c => c.startsWith('z'))")
         said['splitSigns'] = window.evaluate_js(
             "Array.from(document.querySelectorAll('.row[data-code=zz]"
-            " .row__tag')).map(t => t.textContent + ':' + t.dataset.state)")
+            " .row__tag:not(.row__tag--none)')).map(t => t.textContent + ':' + t.dataset.state)")
         said['splitOneSign'] = window.evaluate_js(
             "Array.from(document.querySelectorAll('.row[data-code=zy]"
-            " .row__tag')).map(t => t.textContent)")
+            " .row__tag:not(.row__tag--none)')).map(t => t.textContent)")
         # And the sign's colour is that provider's own tally, which is the
         # whole reason it replaced the rows: a provider nobody asked about
         # must not inherit the other one's verdict.
         said['signStates'] = window.evaluate_js(
             "(() => { const n = {};"
-            " for (const t of document.querySelectorAll('.row__tag'))"
+            " for (const t of document.querySelectorAll('.row__tag:not(.row__tag--none)'))"
             "   n[t.dataset.state] = (n[t.dataset.state] || 0) + 1;"
             " return n; })()")
         # The rows must all be one height. Tags used to sit under the name,
@@ -2258,7 +2232,7 @@ def ui_check(window):
             ".map(r => Math.round(r.getBoundingClientRect().height)))).sort()")
         said['splitSignTitles'] = window.evaluate_js(
             "Array.from(document.querySelectorAll('.row[data-code=zz]"
-            " .row__tag')).map(t => t.title)")
+            " .row__tag:not(.row__tag--none)')).map(t => t.title)")
         # A country only one provider reaches stays a single plain row - if
         # everything split, the split would mean nothing.
         said['splitLeavesSingles'] = window.evaluate_js(
@@ -2286,7 +2260,8 @@ def ui_check(window):
         # claim - if every row carried both tags the tag would mean nothing.
         said['rowsOneOnly'] = window.evaluate_js(
             "Array.from(document.querySelectorAll('.row'))"
-            ".filter(r => r.querySelectorAll('.row__tag').length === 1).length")
+            ".filter(r => r.querySelectorAll("
+            "'.row__tag:not(.row__tag--none)').length === 1).length")
         # And the chosen row, which is the only one that looks different and
         # is almost never the one at the top of the list.
         said['pickedRow'] = window.evaluate_js(
@@ -2455,7 +2430,7 @@ def ui_check(window):
         # Which provider each exit is, and that opening one did not throw
         # the reader back to the top of the list.
         said['exitSigns'] = window.evaluate_js(
-            "Array.from(document.querySelectorAll('.exit .row__tag'))"
+            "Array.from(document.querySelectorAll('.exit .row__tag:not(.row__tag--none)'))"
             ".slice(0, 4).map(t => t.textContent + ':' + t.dataset.state)")
         said['exitNames'] = window.evaluate_js(
             "Array.from(document.querySelectorAll('.exit__name'))"
@@ -2686,6 +2661,15 @@ def main():
                 traceback.print_exc()
         if '--ui-check' in sys.argv:
             threading.Thread(target=ui_check, args=(window,),
+                             daemon=True).start()
+        if '--ui-layout' in sys.argv:
+            # An optional scene name after the flag, for the loop where you
+            # are fixing one sheet and do not want to sit through nine.
+            import uilayout
+            i = sys.argv.index('--ui-layout') + 1
+            only = sys.argv[i] if len(sys.argv) > i                 and not sys.argv[i].startswith('-') else None
+            threading.Thread(target=uilayout.run,
+                             args=(window, only, '--notes' in sys.argv),
                              daemon=True).start()
 
     def closing():

@@ -420,9 +420,18 @@
         <!-- Windscribe only: the fleet is a download, not a folder of files
              somebody already has. -->
         <div class="pane__row" id="acctWsTools" hidden>
-          <button class="btn btn--quiet btn--auto" id="wsGet" type="button">Get servers</button>
+          <button class="btn btn--quiet btn--auto" id="wsGet" type="button">Get Windscribe servers</button>
           <button class="btn btn--quiet btn--auto" id="wsRefresh" type="button">Refresh credential</button>
           <p class="note" id="wsSaid"></p>
+        </div>
+
+        <!-- Surfshark only: every config it hands out is the same eighty
+             lines with a different name in the remote line, and it
+             publishes the names. So the folder of downloads is a list this
+             app can ask for instead of one somebody fetches by hand. -->
+        <div class="pane__row" id="acctSsTools" hidden>
+          <button class="btn btn--quiet btn--auto" id="ssGet" type="button">Get Surfshark servers</button>
+          <p class="note" id="ssSaid"></p>
         </div>
       </div>
     </section>

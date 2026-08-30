@@ -380,6 +380,13 @@ function drawList(query) {
      The country's own row stays, and stays first, because it means
      "whichever answers" - which is what most people want most of the time.
      The rows under it are for when it is not. */
+
+  /* The sign columns, worked out once for the whole list and from every
+     country in it rather than from the ones a search left on screen - a
+     column that appears and disappears as you type is worse than one that
+     is sometimes empty. */
+  const tagCols = tagColumns();
+
   const buildGroup = (c) => {
     /* One row per place, and a sign for who backs it.
 
@@ -486,14 +493,27 @@ function drawList(query) {
     // one exit of each, which is what the rows below it say properly.
     let tagsFor = null;
     const by = c.by || {};
-    const from = Object.keys(by).filter((k) => by[k] > 0).sort();
-    if (from.length && !via && !heads) {
+    if (tagCols.length && !via && !heads) {
+      /* One slot per provider, always in the same order, and an empty one
+         where a country has nobody.
+
+         Packed tight, the signs said the wrong thing down the list: a
+         country only Surfshark reaches put its S where every other row has
+         its W, so the eye reading the column saw Windscribe, Windscribe,
+         Windscribe and one of them was not. A row with one sign also
+         dragged the star and the plus left by the width of the sign it did
+         not have, which is the wobble in the first rows of the list.
+
+         So the signs get columns, the way the star and the plus already do.
+         An absent provider is a hole in its own column rather than an
+         absence that moves everything after it. */
       const tags = document.createElement('span');
       tags.className = 'row__tags';
-      for (const key of from) {
-        tags.append(providerTag(key, by[key], (c.byTested || {})[key] || 0,
-                                (c.byOk || {})[key] || 0,
-                                (c.byPing || {})[key]));
+      for (const key of tagCols) {
+        tags.append((by[key] || 0) > 0
+          ? providerTag(key, by[key], (c.byTested || {})[key] || 0,
+                        (c.byOk || {})[key] || 0, (c.byPing || {})[key])
+          : tagGap());
       }
       row.dataset.tags = '1';
       tagsFor = tags;
@@ -2743,7 +2763,14 @@ function wireInfoButtons() {
     bubble.innerHTML = why.innerHTML;
     btn.append(icon, bubble);
 
-    title.insertAdjacentElement('afterend', btn);
+    /* Inside the title, not after it.
+       Two kinds of pane hold these. In one the title is a flex item and a
+       button after it lands beside it; in the other the title is a block in
+       a column, and a button after a block starts a line of its own - so
+       the (i) sat under the heading, 2px left of everything, in every pane
+       laid out that way. Inside the heading it is part of the line in both,
+       which is what "moved into the title" was supposed to mean. */
+    title.append(btn);
     why.remove();
 
     // A bubble centred on a button two pixels from the right edge hangs off
@@ -2774,7 +2801,8 @@ const acct = {
 
 function acctBusy(on) {
   for (const id of ['acctAdd', 'acctSave', 'acctCancel', 'acctUser',
-                    'acctPass', 'acctTwo', 'acctLabel', 'wsGet', 'wsRefresh']) {
+                    'acctPass', 'acctTwo', 'acctLabel', 'wsGet', 'wsRefresh',
+                    'ssGet']) {
     const el = $(id);
     if (el) el.disabled = on;
   }
@@ -2852,6 +2880,12 @@ function acctPaint() {
   // has, so its two buttons only mean anything while one is in use.
   const ws = acct.rows.find((r) => r.provider === 'windscribe' && r.active);
   $('acctWsTools').hidden = !ws;
+
+  // Surfshark's is a download rather than a fetch for the same reason, and
+  // it has one button rather than two: the credential never expires, so
+  // there is nothing to refresh.
+  const ss = acct.rows.find((r) => r.provider === 'surfshark' && r.active);
+  $('acctSsTools').hidden = !ss;
 }
 
 async function acctRefresh() {
@@ -2968,6 +3002,31 @@ async function acctRemove(id, label) {
   await acctRefresh();
   await refreshPrefs();
 }
+
+/* -- fetching a fleet, per provider ------------------------------------ */
+
+/* Surfshark publishes its cluster list, and every config it hands out is the
+   same eighty lines with one name changed - so the folder somebody downloads
+   by hand is a list this can ask for. Additive: what is already in the
+   folder is left alone, because it may be theirs. */
+$('ssGet').addEventListener('click', async () => {
+  acctBusy(true);
+  said($('ssSaid'), 'Fetching the server list…');
+  const r = await window.pywebview.api.surfsharkServers();
+  acctBusy(false);
+  if (!r.ok) { said($('ssSaid'), r.error, 'bad'); return; }
+  const gone = (r.gone || []).length;
+  said($('ssSaid'),
+    (r.added
+      ? `${r.added} added, ${r.kept} already here`
+      : `Nothing missing — all ${r.kept} are already here`)
+    + `. ${r.total} servers across ${r.countries} countries in ${r.folder}.`
+    + (r.added ? ' They are hostnames, so pin them next — the Servers '
+      + 'group below does it.' : '')
+    + (gone ? ` ${gone} on disk ${gone === 1 ? 'is' : 'are'} no longer `
+      + 'published; nothing was deleted.' : ''),
+    'good');
+});
 
 /* -- the two Windscribe-only buttons ----------------------------------- */
 
@@ -3402,6 +3461,34 @@ function providerTag(key, count, tested, ok, ping) {
       : `none of ${tested} answered`;
   t.title = `${name} · ${count} relay${count === 1 ? '' : 's'} · ${said_}`;
   return t;
+}
+
+/* Which providers this list has signs for, in the order they are always
+   drawn in. Only the ones that actually back something: a column standing
+   empty down the whole list is 18px of nothing on every row. */
+function tagColumns() {
+  const seen = new Set();
+  for (const c of state.countries || []) {
+    const by = c.by || {};
+    for (const key of Object.keys(by)) if (by[key] > 0) seen.add(key);
+  }
+  const known = Object.keys(PROVIDER_NAMES).filter((k) => seen.has(k));
+  const rest = [...seen].filter((k) => !(k in PROVIDER_NAMES)).sort();
+  return known.concat(rest);
+}
+
+/* A provider's column, where this country has no such provider. It holds the
+   space and says nothing - the row__tag--none rule takes the box away and
+   leaves the width.
+
+   Empty and unmarked rather than aria-hidden: a span with no text and no
+   role is not announced anyway, and hiding it would take it out of the
+   layout audit as well, which is the one thing that can tell us these
+   columns have stopped lining up. */
+function tagGap() {
+  const el = document.createElement('span');
+  el.className = 'row__tag row__tag--none';
+  return el;
 }
 
 function isFavourite(code) {

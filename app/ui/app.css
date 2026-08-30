@@ -3213,8 +3213,11 @@ canvas.blob__body {
   flex: none;
   display: inline-grid;
   place-items: center;
+  /* It lives in the heading's own line now, where an inline-grid would
+     otherwise sit on the baseline and hang below the letters. */
+  vertical-align: middle;
   width: 18px; height: 18px;
-  margin-left: 2px;
+  margin-left: 4px;
   padding: 0;
   border: 0;
   border-radius: 999px;
@@ -3696,7 +3699,22 @@ canvas.blob__body {
 .row--city { margin-left: 0; width: 100%; padding-left: 30px; }
 .row--city .chip--dot { width: 22px; }
 
-.row__copy { flex: 1; min-width: 0; display: grid; gap: 2px; }
+/* One column, the full width of the copy.
+
+   Stated rather than left to the default, because the rule further up still
+   says `justify-content: center` from when this was a flex column and that
+   meant "centre them vertically". Under `display: grid` the same declaration
+   centres the track horizontally instead - and an auto track is only as wide
+   as its longest line, so every row's text sat centred on its own length.
+   A country with a short name and "1 relay" under it started up to 10px
+   right of one with a long name, which is a list that does not line up and
+   is invisible to anything measuring a single row. */
+.row__copy {
+  flex: 1; min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+}
 .row__name { font-size: 13px; font-weight: 600; }
 .row--city .row__name { font-size: 12.5px; font-weight: 550; }
 .row__meta { font-size: 10.5px; }
@@ -3776,6 +3794,11 @@ canvas.blob__body {
   border-color: color-mix(in srgb, var(--fail) 40%, transparent);
 }
 /* Untested keeps the default: dim, and plainly not a verdict. */
+
+/* A provider's column on a row that provider does not reach. Nothing to
+   see, and 17px wide, so the sign beside it stays in its own column and the
+   star and the plus after it do not move row to row. */
+.row__tag--none { border-color: transparent; background: none; }
 
 /* The provider sign on an individual exit, at the head of the row where the
    eye lands first - "es-006" and "es-mad" are the same kind of nothing until
