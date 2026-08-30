@@ -559,6 +559,7 @@ class Sweep:
         self.results = []
         self.error = None
         self.into = None
+        self.sites = []
 
     #-- before it starts --------------------------------------------------
 
@@ -674,6 +675,7 @@ class Sweep:
             self.results = []
             self.error = None
             self.into = engine.folder
+            self.sites = named
             self.thread = threading.Thread(
                 target=self._run,
                 args=(folder, engine.folder, total, named, scope, chosen,
@@ -725,6 +727,16 @@ class Sweep:
                 '-File', script_path(),
                 '-PinnedDir', folder,
                 '-SuccessDir', into,
+                # Said rather than left to the script, which guesses .state is
+                # two folders up from itself. That is right in the repo and
+                # wrong in a bundle, where both scripts sit beside the exe -
+                # and the way it goes wrong is silent. The owners cache lives
+                # in here, the landlord chips are read out of it, and
+                # -Landlord is matched against what the sweep reads out of
+                # its own copy: two caches, filled by whichever lookup
+                # service answered, spelling the same company two ways, and
+                # every name the window offered matches nothing.
+                '-StateDir', paths.STATE_DIR,
                 # The sweep asks two questions at a terminal that a window has
                 # to answer for it: whether an afternoon is an acceptable price
                 # and whether the VPN it can see is really one. Both were put
@@ -930,6 +942,11 @@ class Sweep:
               # these folders carry what earlier sweeps found too, and a
               # cancelled run leaves the older entries standing.
               'siteFolders': site_folders(),
+              # Where the ones that worked ended up. Obvious from inside this
+              # file and not from the window, which until now said seven came
+              # up and left you to guess where seven files had gone.
+              'into': self.into,
+              'siteTestDir': sitetest_dir() if self.sites else None,
               'cancelled': cancelled,
               'error': error,
               'log': self._log_path()})

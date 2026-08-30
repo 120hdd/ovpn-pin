@@ -633,6 +633,14 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   --focus: #74e4c2;
   --r-card: 20px;
   --r-ctl: 12px;
+
+  /* Said out loud, because WebView2 draws its own furniture - scrollbars, the
+     spin buttons on a number field, the ring inside a text one - and with
+     nothing to go on it draws them for a white page. The tally is the one
+     list here that gets long enough to scroll, so that is where a white bar
+     turned up, sitting against everything around it. Inherited, so this
+     covers every native control on the page rather than that one. */
+  color-scheme: dark;
 }
 
 body {
@@ -2456,6 +2464,10 @@ canvas.blob__body {
 }
 .path--bare { margin: 0; padding: 0; background: none; box-shadow: none; font-size: 10px; }
 
+#sweepWhere { margin-top: 6px; color: var(--text-off); }
+#sweepWhere span { display: block; }
+#sweepWhere span + span { margin-top: 2px; }
+
 .note { font-size: 10px; line-height: 15px; color: var(--text-off); margin-top: 9px; }
 .note.is-bad { color: var(--fail); }
 .note.is-good { color: var(--ok); }
@@ -2822,6 +2834,21 @@ canvas.blob__body {
   animation: rise 240ms var(--ease);
 }
 .tally li:last-child { border-bottom: 0; }
+/* A transparent border over the thumb rather than a colour: the tally sits on
+   a translucent pane, so anything painted in here would be a guess at what is
+   behind it. */
+.tally::-webkit-scrollbar { width: 10px; }
+.tally::-webkit-scrollbar-track { background: transparent; }
+.tally::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.13);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: 5px;
+}
+.tally::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+  background-clip: padding-box;
+}
 .tally__name {
   flex: 1; min-width: 0;
   color: var(--text-muted);

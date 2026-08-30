@@ -1573,6 +1573,7 @@ function drawSweep(p) {
     $('sweepSites').disabled = true;
     $('sweepFirst').disabled = true;
     lockChoices(true);
+    $('sweepWhere').hidden = true;
     said($('sweepSaid'), 'Waiting for Windows to allow it…');
     return;
   }
@@ -1634,6 +1635,7 @@ function drawSweep(p) {
     lockChoices(false);
     meter.hidden = true;
     drawSiteFolders(p.siteFolders, $('folderPath').textContent);
+    drawWhere(p);
     if (p.error) {
       said($('sweepSaid'), p.error, 'bad');
     } else if (p.cancelled) {
@@ -1652,6 +1654,42 @@ function drawSweep(p) {
 }
 
 window.onSweep = drawSweep;
+
+/* Where the ones that came up have gone. Said only when something did come
+   up: after a run where nothing connected, naming a folder would be naming an
+   empty one, and a cancelled run has usually written nothing either. The path
+   is the whole point, so it is given in full rather than as a folder name you
+   would then have to go looking for. */
+function drawWhere(p) {
+  const el = $('sweepWhere');
+  el.replaceChildren();
+  if (p.error || !p.worked || !p.into) { el.hidden = true; return; }
+
+  const kept = document.createElement('span');
+  kept.textContent = `Kept in ${p.into}`;
+  el.append(kept);
+
+  // Only when this run named sites. The per-site folders hold one copy each
+  // of whichever servers served them, which is a different list from the one
+  // above and worth pointing at separately.
+  //
+  // Named against the folder on the line above when it sits beside it, which
+  // is the usual case: a second absolute path differing from the first in its
+  // last word is a line you have to read twice, and at this width it wrapped
+  // through the middle of the word that mattered.
+  if (p.siteTestDir) {
+    const parent = p.into.replace(/[\\/][^\\/]+[\\/]?$/, '');
+    const beside = parent && p.siteTestDir.slice(0, parent.length) === parent
+      ? p.siteTestDir.slice(parent.length).replace(/^[\\/]/, '')
+      : '';
+    const per = document.createElement('span');
+    per.textContent = beside
+      ? `Per site, in ${beside}\\ beside it`
+      : `Per site, in ${p.siteTestDir}`;
+    el.append(per);
+  }
+  el.hidden = false;
+}
 
 function drawSiteFolders(folders, current) {
   const list = $('siteFolders');

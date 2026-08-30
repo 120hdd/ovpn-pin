@@ -106,7 +106,13 @@ param(
 
     # Dot-sourced by Sweep-OvpnExits.ps1, which wants the probes and the
     # writers below and nothing else. Not for the command line.
-    [switch] $AsLibrary
+    [switch] $AsLibrary,
+
+    # Where .state is, for whoever knows better than the guess below. The app
+    # does: bundled, both scripts sit beside the exe rather than one folder
+    # under the data root, so "two up from this file" lands outside it. See
+    # Get-StateDir.
+    [string] $StateDir
 )
 
 $ErrorActionPreference = 'Stop'
@@ -386,9 +392,17 @@ function Write-Rows {
 }
 
 function Get-StateDir {
-    # This file is in the windows folder; .state belongs to the repo above
-    # it, shared with the Linux half rather than one per platform.
-    $d = Join-Path (Split-Path -Parent (Split-Path -Parent $PSCommandPath)) '.state'
+    # -StateDir first, because the guess below is only right in a repo. This
+    # file is in the windows folder there, so .state is the folder above it -
+    # the repo's own, shared with the Linux half rather than one per platform.
+    #
+    # Bundled, that guess is wrong and wrong quietly: both scripts are copied
+    # to sit beside the exe, so two levels up is the folder holding the app
+    # folder, and a second owners.tsv gets written there. Nothing fails - the
+    # sweep simply stops agreeing with the window about who owns an address,
+    # and -Landlord then matches none of the names the window offered.
+    $d = if ($StateDir) { $StateDir }
+         else { Join-Path (Split-Path -Parent (Split-Path -Parent $PSCommandPath)) '.state' }
     if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d | Out-Null }
     $d
 }

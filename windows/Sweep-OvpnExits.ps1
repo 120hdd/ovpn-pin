@@ -68,6 +68,18 @@
     that one site. A config that stops serving it is taken back out on the next
     sweep, so the folder keeps meaning what its name says.
 
+.PARAMETER StateDir
+    Where exits.tsv and the owners cache go. Defaults to .state beside the
+    repo, which is the right guess from windows\ and the wrong one from
+    anywhere else - the app ships both scripts beside its exe and passes this.
+
+    It matters more than a folder of two files sounds like it should. The
+    owners cache is what -Landlord is matched against, so a second copy of it
+    is not a duplicate: it gets filled by whichever lookup service answered
+    that day, and the two spell the same company differently - HOSTROYALE
+    against HostRoyale Technologies Pvt Ltd. Chosen from one and matched
+    against the other, every name misses and the sweep finds nothing to do.
+
 .PARAMETER OnePerLandlord
     One file per hosting company - coarser than -OnePer and much faster. About
     twenty companies stand behind a thousand-odd addresses, and being blocked
@@ -193,6 +205,7 @@ param(
     [string]   $PinnedDir,
     [string]   $SuccessDir,
     [string]   $SiteTestDir,
+    [string]   $StateDir,
     [string[]] $Site,
 
     [string[]] $Landlord,
@@ -243,7 +256,7 @@ $root = Split-Path -Parent $here
 # $Site is one of them, and -Site had been quietly dying here: bound, wiped a
 # few lines later, and never passed to a single probe. Held across the call.
 $sweepSite = $Site
-. (Join-Path $here 'Resolve-OvpnRemote.ps1') -AsLibrary
+. (Join-Path $here 'Resolve-OvpnRemote.ps1') -AsLibrary -StateDir $StateDir
 $Site = $sweepSite
 
 
@@ -909,9 +922,7 @@ function Get-ExitVerdict {
 function Write-ExitRow {
     param([string] $File, [string] $Ip, [string] $Verdict, [string] $Detail)
 
-    $dir = Join-Path $root '.state'
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
-    $tsv = Join-Path $dir 'exits.tsv'
+    $tsv = Join-Path (Get-StateDir) 'exits.tsv'
 
     $rows = @()
     if (Test-Path $tsv) {
@@ -1630,7 +1641,7 @@ try {
     }
 
     Write-Host ''
-    Write-Info "written to $(Join-Path $root '.state\exits.tsv')"
+    Write-Info "written to $(Join-Path (Get-StateDir) 'exits.tsv')"
 
     if (-not $best) {
         Write-Host ''
