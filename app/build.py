@@ -196,6 +196,25 @@ def main():
               'servers properly" and "Pin them to real addresses" will both '
               'say they have nothing to run')
 
+    # The tunnel client, and the script that sets up the far end of it.
+    # Copied beside the exe for the same reason the PowerShell files are:
+    # paths.gost_exe() looks in DATA_DIR, which frozen is here and not inside
+    # _internal. Without this the app builds, runs, shows the whole tunnel
+    # pane and then says it cannot find a client - which is a worse failure
+    # than not offering the feature at all.
+    tunnelled = 0
+    for name in ('gost.exe', 'install-server.sh'):
+        src = os.path.join(ROOT, 'tunnel', name)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(out, name))
+            tunnelled += 1
+    if tunnelled == 2:
+        print('tunnel: client and installer copied')
+    else:
+        print('tunnel: MISSING - the app will connect through the provider, '
+              'but "Your own tunnel" will say it has no client to run. Put '
+              'gost.exe and install-server.sh in tunnel/ and build again.')
+
     # Who each address is rented from. Already paid for - one HTTP request per
     # hundred addresses, with a deliberate wait between them - and without it
     # the "one per company" groupings come out as zero and the chips are an

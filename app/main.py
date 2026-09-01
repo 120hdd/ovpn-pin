@@ -181,7 +181,12 @@ def run_selftest():
            # above answers for it too - these are the two folders.
            'pinSource': pin.source_dir(),
            'pinSourceCount': len(sweep.configs_in(pin.source_dir())),
-           'pinOut': pin.out_dir()}
+           'pinOut': pin.out_dir(),
+           # And the tunnel. Named here because "no tunnel client found" in
+           # the window is a sentence about this machine, and this is where
+           # questions about what a copy can see get answered.
+           'tunnelClient': paths.gost_exe(),
+           'tunnelInstaller': os.path.isfile(paths.INSTALLER)}
     try:
         saved = load_settings()
         e = engine.Engine(winproxy.SystemProxy(paths.SAVED_PROXY),
