@@ -228,6 +228,7 @@ ovpn proxy tunnel connect        # your server, then out at a provider exit
 ovpn proxy tunnel cdn            # out at your server itself
 ovpn proxy tunnel country de     # change where connect leaves by, live
 ovpn proxy tunnel status
+ovpn proxy tunnel scan           # find another way in, if the address is filtered
 ```
 
 The desktop app has the same three choices as a strip on its front, and a
@@ -315,6 +316,41 @@ seconds — level with going out at the server directly.
 
 Changing country is one request to the server's own API. Nothing restarts,
 and connections already open keep the exit they were made through.
+
+### When the way in gets filtered
+
+The domain is reached through Cloudflare, and Cloudflare hands out two
+addresses. On the first of September both of them stopped answering on 443
+from this line — the SYN unanswered, while port 80 to the same addresses
+still connected, which rules out the server, the certificate and SNI
+filtering in one measurement. What was blocked was the address.
+
+That is repairable from here without touching the server, because Cloudflare
+is anycast: any edge address that carries the domain answers for it, given
+the name in the SNI and in the Host header. On the day it broke, 22 of 40
+addresses spread across their ranges answered while the two DNS was handing
+out did not. So the client stops letting DNS choose. It keeps a handful of
+addresses that were measured answering, writes them into `gost` as several
+nodes under one selector, and dials those. The name is not dropped — only
+the dialling. It stays in the SNI, where the certificate is checked against
+it, and in the Host header, without which Cloudflare answers 1034.
+
+None of that costs anything on a normal day. The list is kept on disk, so
+starting up writes it out and dials; there is no scan. An address that dies
+mid-session costs one retry — measured at 1.8 seconds for a request that had
+to step over two blocked addresses, against 0.9 for the ones after it. Only
+when every kept address is gone does anything scan, and it takes a few
+seconds.
+
+The part worth knowing is what it does *before* it scans. From inside the
+tunnel, a filtered address and a server that has fallen over are the same
+event: `gost` answers 503. They want opposite things done about them. So the
+first question is asked of the CDN rather than of the tunnel — an
+unauthenticated request to `/api/config`, which answers 401 when the address
+is good, times out when it is filtered, and comes back as a Cloudflare 521
+when the edge is fine and your server is not. Only the filtered answer leads
+to a scan. The others are reported, because a scan cannot fix them and
+running one anyway would spend the time and then blame the wrong thing.
 
 ### What skips the tunnel
 

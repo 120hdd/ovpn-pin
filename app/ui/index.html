@@ -439,11 +439,19 @@
             </button>
           </span>
         </label>
+        <!-- The third button is for the failure that reads like a broken
+             server and is not. The domain is reached through a CDN, and the
+             addresses it hands out get filtered here; any other address of
+             theirs that carries the domain does the job instead. Test looks
+             for one on its own when that is what went wrong - this is for
+             forcing it. -->
         <div class="pane__row">
           <button class="btn btn--quiet btn--auto" id="tunnelSave" type="button">Save</button>
           <button class="btn btn--quiet btn--auto" id="tunnelTest" type="button">Test</button>
+          <button class="btn btn--quiet btn--auto" id="tunnelScan" type="button">Find a way in</button>
           <p class="note" id="tunnelSaid"></p>
         </div>
+        <p class="pane__why pane__why--tight" id="tunnelWayIn" hidden></p>
       </div>
     </section>
 

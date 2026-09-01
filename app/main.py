@@ -877,6 +877,7 @@ class Api:
             'hasApiPassword': bool(st.get('tunnelApiPassword')),
             'hasClient': bool(paths.gost_exe()),
             'running': bool(client and client.listening()),
+            'edges': client.edges() if client else [],
         }
 
     def installCommand(self, domain=None, user=None, password=None):
@@ -937,20 +938,80 @@ class Api:
         the client is restarted once and asked again. Once, and then it is
         told to you: a Test button that retries forever is a Test button that
         never finishes.
+
+        Past that there is one more thing worth trying, because there is one
+        more thing that is worth telling apart. A restart does not help when
+        the CDN address the domain resolves to has been filtered, and from
+        in here that failure is indistinguishable from a dead server - both
+        are a 503. So the third attempt asks which it is before acting, and
+        only goes looking for another address when that is the answer. The
+        other verdicts are reported rather than worked around: a scan cannot
+        fix a server that is down, and running one anyway would spend the
+        time and then blame the wrong thing.
         """
         try:
             client = self._tunnel_client()
             client.start()
-            seen, restarted = None, False
+            seen, restarted, found = None, False, []
             try:
                 seen = client.probe()
             except Exception:
                 restarted = True
-                client.restart()
-                seen = client.probe()
+                try:
+                    client.restart()
+                    seen = client.probe()
+                except Exception:
+                    verdict, why = client.diagnose()
+                    if verdict not in ('edges-blocked', 'wrong-zone'):
+                        return {'ok': False, 'error': why, 'verdict': verdict,
+                                'restarted': True,
+                                'running': client.listening()}
+                    found, tally = client.rescan()
+                    if not found:
+                        return {'ok': False, 'verdict': 'no-way-in',
+                                'restarted': True,
+                                'error': f'none of the {sum(tally.values())} '
+                                         'addresses tried could reach your '
+                                         'server - it looks like the domain '
+                                         'is being filtered rather than the '
+                                         'address',
+                                'running': client.listening()}
+                    try:
+                        seen = client.probe()
+                    except Exception as e:
+                        return {'ok': False, 'verdict': 'still-down',
+                                'repaired': found, 'restarted': True,
+                                'error': f'found a way in at {found[0]} and '
+                                         f'the tunnel still will not carry '
+                                         f'anything: {str(e)[:120]}',
+                                'running': client.listening()}
             return {'ok': True, 'exit': client.current_exit(),
                     'seen': seen, 'restarted': restarted,
+                    'repaired': found, 'edges': client.edges(),
                     'running': client.listening()}
+        except RuntimeError as e:
+            return {'ok': False, 'error': str(e)}
+        except Exception as e:
+            return {'ok': False, 'error': str(e)[:200]}
+
+    def rescanEdges(self):
+        """Look for a way in now, whatever state the tunnel is in.
+
+        The same repair testTunnel reaches for on its own, on a button, for
+        when somebody would rather force it than argue with a symptom. It
+        rewrites the configuration and restarts the client onto it, which is
+        the only thing that makes a running client read the new addresses -
+        the server's API rewrites the server's chains, not this end's.
+        """
+        try:
+            client = self._tunnel_client()
+            found, tally = client.rescan()
+            return {'ok': bool(found), 'edges': found,
+                    'answered': tally.get('ok', 0),
+                    'tried': sum(tally.values()),
+                    'running': client.listening(),
+                    'error': '' if found else
+                             'no address reached your server from this line'}
         except RuntimeError as e:
             return {'ok': False, 'error': str(e)}
         except Exception as e:
@@ -1383,6 +1444,13 @@ def ui_check(window):
             "document.getElementById('tunnelCmd').textContent")
         said['wayNote'] = window.evaluate_js(
             "document.getElementById('wayNote').textContent")
+        # And the bottom of it, where the three buttons are. Three in a row
+        # is where a row stops fitting, and it fits or it does not at this
+        # width - which is a thing to see rather than to reason about.
+        window.evaluate_js(
+            "document.getElementById('prefTunnel').scrollIntoView({block:'end'})")
+        time.sleep(0.6)
+        said['tunnelRowShot'] = shot('settings-tunnel-row')
         window.evaluate_js(
             "document.getElementById('prefSweep').scrollIntoView({block:'start'})")
         time.sleep(0.6)

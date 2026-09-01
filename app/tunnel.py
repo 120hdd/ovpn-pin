@@ -43,6 +43,16 @@ PATHS = px.TUNNEL_PATHS
 BYPASS = px.TUNNEL_BYPASS
 config_text = px.tunnel_config_text
 
+# And the way in, for the same reason. Which Cloudflare addresses carry the
+# domain is measured, not configured, and the measuring belongs next to the
+# file it is written into rather than in the window.
+edges_for = px.tunnel_edges
+edge_scan = px.edge_scan
+edge_cache_load = px.edge_cache_load
+edge_cache_save = px.edge_cache_save
+diagnose = px.tunnel_diagnose
+EDGE_KEEP = px.EDGE_KEEP
+
 
 class Tunnel:
     """The gost client process, and the server's API behind it."""
@@ -61,12 +71,47 @@ class Tunnel:
     def config_path(self):
         return os.path.join(self.dir, 'config.yaml')
 
-    def write_config(self):
+    def write_config(self, edges=None):
+        """The client's configuration, with the addresses it should dial.
+
+        The addresses come from what was found last time rather than from a
+        fresh scan: a scan before every start would put seconds onto the
+        case where nothing is wrong to save them in the case where something
+        is, and the second case is already asking somebody to wait.
+        """
         os.makedirs(self.dir, exist_ok=True)
-        text = config_text(self.domain, self.password)
+        if edges is None:
+            edges = edges_for(self.dir, self.domain, quiet=True)
+        text = config_text(self.domain, self.password, edges)
         with open(self.config_path, 'w', encoding='utf-8') as f:
             f.write(text)
         return self.config_path
+
+    def edges(self):
+        """The addresses this client is dialling, as the file has them."""
+        return edge_cache_load(self.dir, self.domain)
+
+    def diagnose(self):
+        """Which of the several failures that all look like 503 this is."""
+        return diagnose(self.domain, self.edges())
+
+    def rescan(self):
+        """Find a way in again, and put the client on it.
+
+        Returns the addresses found, newest first, or an empty list if the
+        line has none - which is its own answer and not a failure to report
+        as one: it means the domain is being filtered rather than the
+        address, and no address will help.
+        """
+        found, tally = edge_scan(self.domain)
+        if not found:
+            return [], tally
+        found = found[:EDGE_KEEP]
+        edge_cache_save(self.dir, self.domain, found)
+        self.write_config(found)
+        if self.listening():
+            self.restart()
+        return found, tally
 
     def listening(self, mode='single'):
         """Whether anything holds that port. Asked rather than remembered:
@@ -137,27 +182,7 @@ class Tunnel:
             except Exception:
                 pass
 
-    @staticmethod
-    def _owner_pid(port):
-        try:
-            if os.name == 'nt':
-                out = subprocess.run(['netstat', '-ano'], capture_output=True,
-                                     text=True, timeout=10).stdout
-                for line in out.splitlines():
-                    bits = line.split()
-                    if (len(bits) >= 5 and bits[0] == 'TCP'
-                            and bits[1].endswith(f':{port}')
-                            and bits[3] == 'LISTENING'):
-                        return int(bits[4])
-            else:
-                out = subprocess.run(['ss', '-lntp'], capture_output=True,
-                                     text=True, timeout=10).stdout
-                for line in out.splitlines():
-                    if f':{port} ' in line and 'pid=' in line:
-                        return int(line.split('pid=')[1].split(',')[0])
-        except Exception:
-            pass
-        return None
+    _owner_pid = staticmethod(px.tunnel_owner_pid)
 
     def restart(self):
         self.stop()

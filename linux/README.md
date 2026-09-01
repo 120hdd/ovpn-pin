@@ -29,6 +29,7 @@ Then, from any directory:
 | `ovpn stop` · `ovpn status` | |
 | `ovpn proxy` | serve a browser proxy through a live exit |
 | `ovpn proxy tunnel connect` | the same, but through a server of your own |
+| `ovpn proxy tunnel scan` | find another CDN address, when the one in use is filtered |
 | `ovpn pin` · `ovpn sync` · `ovpn who` | the pinner |
 | `ovpn sweep` | time the exits, and keep what worked |
 | `ovpn check` | judge the exit you are on right now |

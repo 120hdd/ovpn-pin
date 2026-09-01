@@ -1238,6 +1238,19 @@ function paintTunnel(plan) {
   $('tunnelCmd').textContent =
     `install-server.sh ${t.domain || 'yourdomain.com'} `
     + '<surfshark-user> <surfshark-pass>';
+  paintWayIn(t.edges);
+}
+
+/* Which address the client is dialling, which is normally nobody's business
+   and is the whole story on the day it stops working. Hidden until there is
+   one, so the pane does not grow a line saying nothing. */
+function paintWayIn(edges) {
+  const line = $('tunnelWayIn');
+  if (!edges || !edges.length) { line.hidden = true; return; }
+  const spare = edges.length - 1;
+  line.textContent = `Dialling ${edges[0]}`
+    + (spare ? `, with ${spare} more to fall back to.` : '.');
+  line.hidden = false;
 }
 
 async function saveTunnel() {
@@ -1276,11 +1289,37 @@ async function testTunnel() {
   // is the detail. Said in that order, and the restart is mentioned rather
   // than hidden - it explains why the button took a few seconds longer.
   const woke = r.restarted ? 'Restarted a stale session. ' : '';
+  // A repair is worth a sentence of its own. It is the one outcome where
+  // the thing that was wrong is not the thing the user was told about.
+  const moved = r.repaired && r.repaired.length
+    ? `The way in had been filtered; moved to ${r.repaired[0]}. ` : '';
   said($('tunnelSaid'),
-       `${woke}Carrying traffic — it comes out at ${r.seen || 'the far end'}`
+       `${woke}${moved}Carrying traffic — it comes out at ${r.seen || 'the far end'}`
        + `${r.exit ? `, through ${r.exit}` : ''}.`, 'good');
-  paintTunnel({ ...(state.tunnel || {}), running: true });
+  paintTunnel({ ...(state.tunnel || {}), running: true, edges: r.edges });
   paintWay();
+}
+
+async function rescanEdges() {
+  const btn = $('tunnelScan');
+  btn.disabled = true;
+  said($('tunnelSaid'), 'Asking every Cloudflare address that might carry it…');
+  const r = await window.pywebview.api.rescanEdges();
+  btn.disabled = false;
+  if (!r.ok) {
+    const why = r.error === 'no-client'
+      ? 'No tunnel client found. gost belongs beside the app, or in tunnel/.'
+      : r.error === 'not-set-up' ? 'Fill the domain in first.' : r.error;
+    said($('tunnelSaid'), why, 'bad');
+    return;
+  }
+  // The count is the part worth showing. One address answering out of fifty
+  // and forty answering out of fifty are both "it works", and they are not
+  // the same weather.
+  said($('tunnelSaid'),
+       `${r.answered} of ${r.tried} addresses answered. Dialling ${r.edges[0]}`
+       + `${r.running ? ', and the client is back up on it.' : '.'}`, 'good');
+  paintTunnel({ ...(state.tunnel || {}), running: r.running, edges: r.edges });
 }
 
 function peek(fieldId, buttonId) {
@@ -2147,6 +2186,7 @@ $('way').addEventListener('click', (e) => {
 
 $('tunnelSave').addEventListener('click', saveTunnel);
 $('tunnelTest').addEventListener('click', testTunnel);
+$('tunnelScan').addEventListener('click', rescanEdges);
 $('tunnelPeek').addEventListener('click', () => peek('tunnelPass', 'tunnelPeek'));
 $('tunnelApiPeek').addEventListener('click', () => peek('tunnelApi', 'tunnelApiPeek'));
 $('tunnelApi').addEventListener('keydown', (e) => {

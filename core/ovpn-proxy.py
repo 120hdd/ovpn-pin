@@ -2771,14 +2771,271 @@ TUNNEL_BYPASS = [
 ]
 
 TUNNEL_SETTINGS = os.path.join(ROOT, '.state', 'tunnel.json')
+TUNNEL_STATE = os.path.join(ROOT, '.state', 'tunnel')
 
 
-def tunnel_config_text(domain, password):
+# The way in, when the way in is the thing that broke.
+#
+# Everything above assumes the domain resolves to an address this line can
+# reach. For a while it did. Then both Cloudflare addresses behind the
+# domain went dark on 443 from Iran - the SYN simply unanswered - while port
+# 80 to the same addresses still connected, which rules out the server, the
+# certificate and SNI filtering in one measurement. What was blocked was the
+# address, and the address is the one part of this that nothing on the
+# server can change.
+#
+# It is recoverable from here because Cloudflare is anycast: any edge
+# address that carries the zone answers for it, given the name in the SNI
+# and in the Host header. On the day it broke, 22 of 40 addresses spread
+# across their ranges answered while the two DNS was handing out did not.
+# So the repair is to stop letting DNS choose.
+#
+# The name is not dropped, only the dialling. It stays in the SNI, where the
+# certificate is checked against it, and in the Host header, without which
+# Cloudflare answers 1034 and serves nobody.
+
+# One or two addresses per block rather than a sweep of the ranges. The
+# blocking is done by prefix, not by single address - 104.21.10.10 answered
+# on a day when 104.21.2.20 and 104.21.32.20 did not - so a wide, thin
+# spread finds a live prefix faster than a deep scan of a dead one.
+CF_EDGE_BLOCKS = (
+    '104.16', '104.17', '104.18', '104.19', '104.20', '104.21',
+    '104.22', '104.23', '104.24', '104.25', '104.26', '104.27',
+    '172.64', '172.65', '172.66', '172.67', '172.68', '172.69',
+    '172.70', '172.71',
+    '188.114.96', '188.114.97', '188.114.98', '188.114.99',
+    '162.159.135', '162.159.140', '108.162.192', '141.101.90',
+)
+CF_EDGE_HOSTS = ('10.10', '60.60')
+
+# How many go into the configuration. More than one because the first can
+# die mid-session and gost should step over it rather than stop; not many
+# more because every extra one is another address to step over on the way
+# to a live one, at about half a second each.
+EDGE_KEEP = 6
+
+
+def edge_candidates():
+    """The addresses worth asking, as whole addresses."""
+    out = []
+    for block in CF_EDGE_BLOCKS:
+        for host in CF_EDGE_HOSTS:
+            tail = host if block.count('.') == 1 else host.split('.')[0]
+            out.append(f'{block}.{tail}')
+    return list(dict.fromkeys(out))
+
+
+def edge_probe(domain, ip, timeout=3.0):
+    """What one edge address is worth, asked without a password.
+
+    `/api/config` answers 401 to a request carrying no credentials, and that
+    401 is the whole test: it says the address is reachable, that the name
+    on the certificate matches, that Cloudflare recognises the zone, and
+    that what stands behind it is our nginx and our gost rather than
+    somebody else's site. Nothing secret is sent to find that out, which is
+    what makes it safe to fire at several dozen strangers' addresses at once.
+
+    Returns (verdict, seconds), where the verdict is what to do about it:
+
+        ok        use it
+        blocked   never answered - the case this whole section exists for
+        foreign   reachable, but not carrying this zone
+        origin    the edge is fine and the server behind it is not
+        odd       answered with something none of the above describes
+    """
+    started = time.time()
+    ctx = ssl.create_default_context()
+    try:
+        raw = socket.create_connection((ip, 443), timeout=timeout)
+    except OSError:
+        return 'blocked', time.time() - started
+    try:
+        raw.settimeout(timeout)
+        with ctx.wrap_socket(raw, server_hostname=domain) as sock:
+            sock.sendall(
+                f'GET /api/config HTTP/1.1\r\n'
+                f'Host: {domain}\r\n'
+                f'User-Agent: Relay (ovpn-pin)\r\n'
+                f'Connection: close\r\n\r\n'.encode())
+            said = sock.recv(4096).decode('latin-1', 'replace')
+    except (OSError, ssl.SSLError, ValueError):
+        return 'blocked', time.time() - started
+    finally:
+        try:
+            raw.close()
+        except OSError:
+            pass
+    took = time.time() - started
+    try:
+        code = int(said.split(' ', 2)[1])
+    except (IndexError, ValueError):
+        return 'odd', took
+    if code in (200, 401):
+        return 'ok', took
+    # Cloudflare's own numbers for a server it cannot reach. They arrive
+    # through a perfectly good edge address, which is exactly why they are
+    # worth telling apart from one that is blocked: scanning for another
+    # address would never end, and would never have been the problem.
+    if code in (502, 520, 521, 522, 523, 524, 525, 526):
+        return 'origin', took
+    return ('foreign' if 400 <= code < 500 else 'odd'), took
+
+
+def edge_scan(domain, timeout=2.5, workers=28, candidates=None):
+    """Which addresses will carry this zone from this line, fastest first.
+
+    Everything is asked rather than stopping at the first that answers. The
+    whole set costs a few seconds at this width - the blocked ones are what
+    it waits for, and they are the majority on a bad day, which is why the
+    cutoff here is shorter than the one a single address gets: a live edge
+    answers in about a third of a second even with twenty-seven others
+    handshaking beside it. The tally is what
+    tells a filtered line apart from a dead server, and the times are what
+    make the choice a choice rather than whichever thread won.
+    """
+    pool = list(candidates or edge_candidates())
+    live, tally = [], collections.Counter()
+    with cf.ThreadPoolExecutor(max_workers=workers) as ex:
+        asked = ex.map(lambda ip: (ip,) + edge_probe(domain, ip, timeout), pool)
+        for ip, verdict, took in asked:
+            tally[verdict] += 1
+            if verdict == 'ok':
+                live.append((took, ip))
+    live.sort()
+    return [ip for _, ip in live], tally
+
+
+def edge_cache(state_dir):
+    return os.path.join(state_dir, 'edges.json')
+
+
+def edge_cache_load(state_dir, domain):
+    """What was found last time, if it was found for this domain.
+
+    Keyed by domain because the addresses only mean anything alongside the
+    name that is sent with them: pointed at a different server, a kept list
+    would dial strangers with the wrong Host header and be told 1034 by
+    every one of them.
+    """
+    try:
+        with open(edge_cache(state_dir), encoding='utf-8') as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return []
+    if saved.get('domain') != domain:
+        return []
+    return [ip for ip in saved.get('edges', []) if isinstance(ip, str)]
+
+
+def edge_cache_save(state_dir, domain, edges):
+    os.makedirs(state_dir, exist_ok=True)
+    with open(edge_cache(state_dir), 'w', encoding='utf-8') as f:
+        json.dump({'domain': domain, 'edges': list(edges),
+                   'checked': int(time.time())}, f, indent=2)
+
+
+def domain_addresses(domain):
+    """What DNS says, which is what a client with no list of its own dials."""
+    try:
+        got = socket.getaddrinfo(domain, 443, socket.AF_INET, socket.SOCK_STREAM)
+    except OSError:
+        return []
+    return list(dict.fromkeys(a[4][0] for a in got))
+
+
+def line_is_up(timeout=3.0):
+    """Whether this machine has any internet at all.
+
+    Asked of domestic addresses that are in the bypass list anyway, so the
+    answer cannot depend on the thing being diagnosed. Two of them, because
+    one site being down is not the same as the line being down.
+    """
+    for host in ('www.digikala.com', 'www.aparat.com'):
+        try:
+            socket.create_connection((host, 443), timeout=timeout).close()
+            return True
+        except OSError:
+            continue
+    return False
+
+
+def tunnel_diagnose(domain, edges=(), timeout=3.0):
+    """Which of the several failures that all look like 503 this one is.
+
+    From inside the tunnel every one of them is the same event: gost cannot
+    reach the far end, so it answers 503 and the window says the tunnel is
+    down. They want opposite things done about them, though - one is fixed
+    by finding another address and the rest are only made worse by looking,
+    because a scan that cannot succeed still takes the time and still ends
+    by blaming the wrong thing.
+
+    Returns (verdict, what it means), the verdict being one of:
+
+        edges-fine     the way in is open; the fault is further along
+        server-down    the edge answers, your server behind it does not
+        wrong-zone     the addresses answer, but for somebody else
+        no-internet    this line has nothing at all
+        edges-blocked  the addresses are filtered - the one a scan repairs
+    """
+    addrs = list(edges) or domain_addresses(domain)
+    if not addrs:
+        return ('no-internet' if not line_is_up() else 'edges-blocked',
+                f'{domain} does not resolve from here')
+    with cf.ThreadPoolExecutor(max_workers=min(8, len(addrs))) as ex:
+        seen = dict(zip(addrs, ex.map(
+            lambda ip: edge_probe(domain, ip, timeout)[0], addrs)))
+    if 'ok' in seen.values():
+        alive = [ip for ip, v in seen.items() if v == 'ok']
+        return 'edges-fine', 'the way in is open through ' + ', '.join(alive[:3])
+    if 'origin' in seen.values():
+        return 'server-down', ('the CDN reached your server and it did not '
+                               'answer - that is the server, not the way in')
+    if 'foreign' in seen.values():
+        return 'wrong-zone', ('the addresses answer, but not for '
+                              f'{domain} any more')
+    if not line_is_up():
+        return 'no-internet', 'this line cannot reach anything'
+    return 'edges-blocked', (f'every address {domain} is dialled by is '
+                             'filtered on this line')
+
+
+def tunnel_edges(state_dir, domain, rescan=False, quiet=False):
+    """The addresses to write into the configuration.
+
+    Kept on purpose. A scan before every start would put seconds onto the
+    common case - the one where nothing is wrong - to save them in the rare
+    one, and the rare one is already asking somebody to wait.
+    """
+    if not rescan:
+        cached = edge_cache_load(state_dir, domain)
+        if cached:
+            return cached
+    found, tally = edge_scan(domain)
+    if not found:
+        # Nothing to write is worse than something stale: the old list at
+        # least dials addresses that worked once, and gost will tell us so.
+        return edge_cache_load(state_dir, domain)
+    found = found[:EDGE_KEEP]
+    edge_cache_save(state_dir, domain, found)
+    if not quiet:
+        field('way in', f'{found[0]} - {tally["ok"]} of '
+                        f'{sum(tally.values())} addresses answered')
+    return found
+
+
+def tunnel_config_text(domain, password, edges=None):
     """The gost client's configuration, as gost wants it.
 
     Written rather than shipped: the domain and the password are the only
     things that vary, and a file the tool owns cannot drift out of step with
     the server it was installed against.
+
+    Given `edges`, the addresses are dialled and the name moves to the two
+    places it is still needed. They go in as several nodes under one
+    selector rather than as a single best choice, so an address that goes
+    dark mid-session costs a retry instead of the tunnel: measured at 1.8s
+    for a request that had to step over two blocked addresses to reach a
+    live one, against 0.9s for the ones after it.
     """
     services, chains = [], []
     for mode, port in TUNNEL_PORTS.items():
@@ -2790,21 +3047,34 @@ def tunnel_config_text(domain, password):
         # Only the bulk path goes unmultiplexed, so one heavy transfer cannot
         # stall everything sharing the session with it.
         dialer = 'wss' if mode == 'bulk' else 'mwss'
+        nodes = ''
+        for n, addr in enumerate(edges or [domain], 1):
+            nodes += (
+                f'          - name: {f"edge-{n}" if edges else "server"}\n'
+                f'            addr: {addr}:443\n'
+                f'            connector:\n'
+                f'              type: http\n'
+                f'              auth: {{username: relay, password: {password}}}\n'
+                f'            dialer:\n'
+                f'              type: {dialer}\n')
+            if edges:
+                nodes += f'              tls: {{serverName: {domain}}}\n'
+            nodes += (
+                f'              metadata: {{path: {TUNNEL_PATHS[mode]}, '
+                + (f'host: {domain}, dial.timeout: 4s, ' if edges else '')
+                + 'mux.keepaliveInterval: 10s}\n')
         chains.append(
             f'  - name: ch-{mode}\n'
             f'    hops:\n'
             f'      - name: t\n'
             f'        bypass: go-direct\n'
-            f'        nodes:\n'
-            f'          - name: server\n'
-            f'            addr: {domain}:443\n'
-            f'            connector:\n'
-            f'              type: http\n'
-            f'              auth: {{username: relay, password: {password}}}\n'
-            f'            dialer:\n'
-            f'              type: {dialer}\n'
-            f'              metadata: {{path: {TUNNEL_PATHS[mode]}, '
-            f'mux.keepaliveInterval: 10s}}\n')
+            # fifo rather than round: the list is in the order they were
+            # timed, so the first is the fastest and the rest are what to
+            # fall back to. Spreading across them would be paying for the
+            # slow ones on every connection.
+            + ('        selector: {strategy: fifo, maxFails: 1, '
+               'failTimeout: 60s}\n' if edges else '')
+            + '        nodes:\n' + nodes)
     matchers = ', '.join(m if not m.startswith('*') else f"'{m}'"
                          for m in TUNNEL_BYPASS)
     return ('services:\n' + ''.join(services) +
@@ -2867,6 +3137,64 @@ def tunnel_listening(mode='single'):
         sock.close()
 
 
+def tunnel_owner_pid(port):
+    """Whatever holds that port, by port rather than by name.
+
+    The client is often somebody else's - left running by the window, or by
+    the shortcut in Startup - and killing every gost on the machine to be
+    rid of one would take theirs with it.
+    """
+    try:
+        if os.name == 'nt':
+            out = subprocess.run(['netstat', '-ano'], capture_output=True,
+                                 text=True, timeout=10).stdout
+            for line in out.splitlines():
+                bits = line.split()
+                if (len(bits) >= 5 and bits[0] == 'TCP'
+                        and bits[1].endswith(f':{port}')
+                        and bits[3] == 'LISTENING'):
+                    return int(bits[4])
+        else:
+            out = subprocess.run(['ss', '-lntp'], capture_output=True,
+                                 text=True, timeout=10).stdout
+            for line in out.splitlines():
+                if f':{port} ' in line and 'pid=' in line:
+                    return int(line.split('pid=')[1].split(',')[0])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def tunnel_down():
+    """Stop the client, whoever started it."""
+    pid = tunnel_owner_pid(TUNNEL_PORTS['single'])
+    if not pid:
+        return False
+    try:
+        if os.name == 'nt':
+            subprocess.run(['taskkill', '/PID', str(pid), '/F'],
+                           capture_output=True, timeout=10)
+        else:
+            os.kill(pid, 15)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    for _ in range(20):
+        if not tunnel_listening():
+            return True
+        time.sleep(0.25)
+    return True
+
+
+def tunnel_write_config(saved, edges=None, quiet=True):
+    os.makedirs(TUNNEL_STATE, exist_ok=True)
+    if edges is None:
+        edges = tunnel_edges(TUNNEL_STATE, saved['domain'], quiet=quiet)
+    config = os.path.join(TUNNEL_STATE, 'config.yaml')
+    with open(config, 'w', encoding='utf-8') as f:
+        f.write(tunnel_config_text(saved['domain'], saved['password'], edges))
+    return config
+
+
 def tunnel_up(saved, quiet=False):
     """Bring the client up if it is not already, and say nothing if it was.
 
@@ -2878,16 +3206,13 @@ def tunnel_up(saved, quiet=False):
     if tunnel_listening():
         return False
     exe = tunnel_client()
-    state = os.path.join(ROOT, '.state', 'tunnel')
-    os.makedirs(state, exist_ok=True)
-    config = os.path.join(state, 'config.yaml')
-    with open(config, 'w', encoding='utf-8') as f:
-        f.write(tunnel_config_text(saved['domain'], saved['password']))
-    out = open(os.path.join(state, 'gost.out'), 'w', encoding='utf-8')
+    config = tunnel_write_config(saved, quiet=quiet)
+    out = open(os.path.join(TUNNEL_STATE, 'gost.out'), 'w', encoding='utf-8')
     kw = {'creationflags': 0x08 | 0x200} if os.name == 'nt' \
         else {'start_new_session': True}
-    subprocess.Popen([exe, '-C', config], cwd=state, stdin=subprocess.DEVNULL,
-                     stdout=out, stderr=subprocess.STDOUT, **kw)
+    subprocess.Popen([exe, '-C', config], cwd=TUNNEL_STATE,
+                     stdin=subprocess.DEVNULL, stdout=out,
+                     stderr=subprocess.STDOUT, **kw)
     for _ in range(40):
         if tunnel_listening():
             if not quiet:
@@ -2896,11 +3221,60 @@ def tunnel_up(saved, quiet=False):
             return True
         time.sleep(0.25)
     try:
-        with open(os.path.join(state, 'gost.out'), encoding='utf-8') as f:
+        with open(os.path.join(TUNNEL_STATE, 'gost.out'), encoding='utf-8') as f:
             said = f.read().strip()[-400:]
     except OSError:
         said = ''
     die('the tunnel client did not come up', said or 'It printed nothing.')
+
+
+def tunnel_way_in(saved, force=False, quiet=False):
+    """Make sure there is a way in, and find another one if there is not.
+
+    The cheap question is asked first and is nearly always the only one:
+    does the address currently being dialled still answer? That costs about
+    a third of a second, which is why it can sit in front of every connect
+    without being noticed. Only when it fails does the rest of this run -
+    and even then a scan is not automatic, because most of the ways this
+    can fail are not fixed by another address and would be hidden by
+    pretending they were.
+
+    Returns the verdict, having already repaired the one it can repair.
+    """
+    domain = saved['domain']
+    edges = edge_cache_load(TUNNEL_STATE, domain)
+    if not force:
+        if edges and edge_probe(domain, edges[0])[0] == 'ok':
+            return 'edges-fine'
+        verdict, why = tunnel_diagnose(domain, edges)
+        if verdict not in ('edges-blocked', 'wrong-zone'):
+            if verdict != 'edges-fine':
+                warn(why)
+            return verdict
+        warn(why, 'Looking for one that is not.')
+    found, tally = edge_scan(domain)
+    if not found:
+        warn(f'no way in to {domain} from this line',
+             f'{sum(tally.values())} addresses tried, none of them answered. '
+             'If this line reaches the rest of the internet, the domain is '
+             'the thing being filtered rather than the address, and another '
+             'address will not help.')
+        return 'no-way-in'
+    found = found[:EDGE_KEEP]
+    edge_cache_save(TUNNEL_STATE, domain, found)
+    if not quiet:
+        field('way in', f'{found[0]}   {tally["ok"]} of {sum(tally.values())} '
+                        'addresses answered')
+    if tunnel_listening():
+        # The running client is holding the old list. Nothing short of a
+        # restart makes it read the new one: the API rewrites the server's
+        # own chains, not the client's.
+        tunnel_write_config(saved, found)
+        tunnel_down()
+        tunnel_up(saved, quiet=quiet)
+    else:
+        tunnel_write_config(saved, found)
+    return 'repaired'
 
 
 def tunnel_api(saved, path, payload=None, method='GET'):
@@ -2941,6 +3315,7 @@ TUNNEL_LINE = (
     ('cdn',     'out at your server itself - one address, quickest'),
     ('country', 'change which exit connect leaves by, live'),
     ('status',  'what is set up, what is running, where it leaves'),
+    ('scan',    'find another way in when the CDN address is filtered'),
 )
 
 
@@ -2961,6 +3336,12 @@ def tunnel_help():
 
     {b}ovpn proxy tunnel country de{o}   {d}germany, from now on{o}
     {b}ovpn proxy tunnel connect --port 8899{o}
+
+    {d}scan is for the day the tunnel stops and nothing on the server is
+    wrong. The domain is reached through a CDN, and the addresses it hands
+    out get filtered; any other address of theirs that carries the zone
+    will do instead. connect and cdn check this on their own and only scan
+    when they have to - the verb is here for when you want to force it.{o}
 
     Set up once with {b}tunnel/install-server.sh{o} on the server, and put what
     it prints in {b}.state/tunnel.json{o}.
@@ -2984,6 +3365,11 @@ def do_tunnel(argv):
     if word == 'status':
         head('Tunnel')
         field('domain', saved['domain'])
+        edges = edge_cache_load(TUNNEL_STATE, saved['domain'])
+        verdict, why = tunnel_diagnose(saved['domain'], edges)
+        field('way in', ', '.join(edges[:3]) if edges
+              else 'whatever DNS answers with')
+        field('checked', why)
         field('client', 'running' if tunnel_listening() else 'not running')
         if saved.get('apiPassword') and tunnel_listening():
             chain = tunnel_api(saved, 'config/chains/exit-chain').get('data') or {}
@@ -2993,6 +3379,15 @@ def do_tunnel(argv):
                 pass
         for rec in read_states():
             field('serving', f'127.0.0.1:{rec["port"]}   {rec["name"]}')
+        raise SystemExit(0)
+
+    if word == 'scan':
+        head('Tunnel')
+        field('domain', saved['domain'])
+        was_running = tunnel_listening()
+        if tunnel_way_in(saved, force=True) == 'repaired':
+            ok('Kept, and written into the client configuration.'
+               + (' The client was restarted onto it.' if was_running else ''))
         raise SystemExit(0)
 
     if word == 'country':
@@ -3024,6 +3419,7 @@ def do_tunnel(argv):
     field('through', 'a provider exit' if mode == 'multi'
           else 'your server itself')
     tunnel_up(saved)
+    tunnel_way_in(saved)
     # Everything after the word is still meant for connect - --port, --listen,
     # --quiet. Dropping it made `tunnel connect --port 8899` come up on 8888
     # and say so, which is the kind of wrong that looks right.

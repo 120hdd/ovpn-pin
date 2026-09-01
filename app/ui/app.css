@@ -2382,6 +2382,10 @@ canvas.blob__body {
 .pane__why--after strong { color: var(--text); font-weight: 600; }
 .pane__body { margin-top: 12px; }
 .pane__row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+/* The buttons keep their width and the sentence beside them takes what is
+   left. Without this a third button in a row is paid for by squashing all
+   three, and the labels are the part that has to stay readable. */
+.pane__row .btn { flex: none; }
 
 /* The glyph is the only thing in a pane that moves on hover: a small lift and
    a warm-up, so the section you are reading says so quietly. */
