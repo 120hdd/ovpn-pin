@@ -287,6 +287,7 @@ os.environ.setdefault('WEBVIEW2_DEFAULT_BACKGROUND_COLOR', '00111113')
 import engine                                                # noqa: E402
 import pin                                                   # noqa: E402
 import sweep                                                 # noqa: E402
+import tunnel                                                # noqa: E402
 import webview                                               # noqa: E402
 import winproxy                                              # noqa: E402
 from engine import Engine                                    # noqa: E402
@@ -313,6 +314,8 @@ class Api:
         self._stop = threading.Event()
         self._sweep = sweep.Sweep()
         self._pin = pin.Pin()
+        self._tunnel = None
+        self._tunnel_key = None
 
     # -- talking to the page ----------------------------------------------
 
@@ -339,6 +342,7 @@ class Api:
                 'port': self._engine.port,
                 'defaultPort': engine.DEFAULT_PORT,
                 'picked': self._settings.get('picked', 'auto'),
+                'mode': self._settings.get('mode', 'surfshark'),
                 'hasCredentials': self._has_credentials(),
                 'username': self._engine.username(),
                 'about': (f'{APP_NAME}  -  port {self._engine.port}'
@@ -818,6 +822,85 @@ class Api:
         save_settings(self._settings)
         return {'ok': True}
 
+    # -- the tunnel of your own -------------------------------------------
+
+    def _tunnel_client(self):
+        """The gost client, built from what the installer printed.
+
+        Rebuilt whenever the settings change rather than held: the domain and
+        the passwords are the whole of its identity, and an object still
+        holding the old ones is the kind of thing that fails a long way from
+        where it was caused.
+        """
+        st = self._settings
+        exe = paths.gost_exe()
+        if not exe:
+            raise RuntimeError('no-client')
+        if not st.get('tunnelDomain'):
+            raise RuntimeError('not-set-up')
+        want = (exe, st.get('tunnelDomain'), st.get('tunnelPassword', ''),
+                st.get('tunnelApiPassword', ''))
+        if not self._tunnel or self._tunnel_key != want:
+            self._tunnel = tunnel.Tunnel(
+                exe=exe, workdir=paths.TUNNEL_STATE, domain=want[1],
+                password=want[2], api_password=want[3])
+            self._tunnel_key = want
+        return self._tunnel
+
+    def tunnelPlan(self):
+        """What the settings pane draws. The passwords go back as whether
+        they are set, never as themselves - the page has no use for them and
+        a screenshot of the settings sheet should not be a leak."""
+        st = self._settings
+        client = None
+        try:
+            client = self._tunnel_client()
+        except RuntimeError:
+            pass
+        return {
+            'mode': st.get('mode', 'surfshark'),
+            'domain': st.get('tunnelDomain', ''),
+            'hasPassword': bool(st.get('tunnelPassword')),
+            'hasApiPassword': bool(st.get('tunnelApiPassword')),
+            'hasClient': bool(paths.gost_exe()),
+            'running': bool(client and client.listening()),
+        }
+
+    def saveTunnel(self, domain=None, password=None, apiPassword=None):
+        """Keep what was typed. Blank means unchanged, not cleared: the page
+        never sends the passwords back, so treating empty as "erase" would
+        wipe them every time the domain was edited."""
+        if domain is not None:
+            self._settings['tunnelDomain'] = domain.strip()
+        if password:
+            self._settings['tunnelPassword'] = password.strip()
+        if apiPassword:
+            self._settings['tunnelApiPassword'] = apiPassword.strip()
+        save_settings(self._settings)
+        self._tunnel = None
+        return self.tunnelPlan()
+
+    def setMode(self, mode):
+        if mode not in ('surfshark', 'single', 'multi'):
+            return {'ok': False, 'error': 'unknown-mode'}
+        self._settings['mode'] = mode
+        save_settings(self._settings)
+        return {'ok': True, 'mode': mode}
+
+    def testTunnel(self):
+        """Start the client if it is not up and ask the server what it is
+        leaving by. Two answers in one: the client runs, and the far end is
+        reachable and takes the API password."""
+        try:
+            client = self._tunnel_client()
+            client.start()
+            return {'ok': True, 'exit': client.current_exit(),
+                    'running': client.listening()}
+        except RuntimeError as e:
+            return {'ok': False, 'error': str(e)}
+        except Exception as e:
+            return {'ok': False, 'error': str(e)[:200]}
+
     def status(self):
         return self._engine.status()
 
@@ -827,10 +910,15 @@ class Api:
         self._busy = True
         self._retray('busy')
 
+        mode = self._settings.get('mode', 'surfshark')
+
         def work():
             try:
-                result = self._engine.connect(
-                    country, lambda p: self._emit('Progress', p))
+                if mode == 'surfshark':
+                    result = self._engine.connect(
+                        country, lambda p: self._emit('Progress', p))
+                else:
+                    result = self._through_tunnel(country, mode)
                 self._since = time.time()
                 self._retray('on')
                 self._emit('Connected', result)
@@ -851,6 +939,36 @@ class Api:
 
         threading.Thread(target=work, daemon=True).start()
         return {'ok': True}
+
+    def _through_tunnel(self, country, mode):
+        """Connect by way of the user's own server.
+
+        Multi-IP mode is the only one with a choice to make, and it makes it
+        on the server: the exit is set through the API before the worker
+        comes up, so the change is in place by the time anything is carried.
+        Picking here rather than probing from this machine is deliberate -
+        see Engine.address_for.
+        """
+        progress = lambda p: self._emit('Progress', p)
+        client = self._tunnel_client()
+        progress({'phase': 'starting', 'country': '', 'city': ''})
+        client.start()
+
+        label = 'your server'
+        if mode == 'multi':
+            user, password = self._engine.credentials()
+            if country in (None, '', 'auto'):
+                # No country asked for, so leave the server on whatever it
+                # was last set to rather than picking one on its behalf.
+                label = 'chosen exit'
+            else:
+                server, ip, _host = self._engine.address_for(country)
+                client.set_exit(ip, user, password, name=country)
+                label = country
+
+        return self._engine.connect_tunnel(
+            client.address('multi' if mode == 'multi' else 'single'),
+            label, progress)
 
     def _confirm(self):
         """Ask Cloudflare, through the proxy, what address it sees.
@@ -1191,6 +1309,18 @@ def ui_check(window):
             "document.getElementById('sweepSaid').textContent")
         said['sweepFolder'] = window.evaluate_js(
             "document.getElementById('sweepFolder').textContent")
+        # The tunnel pane is the one with a command in it, and a command that
+        # has been mangled is worth catching here rather than on the server.
+        window.evaluate_js(
+            "document.getElementById('prefTunnel').scrollIntoView({block:'start'})")
+        time.sleep(0.6)
+        said['tunnelShot'] = shot('settings-tunnel')
+        said['tunnelPill'] = window.evaluate_js(
+            "document.getElementById('tunnelPill').textContent")
+        said['tunnelCmd'] = window.evaluate_js(
+            "document.getElementById('tunnelCmd').textContent")
+        said['wayNote'] = window.evaluate_js(
+            "document.getElementById('wayNote').textContent")
         window.evaluate_js(
             "document.getElementById('prefSweep').scrollIntoView({block:'start'})")
         time.sleep(0.6)

@@ -2980,6 +2980,72 @@ canvas.blob__body {
 .seg__opt[aria-pressed='true'] { color: var(--text); }
 .seg__opt:disabled { cursor: default; }
 
+/* ---------------------------------------------------------- three answers */
+
+/* The same switch with a third position, on the card rather than in the
+   settings sheet. Three because the ways out are genuinely three: the
+   provider, a server of your own, and that server handing the last leg to an
+   exit. The slide is the only thing that moves, and it moves the same
+   distance between any two - so the strip reads as one control with a
+   position, not as three buttons that light up. */
+.seg--three { grid-template-columns: 1fr 1fr 1fr; }
+.seg--three .seg__slide { width: calc(33.333% - 2.7px); }
+.seg--three[data-way='single'] .seg__slide {
+  transform: translateX(calc(100% + 2.7px));
+}
+.seg--three[data-way='multi'] .seg__slide {
+  transform: translateX(calc(200% + 5.4px));
+}
+
+.way { display: block; }
+/* The line under the strip is the whole explanation, so it gets room to be
+   two lines without the card resizing under the pointer every time the
+   answer changes length. */
+.way__note {
+  min-height: 30px;
+  margin: 8px 2px 2px;
+}
+/* Changed, not merely different: the sentence lifts as it arrives, which is
+   what makes it read as an answer to the tap rather than as text that was
+   always there. */
+.way__note.is-swapping { animation: wayNote 260ms var(--ease); }
+@keyframes wayNote {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* With your own server and nothing after it there is no country to choose,
+   so the picker steps back rather than sitting there inviting a tap that
+   would do nothing. Dimmed and unclickable, not hidden - a control that
+   vanishes takes the layout with it and leaves you wondering what you
+   just lost. */
+.stack[data-way='single'] #pick {
+  opacity: 0.4;
+  pointer-events: none;
+}
+#pick { transition: opacity 240ms var(--ease); }
+
+/* A command meant to be copied, not read for pleasure: it wraps, it keeps
+   its own line, and the button that takes it sits beside it. */
+.pane__row--code {
+  align-items: flex-start;
+  gap: 8px;
+  margin: 2px 0 4px;
+}
+.pane__row--code code {
+  flex: 1 1 auto;
+  padding: 7px 9px;
+  border-radius: 8px;
+  font-size: 10px; line-height: 15px;
+  color: var(--text-muted);
+  background: rgba(0, 0, 0, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  /* At the spaces, not through the middle of an argument. A command broken
+     as `<su / rfshark-user>` is one somebody will paste wrong. */
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
 /* The address is not editable and the port is, so they are one control with
    one of them greyed rather than two boxes pretending to be equals. */
 .port {

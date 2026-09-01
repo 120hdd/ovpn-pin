@@ -353,6 +353,23 @@ class Engine:
             return out[:140]
         return pool[:80]
 
+    def address_for(self, country):
+        """One exit address for that country, without asking it anything.
+
+        find_exit() races the candidates because it is about to carry traffic
+        through one and wants a live one. Here the connection is made from
+        the tunnel server, not from this machine, so a probe from here would
+        measure the wrong leg - and fail on exits that are only blocked on
+        this line. The list is already ordered by what the sweep timed, so
+        the first entry is the best answer available without asking.
+        """
+        ordered = self.candidates(country)
+        if not ordered:
+            raise RuntimeError('no-servers')
+        server = ordered[0]
+        ip, host = px.read_config(server.path)
+        return server, ip, host
+
     def find_exit(self, country, progress, width=8, timeout=6):
         """Race the candidates and take the first that says yes.
 

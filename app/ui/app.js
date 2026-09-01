@@ -1144,9 +1144,11 @@ async function onAct() {
   if (!r.ok) { state.mode = 'off'; render(); }
 }
 
-async function copyIp(el) {
-  const text = (el.textContent || '').trim();
-  if (!text || text === '—' || text === '…' || text === 'unknown') return;
+/* The clipboard, and a brief mark on whatever was clicked to say so. Split
+   from copyIp because the thing that gets the mark is not always the thing
+   that holds the text - for the install command it is the button beside it. */
+async function copyText(el, text) {
+  if (!text) return;
   try {
     await navigator.clipboard.writeText(text);
   } catch (err) {
@@ -1154,6 +1156,138 @@ async function copyIp(el) {
   }
   el.classList.add('copied');
   setTimeout(() => el.classList.remove('copied'), 700);
+}
+
+async function copyIp(el) {
+  const text = (el.textContent || '').trim();
+  if (!text || text === '—' || text === '…' || text === 'unknown') return;
+  await copyText(el, text);
+}
+
+/* ------------------------------------------------------------ the way out */
+
+/* One sentence each, and each one says what it costs as well as what it
+   gives. A strip of three words with no explanation would make the middle
+   and the right look like settings; they are three different machines
+   carrying the traffic, and the difference is worth a line. */
+const WAY_SAID = {
+  surfshark: 'Surfshark’s own proxy. Nothing to set up, and every '
+    + 'country below is available. Uploads are the catch — on this line '
+    + 'they crawl or stall outright.',
+  single: 'Your own server, reached through a CDN. The quickest and steadiest '
+    + 'of the three. No country to choose: the server is where it is.',
+  multi: 'Your server, handing the last leg to a Surfshark exit. Sites see '
+    + 'that country’s address, and uploads keep your server’s speed.',
+};
+
+const WAY_NEEDS_TUNNEL = 'Set the domain and passwords under Settings → '
+  + 'Your own tunnel first.';
+
+function paintWay() {
+  const way = state.way || 'surfshark';
+  const ready = way === 'surfshark' || (state.tunnel && state.tunnel.domain);
+
+  $('way').dataset.way = way;
+  $('wayWrap').dataset.way = way;
+  for (const b of $('way').querySelectorAll('.seg__opt')) {
+    b.setAttribute('aria-pressed', String(b.dataset.way === way));
+  }
+  // The picker belongs to the two ways that have a country in them.
+  document.querySelector('.stack').dataset.way = way;
+
+  const note = $('wayNote');
+  said(note, ready ? WAY_SAID[way] : WAY_NEEDS_TUNNEL, ready ? '' : 'bad');
+  note.classList.remove('is-swapping');
+  void note.offsetWidth;                       // restart it, do not queue it
+  note.classList.add('is-swapping');
+}
+
+async function chooseWay(way) {
+  if (way === state.way) return;
+  // Moved before the round trip, so the strip answers the tap rather than
+  // the disk. Nothing is carried yet, so there is nothing to put back if
+  // the write fails - and it says so if it does.
+  state.way = way;
+  paintWay();
+  const r = await window.pywebview.api.setMode(way);
+  if (!r || !r.ok) said($('wayNote'), 'That could not be saved.', 'bad');
+}
+
+/* --------------------------------------------------------- your own tunnel */
+
+function paintTunnel(plan) {
+  if (plan) state.tunnel = plan;
+  const t = state.tunnel || {};
+  const pill = $('tunnelPill');
+  let label = 'not set';
+  let mark = 'off';
+  if (!t.hasClient) { label = 'no client'; mark = 'off'; }
+  else if (!t.domain) { label = 'not set'; mark = 'off'; }
+  else if (t.running) { label = 'running'; mark = 'on'; }
+  else { label = 'ready'; mark = 'on'; }
+  pill.textContent = label;
+  pill.dataset.state = mark;
+
+  if (document.activeElement !== $('tunnelDomain')) {
+    $('tunnelDomain').value = t.domain || '';
+  }
+  // Set, but never shown. The page is given whether there is one, not what
+  // it is, so the placeholder is the only thing that can say so.
+  $('tunnelPass').placeholder = t.hasPassword ? 'saved' : 'not set';
+  $('tunnelApi').placeholder = t.hasApiPassword ? 'saved' : 'not set';
+  $('tunnelCmd').textContent =
+    `./install-server.sh ${t.domain || 'yourdomain.com'} `
+    + '<surfshark-user> <surfshark-pass>';
+}
+
+async function saveTunnel() {
+  const btn = $('tunnelSave');
+  btn.disabled = true;
+  said($('tunnelSaid'), 'Saving…');
+  const plan = await window.pywebview.api.saveTunnel(
+    $('tunnelDomain').value.trim(), $('tunnelPass').value, $('tunnelApi').value);
+  btn.disabled = false;
+  // Out of the DOM as soon as they are on disk, for the same reason the
+  // sign-in fields are.
+  $('tunnelPass').value = '';
+  $('tunnelApi').value = '';
+  paintTunnel(plan);
+  paintWay();
+  said($('tunnelSaid'), plan.domain ? 'Saved.' : 'Cleared.', 'good');
+}
+
+async function testTunnel() {
+  const btn = $('tunnelTest');
+  btn.disabled = true;
+  said($('tunnelSaid'), 'Starting the client and asking the server…');
+  const r = await window.pywebview.api.testTunnel();
+  btn.disabled = false;
+  if (!r.ok) {
+    // Two failures worth telling apart: nothing to run, and nothing to
+    // reach. The first is a missing file, the second is a wrong answer.
+    const why = r.error === 'no-client'
+      ? 'No tunnel client found. gost belongs beside the app, or in tunnel/.'
+      : r.error === 'not-set-up' ? 'Fill the domain in first.' : r.error;
+    said($('tunnelSaid'), why, 'bad');
+    paintTunnel({ ...(state.tunnel || {}), running: false });
+    return;
+  }
+  said($('tunnelSaid'),
+       `Up. The server is leaving by ${r.exit || 'the exit it was left on'}.`,
+       'good');
+  paintTunnel({ ...(state.tunnel || {}), running: true });
+  paintWay();
+}
+
+function peek(fieldId, buttonId) {
+  const field = $(fieldId);
+  const showing = field.type === 'text';
+  field.type = showing ? 'password' : 'text';
+  $(buttonId).querySelector('use')
+    .setAttribute('href', showing ? '#i-eye' : '#i-eye-off');
+  $(buttonId).setAttribute('aria-pressed', String(!showing));
+  $(buttonId).setAttribute('aria-label',
+    showing ? 'Show the password' : 'Hide the password');
 }
 
 /* ---------------------------------------------------------------- prefs */
@@ -1169,6 +1303,17 @@ function paintPrefs(info) {
 
   state.hasCredentials = info.hasCredentials !== false;
   paintAuthPill();
+
+  if (info.mode) state.way = info.mode;
+  paintWay();
+  // Asked for separately: it looks for the client on disk and pokes the
+  // port, which is more than info() should be doing on every repaint. The
+  // strip is painted again when it lands - until then nothing here knows
+  // whether there is a tunnel, and it would say there is not.
+  window.pywebview.api.tunnelPlan().then((plan) => {
+    paintTunnel(plan);
+    paintWay();
+  });
   // The name is shown back; the password never is. A field that arrives
   // pre-filled with a password is a password on screen, and all that buys is
   // the ability to read it over somebody's shoulder.
@@ -1853,6 +1998,7 @@ async function boot() {
   const info = await window.pywebview.api.boot();
   state.countries = info.countries || [];
   state.picked = info.picked || 'auto';
+  state.way = info.mode || 'surfshark';
   state.systemProxy = info.systemProxy !== false;
   state.port = info.port || state.port;
   state.fuse = new Fuse(state.countries, {
@@ -1989,6 +2135,21 @@ $('authPeek').addEventListener('click', () => {
   $('authPeek').setAttribute('aria-label',
     showing ? 'Show the password' : 'Hide the password');
 });
+
+$('way').addEventListener('click', (e) => {
+  const opt = e.target.closest('.seg__opt');
+  if (opt && !opt.disabled) chooseWay(opt.dataset.way);
+});
+
+$('tunnelSave').addEventListener('click', saveTunnel);
+$('tunnelTest').addEventListener('click', testTunnel);
+$('tunnelPeek').addEventListener('click', () => peek('tunnelPass', 'tunnelPeek'));
+$('tunnelApiPeek').addEventListener('click', () => peek('tunnelApi', 'tunnelApiPeek'));
+$('tunnelApi').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') saveTunnel();
+});
+$('tunnelCopy').addEventListener('click', (e) =>
+  copyText(e.currentTarget, $('tunnelCmd').textContent));
 
 $('pinPick').addEventListener('click', async () => {
   const r = await window.pywebview.api.choosePinFolder();
