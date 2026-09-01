@@ -185,8 +185,59 @@ def gather(paths, limit, check=None):
     return out, read
 
 
-def outbounds_for(exits, user, password, exit_port, interval):
-    """One http outbound per exit, and the group that chooses between them."""
+# The tag the tunnel goes out under, and the one the phone actually picks.
+# Named rather than inlined because three places have to agree on them and a
+# typo in any of them is a config that loads and routes nowhere.
+TUNNEL_TAG = 'tunnel'
+GROUP_TAG = 'relay'
+
+
+def tunnel_outbound(tunnel, resolver=None):
+    """A server of your own, in the one language every phone client speaks.
+
+    Not the tunnel the desktop uses. That one is an HTTP proxy over a
+    WebSocket, and no phone client can hold it: sing-box's own http outbound
+    has a `path`, and its documentation says path of the HTTP request, not an
+    upgrade. So the same server keeps a second door open on another path,
+    speaking VLESS, and this is it.
+
+    No TLS settings beyond the name: the certificate is the CDN's, which is
+    the point of putting one in front - the address the phone dials is the
+    CDN's too, and that is what makes it reachable at all.
+    """
+    domain, uuid, path = tunnel
+    out = {
+        'type': 'vless',
+        'tag': TUNNEL_TAG,
+        'server': domain,
+        'server_port': 443,
+        'uuid': uuid,
+        'tls': {'enabled': True, 'server_name': domain},
+        'transport': {'type': 'ws', 'path': path},
+    }
+    if resolver:
+        # Required, not decoration. From 1.14 an outbound whose server is a
+        # name has to say which resolver looks it up once more than one is
+        # configured - and the moment a tunnel is added there are two. Left
+        # out, every request died ten seconds in with `lookup <domain>:
+        # context deadline exceeded`, which reads like the server being down
+        # and is not.
+        out['domain_resolver'] = resolver
+    return out
+
+
+def outbounds_for(exits, user, password, exit_port, interval, tunnel=None,
+                  resolver=None):
+    """One http outbound per exit, and the group that chooses between them.
+
+    With a tunnel, each exit is dialled *through* it rather than from the
+    phone. The exits do not change and neither does the group: what changes
+    is the leg in front of them, which is the leg that was refusing to carry
+    an upload. `detour` is sing-box's word for it, and its documentation is
+    blunt about what it costs - "if enabled, all other fields will be
+    ignored" - which is why the address and the name still sit on the exit
+    and not on the tunnel.
+    """
     outs = [{
         'type': 'http',
         'tag': tag,
@@ -200,6 +251,7 @@ def outbounds_for(exits, user, password, exit_port, interval):
             'server_name': name,
             'disable_sni': True,
         },
+        **({'detour': TUNNEL_TAG} if tunnel else {}),
     } for ip, name, tag in exits]
 
     outs.append({
@@ -217,10 +269,25 @@ def outbounds_for(exits, user, password, exit_port, interval):
         'interval': interval,
         'tolerance': 100,
     })
+
+    if tunnel:
+        # Both ways out in one file, and the phone chooses. The desktop has a
+        # strip for this; here it is whatever the client calls its proxy
+        # picker. `exit` first, because a country is the reason most people
+        # opened the app - the server's own address is the quieter, quicker
+        # answer for when it is not.
+        outs.insert(0, tunnel_outbound(tunnel, resolver))
+        outs.append({
+            'type': 'selector',
+            'tag': GROUP_TAG,
+            'outbounds': ['exit', TUNNEL_TAG],
+            'default': 'exit',
+        })
     return outs
 
 
-def build(exits, user, password, exit_port, interval, nodes_only=False):
+def build(exits, user, password, exit_port, interval, nodes_only=False,
+          tunnel=None):
     """The config itself.
 
     Everything that is not an outbound is here for one reason each: the tun
@@ -240,21 +307,44 @@ def build(exits, user, password, exit_port, interval, nodes_only=False):
     that says only what that client will read is easier to argue with when it
     does not work.
     """
-    outs = outbounds_for(exits, user, password, exit_port, interval)
+    outs = outbounds_for(exits, user, password, exit_port, interval, tunnel,
+                         resolver='bootstrap' if tunnel and not nodes_only else None)
     if nodes_only:
         return {'outbounds': outs}
+
+    # Everything hangs off whichever of the two the phone has selected, DNS
+    # included - a resolver that keeps using the old way out after the way
+    # out has been changed is a leak, and a confusing one.
+    final = GROUP_TAG if tunnel else 'exit'
+
+    servers = [{
+        'type': 'https',
+        'tag': 'doh',
+        # An address, not a name: a name here would have to be
+        # resolved by the thing this exists to stop using.
+        'server': '1.1.1.1',
+        'detour': final,
+    }]
+    dns_rules = []
+    if tunnel:
+        # One name, one server, and it is the line's own. Answering it
+        # through the tunnel is impossible, and answering it over DoH would
+        # only move the same loop one hop along.
+        # No detour, which is how this one stays outside: sing-box refuses
+        # `detour` to a plain direct outbound - "makes no sense" is its
+        # phrasing - and a server without one is answered on the line the
+        # phone is already on. Which is the only line that can answer it.
+        servers.append({'type': 'udp', 'tag': 'bootstrap',
+                        'server': '1.1.1.1'})
+        dns_rules.append({'domain': [tunnel[0]], 'server': 'bootstrap'})
 
     return {
         'log': {'level': 'warn'},
         'dns': {
-            'servers': [{
-                'type': 'https',
-                'tag': 'doh',
-                # An address, not a name: a name here would have to be
-                # resolved by the thing this exists to stop using.
-                'server': '1.1.1.1',
-                'detour': 'exit',
-            }],
+            'servers': servers,
+            # Left out entirely when there is nothing in it, so a file
+            # written without a tunnel is the same file it always was.
+            **({'rules': dns_rules} if dns_rules else {}),
             # A records only. The exit is reached over v4 and CONNECT to a v6
             # literal is a question this fleet has not been asked here - an
             # app handed an AAAA would be the one asking, and would fail at it
@@ -271,8 +361,15 @@ def build(exits, user, password, exit_port, interval, nodes_only=False):
         }],
         'outbounds': outs,
         'route': {
-            'final': 'exit',
+            'final': final,
             'auto_detect_interface': True,
+            # Every outbound that might resolve a name, answered in one
+            # place. sing-box 1.14 refuses to start without it once there is
+            # more than one DNS server, and names the wrong thing when it
+            # does: the message is about dial fields, and the outbound it
+            # means can be the direct one that only exists to look the
+            # tunnel up.
+            **({'default_domain_resolver': 'bootstrap'} if tunnel else {}),
             'rules': [
                 {'action': 'sniff'},
                 {'protocol': 'dns', 'action': 'hijack-dns'},
@@ -294,7 +391,8 @@ def yaml_string(value):
     return '"' + str(value).replace('\\', '\\\\').replace('"', '\\"') + '"'
 
 
-def clash_yaml(exits, user, password, exit_port, interval, nodes_only=False):
+def clash_yaml(exits, user, password, exit_port, interval, nodes_only=False,
+               tunnel=None):
     """The same exits in Clash's vocabulary.
 
     Written by hand rather than dumped, because pyyaml is not in the standard
@@ -334,6 +432,25 @@ def clash_yaml(exits, user, password, exit_port, interval, nodes_only=False):
         '',
         'proxies:',
     ]
+    if tunnel:
+        domain, uuid, path = tunnel
+        L += [
+            f'  - name: {yaml_string(TUNNEL_TAG)}',
+            '    type: vless',
+            f'    server: {domain}',
+            '    port: 443',
+            f'    uuid: {yaml_string(uuid)}',
+            "    flow: ''",
+            '    tls: true',
+            f'    servername: {domain}',
+            '    network: ws',
+            '    ws-opts:',
+            f'      path: {yaml_string(path)}',
+            '    udp: true',
+            '    # Your own server, through a CDN. dialer-proxy below sends',
+            '    # every exit out through it - Clash spells detour that way.',
+        ]
+
     for ip, name, tag in exits:
         L += [
             f'  - name: {yaml_string(tag)}',
@@ -344,8 +461,10 @@ def clash_yaml(exits, user, password, exit_port, interval, nodes_only=False):
             f'    password: {yaml_string(password)}',
             '    tls: true',
             '    skip-cert-verify: true',
-            f'    # {name}',
         ]
+        if tunnel:
+            L += [f'    dialer-proxy: {yaml_string(TUNNEL_TAG)}']
+        L += [f'    # {name}']
 
     if nodes_only:
         return '\n'.join(L) + '\n'
@@ -357,10 +476,13 @@ def clash_yaml(exits, user, password, exit_port, interval, nodes_only=False):
     # anything has resolved anything.
     L += [f'    url: "https://1.1.1.1/cdn-cgi/trace"',
           f'    interval: {seconds}',
-          '    tolerance: 100',
-          '',
-          'rules:',
-          '  - MATCH,exit']
+          '    tolerance: 100']
+
+    if tunnel:
+        L += ['', f'  - name: {yaml_string(GROUP_TAG)}', '    type: select',
+              '    proxies:', '      - "exit"', f'      - {yaml_string(TUNNEL_TAG)}']
+
+    L += ['', 'rules:', f'  - MATCH,{GROUP_TAG if tunnel else "exit"}']
     return '\n'.join(L) + '\n'
 
 
@@ -420,7 +542,21 @@ def main():
                    help="the exit's proxy port (443)")
     p.add_argument('--interval', default='30m',
                    help='how often the client re-tests the exits (30m)')
+    p.add_argument('--tunnel', metavar='DOMAIN',
+                   help='send every exit out through a server of your own '
+                        'first - the domain install-server.sh was run for. '
+                        'The phone gets both ways out and a picker between '
+                        'them. Needs --uuid')
+    p.add_argument('--uuid',
+                   help='the VLESS uuid install-server.sh printed')
+    p.add_argument('--ws-path', default='/vl',
+                   help='the path on that domain (/vl)')
     args = p.parse_args()
+
+    if args.tunnel and not args.uuid:
+        p.error('--tunnel needs --uuid: the domain says where the server is, '
+                'the uuid is what lets you in. install-server.sh prints both.')
+    tunnel = (args.tunnel, args.uuid, args.ws_path) if args.tunnel else None
 
     paths = args.paths or [os.path.join(ROOT, 'pinned')]
     found = []
@@ -449,11 +585,11 @@ def main():
         if fmt == 'clash':
             path = stem + (ext if ext else '.yaml')
             body = clash_yaml(exits, user, password, args.exit_port,
-                              args.interval, args.nodes_only)
+                              args.interval, args.nodes_only, tunnel)
         else:
             path = stem + (ext if ext else '.json')
             body = json.dumps(build(exits, user, password, args.exit_port,
-                                    args.interval, args.nodes_only),
+                                    args.interval, args.nodes_only, tunnel),
                               indent=2) + '\n'
         with open(path, 'w', encoding='utf-8', newline='\n') as f:
             f.write(body)
@@ -469,6 +605,10 @@ def main():
     for _, name, tag in exits:
         print(f'    {tag:<34}{name}')
     print()
+    if tunnel:
+        print(f'  Every one of them is dialled through {tunnel[0]} first, and')
+        print('  the phone can switch to the server itself in its proxy picker.')
+        print()
     print('  Import the .yaml first - it is the one every phone client reads.')
     print('  Both hold your service password in clear text. Nowhere a URL')
     print('  alone would reach them - no gists, no pastebins.')

@@ -14,7 +14,13 @@ SSP="${3:-}"
 [ -n "$DOMAIN" ] || { echo "usage: $0 <domain> [surfshark-user] [surfshark-pass]" >&2; exit 1; }
 
 GOST_VER=3.3.0
+# The phone's half. gost carries the desktop, but no phone client speaks a
+# proxy over WebSocket - sing-box's own `http` outbound has a path field and
+# it is the path of an HTTP request, not an upgrade - so the same server also
+# offers the one language they all do speak.
+SB_VER=1.14.0
 CFG=/etc/gost/config.yaml
+SBCFG=/etc/sing-box/config.json
 SITE="/etc/nginx/sites-available/relay-${DOMAIN}.conf"
 
 say() { printf '\n=== %s\n' "$*"; }
@@ -34,14 +40,28 @@ if [ "$(gost -V 2>/dev/null | grep -o "v${GOST_VER}" || true)" != "v${GOST_VER}"
 fi
 gost -V
 
+say "sing-box ${SB_VER}"
+if ! sing-box version 2>/dev/null | head -1 | grep -q "${SB_VER}"; then
+  curl -fsSL -o /tmp/sb.tgz \
+    "https://github.com/SagerNet/sing-box/releases/download/v${SB_VER}/sing-box-${SB_VER}-linux-amd64.tar.gz"
+  tar xzf /tmp/sb.tgz -C /tmp
+  install -m755 "/tmp/sing-box-${SB_VER}-linux-amd64/sing-box" /usr/local/bin/sing-box
+  rm -rf /tmp/sb.tgz "/tmp/sing-box-${SB_VER}-linux-amd64"
+fi
+sing-box version | head -1
+
 say "secrets"
-mkdir -p /etc/gost
+mkdir -p /etc/gost /etc/sing-box
 newpw() { head -c 18 /dev/urandom | base64 | tr -d '/+=' | head -c 20; }
 [ -s /etc/gost/tunnel.pw ] || newpw > /etc/gost/tunnel.pw
 [ -s /etc/gost/api.pw ]    || newpw > /etc/gost/api.pw
-chmod 600 /etc/gost/*.pw
+# Kept beside the passwords and generated once, so a phone that already holds
+# a config keeps working when this is run again.
+[ -s /etc/gost/vless.uuid ] || sing-box generate uuid > /etc/gost/vless.uuid
+chmod 600 /etc/gost/*.pw /etc/gost/vless.uuid
 PW=$(cat /etc/gost/tunnel.pw)
 APW=$(cat /etc/gost/api.pw)
+UUID=$(cat /etc/gost/vless.uuid)
 
 # Keep whatever Surfshark credentials are already configured, if none given.
 #
@@ -120,6 +140,7 @@ NGX
   ws_block gw  10000     # single-IP mode  - exits at this server
   ws_block ex  10001     # multi-IP mode   - exits at the chosen Surfshark exit
   ws_block gwb 10002     # bulk, no multiplexing
+  ws_block vl  10003     # the phone's door: VLESS over the same WebSocket
   cat <<NGX
     location /api/ {
         proxy_pass http://127.0.0.1:18080/api/;
@@ -178,6 +199,41 @@ log:
 YAML
 chmod 600 "$CFG"
 
+say "sing-box"
+# No TLS here and none wanted: nginx has already terminated it, and behind
+# that Cloudflare terminated the one the phone actually made. This end only
+# has to be the far side of the WebSocket that arrives on /vl.
+cat > "$SBCFG" <<JSON
+{
+  "log": { "level": "warn", "timestamp": true },
+  "inbounds": [
+    {
+      "type": "vless",
+      "tag": "phone",
+      "listen": "127.0.0.1",
+      "listen_port": 10003,
+      "users": [ { "uuid": "${UUID}", "name": "relay" } ],
+      "transport": { "type": "ws", "path": "/vl" }
+    }
+  ],
+  "outbounds": [ { "type": "direct", "tag": "out" } ]
+}
+JSON
+chmod 600 "$SBCFG"
+sing-box check -c "$SBCFG"
+
+cat > /etc/systemd/system/sing-box.service <<UNIT
+[Unit]
+Description=Relay tunnel, the phone's half (sing-box)
+After=network.target
+[Service]
+ExecStart=/usr/local/bin/sing-box run -c ${SBCFG}
+Restart=always
+RestartSec=2
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 cat > /etc/systemd/system/gost.service <<UNIT
 [Unit]
 Description=Relay tunnel (gost)
@@ -190,13 +246,16 @@ RestartSec=2
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
-systemctl enable --now gost >/dev/null 2>&1 || true
-systemctl restart gost
+for unit in gost sing-box; do
+  systemctl enable --now "$unit" >/dev/null 2>&1 || true
+  systemctl restart "$unit"
+done
 sleep 2
 
 say "result"
-systemctl is-active gost
-ss -lnt | grep -E '127.0.0.1:(1000[0-2]|18080)' | awk '{print "  listening " $4}'
+for unit in gost sing-box; do printf '  %-9s %s
+' "$unit" "$(systemctl is-active "$unit")"; done
+ss -lnt | grep -E '127.0.0.1:(1000[0-3]|18080)' | awk '{print "  listening " $4}'
 cat <<SUMMARY
 
   Give these to the desktop app:
@@ -209,6 +268,10 @@ cat <<SUMMARY
     multi-IP   wss://${DOMAIN}/ex     (exits at a Surfshark node)
     bulk       wss://${DOMAIN}/gwb    (no multiplexing)
     control    https://${DOMAIN}/api/config/chains/exit-chain
+
+  And for phones - ovpn-mobile.py --tunnel wants these three:
+
+    server ${DOMAIN}   path /vl   uuid ${UUID}
 
 SUMMARY
 if [ "$SSU" = "CHANGEME" ]; then
