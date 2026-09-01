@@ -22,6 +22,7 @@ in a box:
 """
 
 import atexit
+import base64
 import ctypes
 # Up here rather than inside the two functions that want it. Imported in a
 # function body, `ctypes` becomes a local name for that whole body - and the
@@ -865,6 +866,30 @@ class Api:
             'hasClient': bool(paths.gost_exe()),
             'running': bool(client and client.listening()),
         }
+
+    def installCommand(self, domain=None, user=None, password=None):
+        """One line that puts the installer on the server and runs it.
+
+        The pane used to show `./install-server.sh …`, which quietly assumed
+        the script was already there - and it never is. Nothing hosts it, so
+        the script travels inside the command: base64 in a single line, which
+        an SSH session takes as one paste and a phone can manage.
+
+        The Surfshark credentials are left as placeholders rather than filled
+        in. They would otherwise sit in a clipboard and, on most machines, in
+        a shell history file on a server, to save the person two words.
+        """
+        try:
+            with open(paths.INSTALLER, 'rb') as f:
+                blob = base64.b64encode(f.read()).decode()
+        except OSError as e:
+            return {'ok': False, 'error': f'the installer is missing: {e}'}
+        host = (domain or '').strip() or 'yourdomain.com'
+        return {'ok': True, 'command':
+                "mkdir -p /opt/relay && echo '" + blob + "' | base64 -d "
+                "> /opt/relay/install-server.sh && bash "
+                f"/opt/relay/install-server.sh {host} "
+                f"{user or '<surfshark-user>'} {password or '<surfshark-pass>'}"}
 
     def saveTunnel(self, domain=None, password=None, apiPassword=None):
         """Keep what was typed. Blank means unchanged, not cleared: the page

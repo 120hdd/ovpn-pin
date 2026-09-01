@@ -393,15 +393,24 @@
       <div class="pane__body">
         <p class="lede"><svg class="ico" aria-hidden="true"><use href="#i-tower"/></svg>Once, on the server</p>
         <p class="pane__why pane__why--tight">Point a domain at it on Cloudflare
-          with the cloud <b>on</b>, then run this over SSH. It is safe to run
-          twice, leaves other sites on the box alone, and prints the two
-          passwords below when it finishes.</p>
+          with the cloud <b>on</b>, then paste this into an SSH session as
+          <b>root</b>. Safe to run twice, leaves other sites on the box alone,
+          and prints the two passwords below when it finishes.</p>
         <div class="pane__row pane__row--code">
-          <code class="path path--flush mono" id="tunnelCmd">./install-server.sh yourdomain.com &lt;surfshark-user&gt; &lt;surfshark-pass&gt;</code>
+          <code class="path path--flush mono" id="tunnelCmd">install-server.sh yourdomain.com &lt;surfshark-user&gt; &lt;surfshark-pass&gt;</code>
           <button class="btn btn--quiet btn--auto" id="tunnelCopy" type="button">Copy</button>
         </div>
+        <p class="note" id="tunnelCmdNote">Copy takes the whole installer, not
+          just this line — one paste, nothing to upload first. Fill your
+          Surfshark username and password in where the brackets are.</p>
 
         <p class="lede"><svg class="ico" aria-hidden="true"><use href="#i-socket"/></svg>Then, here</p>
+        <p class="pane__why pane__why--tight">Both are made by the installer and
+          printed at the end. The <b>tunnel</b> one keeps strangers who find the
+          domain from using it as an open proxy; the <b>API</b> one is what lets
+          this window change the exit country. Lost them? They are on the server
+          in <span class="mono">/etc/gost/tunnel.pw</span> and
+          <span class="mono">/etc/gost/api.pw</span>.</p>
         <label class="field">
           <span class="field__cap">Domain</span>
           <input class="field__in mono" id="tunnelDomain" type="text"

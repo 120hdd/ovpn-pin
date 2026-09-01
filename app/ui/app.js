@@ -1236,7 +1236,7 @@ function paintTunnel(plan) {
   $('tunnelPass').placeholder = t.hasPassword ? 'saved' : 'not set';
   $('tunnelApi').placeholder = t.hasApiPassword ? 'saved' : 'not set';
   $('tunnelCmd').textContent =
-    `./install-server.sh ${t.domain || 'yourdomain.com'} `
+    `install-server.sh ${t.domain || 'yourdomain.com'} `
     + '<surfshark-user> <surfshark-pass>';
 }
 
@@ -2148,8 +2148,15 @@ $('tunnelApiPeek').addEventListener('click', () => peek('tunnelApi', 'tunnelApiP
 $('tunnelApi').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') saveTunnel();
 });
-$('tunnelCopy').addEventListener('click', (e) =>
-  copyText(e.currentTarget, $('tunnelCmd').textContent));
+$('tunnelCopy').addEventListener('click', async (e) => {
+  // What is shown is the readable version; what goes to the clipboard is the
+  // whole installer in one line, because nothing hosts it and the script has
+  // to reach the server somehow.
+  const r = await window.pywebview.api.installCommand($('tunnelDomain').value.trim());
+  if (!r || !r.ok) { said($('tunnelSaid'), (r && r.error) || 'nothing to copy', 'bad'); return; }
+  await copyText(e.currentTarget, r.command);
+  said($('tunnelSaid'), 'Copied — paste it into SSH as root.', 'good');
+});
 
 $('pinPick').addEventListener('click', async () => {
   const r = await window.pywebview.api.choosePinFolder();

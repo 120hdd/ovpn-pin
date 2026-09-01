@@ -43,10 +43,31 @@ chmod 600 /etc/gost/*.pw
 PW=$(cat /etc/gost/tunnel.pw)
 APW=$(cat /etc/gost/api.pw)
 
-# keep whatever Surfshark credentials are already configured, if none given
+# Keep whatever Surfshark credentials are already configured, if none given.
+#
+# Read with a non-greedy match, and not with sed. On a line carrying both
+# keys, `s/.*username: "\(.*\)"/\1/` takes everything up to the last quote on
+# that line - so the username came back as `user", password: "pass`, and
+# writing it out again produced a line with two password keys and a config
+# gost refused to parse. The block below writes one key per line for the
+# same reason: a value that has to survive a round trip should not share a
+# line with another one.
 if [ -z "$SSU" ] && [ -f "$CFG" ]; then
-  SSU=$(sed -n '/name: exit/,/dialer:/p' "$CFG" | sed -n 's/.*username: "\(.*\)"/\1/p' | head -1)
-  SSP=$(sed -n '/name: exit/,/dialer:/p' "$CFG" | sed -n 's/.*password: "\(.*\)"/\1/p' | head -1)
+  eval "$(python3 - "$CFG" <<'PY'
+import re, shlex, sys
+try:
+    text = open(sys.argv[1]).read()
+except OSError:
+    text = ''
+at = text.find('name: exit')
+block = text[at:] if at >= 0 else ''
+user = re.search(r'username:\s*"(.*?)"', block)
+word = re.search(r'password:\s*"(.*?)"', block)
+if user and word and user.group(1) != 'CHANGEME':
+    print('SSU=%s; SSP=%s' % (shlex.quote(user.group(1)),
+                              shlex.quote(word.group(1))))
+PY
+)"
 fi
 : "${SSU:=CHANGEME}" ; : "${SSP:=CHANGEME}"
 
@@ -145,7 +166,9 @@ chains:
             addr: 146.70.194.221:443
             connector:
               type: http
-              auth: {username: "${SSU}", password: "${SSP}"}
+              auth:
+                username: "${SSU}"
+                password: "${SSP}"
             dialer:
               type: tls
               tls: {secure: false}

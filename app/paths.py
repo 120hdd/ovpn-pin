@@ -50,6 +50,9 @@ TUNNEL_DIR = DATA_DIR if FROZEN else os.path.join(DATA_DIR, 'tunnel')
 TUNNEL_STATE = os.path.join(STATE_DIR, 'tunnel')
 
 
+INSTALLER = os.path.join(TUNNEL_DIR, 'install-server.sh')
+
+
 def gost_exe():
     """The tunnel client binary, or None if there is not one to run."""
     name = 'gost.exe' if os.name == 'nt' else 'gost'
