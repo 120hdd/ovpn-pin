@@ -423,14 +423,14 @@ class Engine:
 
     # -- holding it --------------------------------------------------------
 
-    def _spawn(self, ip, host):
+    def _spawn(self, ip, host, tunnel=None):
         """The proxy runs as its own process, exactly as `--detach` starts
         it. Keeping it out of this one means a wedged connection cannot take
         the window down with it, and the window closing does not have to be
         the thing that stops it."""
         out_path = os.path.join(paths.STATE_DIR, f'proxy-{self.port}.out')
         os.makedirs(paths.STATE_DIR, exist_ok=True)
-        argv = paths.worker_argv(ip, host, self.port, self.auth_file)
+        argv = paths.worker_argv(ip, host, self.port, self.auth_file, tunnel)
         flags = 0x08 | 0x200 if os.name == 'nt' else 0   # DETACHED, NEW_GROUP
         with open(out_path, 'w', encoding='utf-8') as out:
             return subprocess.Popen(
@@ -482,6 +482,33 @@ class Engine:
             # holding the word "connected" back for it made every connect a
             # second slower than it had to be. The caller confirms
             # afterwards and fills the address in when it arrives.
+            return self.status()
+
+    def connect_tunnel(self, address, label, progress):
+        """Come up on a tunnel whose local end is already listening.
+
+        The half of connect() that chooses an exit has nothing to do here:
+        the tunnel is already abroad, and which address the far end leaves by
+        is its business, not ours. What is left is the same in both - spawn
+        the worker, wait for it to listen, point the machine at it - so the
+        window, the meter and the host list cannot tell the difference.
+        """
+        with self.lock:
+            self.disconnect(quiet=True)
+            progress({'phase': 'starting', 'country': label, 'city': ''})
+
+            child, out_path = self._spawn(None, None, tunnel=address)
+            self._wait_listening(child, out_path)
+            self.child = child
+
+            if self.set_system_proxy:
+                progress({'phase': 'routing'})
+                self.sysproxy.engage('127.0.0.1', self.port)
+
+            self.exit_info = {'ip': address, 'host': '', 'country': label,
+                              'city': '', 'answered': 0.0,
+                              'pid': child.pid, 'since': time.time(),
+                              'tunnel': True}
             return self.status()
 
     def disconnect(self, quiet=False):

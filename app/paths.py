@@ -67,13 +67,18 @@ def servers_dir():
     return os.path.join(DATA_DIR, SERVER_DIRS[0])
 
 
-def worker_argv(ip, host, port, auth):
-    """What to run to get a proxy process, on either side of freezing."""
-    if FROZEN:
-        return [sys.executable, WORKER_FLAG, ip, '--host', host,
-                '--port', str(port), '--auth', auth, '--quiet']
-    return [sys.executable, PROXY_PY, ip, '--host', host,
-            '--port', str(port), '--auth', auth, '--quiet']
+def worker_argv(ip, host, port, auth, tunnel=None):
+    """What to run to get a proxy process, on either side of freezing.
+
+    With `tunnel` set the worker carries traffic through a proxy already
+    running on this machine instead of dialling an exit, so the address is
+    the whole of what it needs: no config, no certificate name, no account.
+    """
+    head = [sys.executable] + ([WORKER_FLAG] if FROZEN else [PROXY_PY])
+    if tunnel:
+        return head + ['--tunnel', tunnel, '--port', str(port), '--quiet']
+    return head + [ip, '--host', host,
+                   '--port', str(port), '--auth', auth, '--quiet']
 
 
 def point_proxy_module_at_data(px):

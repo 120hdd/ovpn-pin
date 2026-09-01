@@ -552,6 +552,33 @@ class InnerTLS:
                 return b''
 
 
+class LocalExit(Exit):
+    """The upstream is a proxy on this machine, not an exit abroad.
+
+    The tunnel modes put a local proxy in front - gost, holding a multiplexed
+    WebSocket to the user's own server - and everything above this line is
+    left alone: the same CONNECT, the same relay(), the same meter, the same
+    host list. What goes away is only what was there because the exit was
+    reached across the open internet. There is no TLS to wrap, because this
+    hop is a loopback socket; no certificate to check, for the same reason;
+    and no credentials to send, because a password between two processes on
+    one machine protects nothing the machine does not already have.
+
+    Subclassed rather than written beside Exit so take(), the warm pool and
+    the tally keep working unchanged - the one method that reaches the
+    upstream is the only thing that differs.
+    """
+
+    def __init__(self, ip, port, warm=0):
+        super().__init__(ip, port, ip, '', '', None, warm)
+        self.auth = None
+
+    def connect(self):
+        raw = socket.create_connection((self.ip, self.port), timeout=20)
+        raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        return raw
+
+
 def fetch(exit_, host, path='/', timeout=20, cap=65536):
     """One HTTPS request through the exit. Returns status, headers, the first
     of the body, and how long until that first byte arrived."""
@@ -1225,8 +1252,9 @@ def with_our_auth(head, exit_):
     # After the request line, wherever that turns out to be. A client is
     # allowed to send a blank line before it, and inserting at 1 regardless
     # would put the credentials where the request line should be.
-    at = next((i for i, l in enumerate(lines) if l.strip()), 0) + 1
-    lines.insert(at, b'Proxy-Authorization: Basic ' + exit_.auth.encode())
+    if exit_.auth:
+        at = next((i for i, l in enumerate(lines) if l.strip()), 0) + 1
+        lines.insert(at, b'Proxy-Authorization: Basic ' + exit_.auth.encode())
     return b'\r\n'.join(lines) + HEAD_END
 
 
@@ -1531,8 +1559,12 @@ def open_tunnel(exit_, target, head=None):
     has always relied on.
     """
     if head is None:
+        # A tunnel's local end needs no credentials, and sending them to
+        # it would only put them somewhere they are not read.
+        credentials = (f'Proxy-Authorization: Basic {exit_.auth}\r\n'
+                       if exit_.auth else '')
         head = (f'CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n'
-                f'Proxy-Authorization: Basic {exit_.auth}\r\n\r\n').encode()
+                f'{credentials}\r\n').encode()
 
     upstream, warm = exit_.take()
     for attempt in (1, 2):
@@ -2401,10 +2433,15 @@ def do_detach(args, exit_):
     except OSError as e:
         die('nowhere to put the detached proxy\'s output', f'{out_path}: {e}')
 
-    argv = [sys.executable, os.path.abspath(__file__), exit_.ip,
-            '--host', exit_.host, '--port', str(args.port),
-            '--exit-port', str(exit_.port), '--listen', args.listen,
-            '--auth', args.auth, '--warm', str(exit_.warm)]
+    if exit_.auth is None:          # a tunnel: the address is the whole story
+        argv = [sys.executable, os.path.abspath(__file__),
+                '--tunnel', f'{exit_.ip}:{exit_.port}',
+                '--port', str(args.port), '--listen', args.listen]
+    else:
+        argv = [sys.executable, os.path.abspath(__file__), exit_.ip,
+                '--host', exit_.host, '--port', str(args.port),
+                '--exit-port', str(exit_.port), '--listen', args.listen,
+                '--auth', args.auth, '--warm', str(exit_.warm)]
     if exit_.bind:
         argv += ['--bind', exit_.bind]
     if args.quiet:
@@ -2593,8 +2630,16 @@ def serve(listen_host, listen_port, exit_, quiet):
 
     head('Up')
     ok(f'{C["bold"]}http://{listen_host}:{listen_port}{C["off"]}')
-    field('exit', f'{exit_.ip}:{exit_.port}   {exit_.host}')
-    field('certificate', f'checked against {exit_.host}, and the name is not sent')
+    if exit_.auth is None:
+        # A tunnel has no exit of its own to name and no certificate of its
+        # own to check - saying otherwise would send someone looking for a
+        # hostname and a pin that are not there.
+        field('through', f'tunnel at {exit_.ip}:{exit_.port}')
+        field('exit', 'whatever the far end of the tunnel uses')
+    else:
+        field('exit', f'{exit_.ip}:{exit_.port}   {exit_.host}')
+        field('certificate',
+              f'checked against {exit_.host}, and the name is not sent')
     if exit_.bind:
         field('leaving via', exit_.bind)
     # Said plainly, because the whole point of a second port is that the
@@ -3143,6 +3188,11 @@ def main():
                                   'the config when not given')
     p.add_argument('--exit-port', type=int, default=443,
                    help="the exit's proxy port (443)")
+    p.add_argument('--tunnel', metavar='HOST:PORT',
+                   help='carry the traffic through a proxy already running on this\n'
+                        'machine - the local end of a tunnel to your own server -\n'
+                        'instead of dialling an exit. No certificate check and no\n'
+                        'credentials: that hop does not leave the machine.')
     p.add_argument('--auth', default=os.path.join(ROOT, '.ovpn-auth'),
                    help='file holding username and password, one per line')
     # OVPN_OUT_DIR is how the rest of the repo is told which folder to act on
@@ -3232,8 +3282,6 @@ def main():
                  args.auth, args.connect_only, args.bind)
         return
 
-    user, password = read_auth(args.auth)
-
     # Said before the work rather than after the port clash, because the fix
     # is usually "you already have one" and not "pick another port".
     running = read_state(args.port)
@@ -3243,6 +3291,31 @@ def main():
             f'{running["pid"]}.\n'
             f'    ovpn proxy stop --port {args.port}   ends it\n'
             f'    ovpn proxy connect --port 8899  puts this one beside it')
+
+    # A tunnel is already up and already abroad; there is no exit to choose,
+    # no certificate to pin and no account to authenticate. Everything the
+    # rest of main() does is about reaching one, so none of it applies.
+    if args.tunnel:
+        where, _, tport = args.tunnel.rpartition(':')
+        if not tport.isdigit():
+            die(f'{args.tunnel!r} is not a host and port',
+                'It looks like  --tunnel 127.0.0.1:9090  - the address the '
+                'local\nend of your tunnel listens on.')
+        exit_ = LocalExit(where or '127.0.0.1', int(tport))
+        head('Exit')
+        field('through', f'tunnel at {exit_.ip}:{exit_.port}')
+        try:
+            exit_.connect().close()
+        except OSError as e:
+            die(f'nothing is listening at {exit_.ip}:{exit_.port}', f'{e}\n'
+                'Start the tunnel client first - without it this proxy would '
+                'come\nup healthy and answer 502 to everything.')
+        if args.detach:
+            raise SystemExit(do_detach(args, exit_))
+        serve(args.listen, args.port, exit_, args.quiet)
+        return
+
+    user, password = read_auth(args.auth)
 
     if not args.target:
         ip, name, chosen = pick_live(args.dir, (user, password), args.jobs,
