@@ -25,6 +25,7 @@ import json
 import os
 import socket
 import subprocess
+import time
 import urllib.error
 import urllib.request
 
@@ -154,7 +155,6 @@ class Tunnel:
                 return True
             if self.child.poll() is not None:
                 break
-            import time
             time.sleep(0.25)
         raise RuntimeError(self._why_it_died())
 
@@ -173,7 +173,66 @@ class Tunnel:
                 self.child.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self.child.kill()
+            self.child = None
+            return
         self.child = None
+        # Left running by a previous window, or by the shortcut in Startup.
+        # Found by which process holds the port rather than by name: killing
+        # every gost on the machine would take somebody else's with it.
+        pid = self._owner_pid(PORTS['single'])
+        if pid:
+            try:
+                if os.name == 'nt':
+                    subprocess.run(['taskkill', '/PID', str(pid), '/F'],
+                                   capture_output=True, timeout=10)
+                else:
+                    os.kill(pid, 15)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _owner_pid(port):
+        try:
+            if os.name == 'nt':
+                out = subprocess.run(['netstat', '-ano'], capture_output=True,
+                                     text=True, timeout=10).stdout
+                for line in out.splitlines():
+                    bits = line.split()
+                    if (len(bits) >= 5 and bits[0] == 'TCP'
+                            and bits[1].endswith(f':{port}')
+                            and bits[3] == 'LISTENING'):
+                        return int(bits[4])
+            else:
+                out = subprocess.run(['ss', '-lntp'], capture_output=True,
+                                     text=True, timeout=10).stdout
+                for line in out.splitlines():
+                    if f':{port} ' in line and 'pid=' in line:
+                        return int(line.split('pid=')[1].split(',')[0])
+        except Exception:
+            pass
+        return None
+
+    def restart(self):
+        self.stop()
+        for _ in range(20):
+            if not self.listening():
+                break
+            time.sleep(0.25)
+        return self.start()
+
+    def probe(self, mode='single', timeout=30):
+        """What the internet sees when it is asked through that mode.
+
+        A listening port is not a working tunnel. The far end can have been
+        restarted underneath a multiplexed session, and what is left answers
+        the connection and then 503s everything - so the only honest test is
+        to carry something through it and see what comes back.
+        """
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler(
+            {'http': f'http://127.0.0.1:{PORTS[mode]}'}))
+        req = urllib.request.Request('http://api.ipify.org',
+                                     headers={'User-Agent': 'Relay'})
+        return opener.open(req, timeout=timeout).read().decode().strip()
 
     def address(self, mode='single'):
         """What to hand the worker as --tunnel."""

@@ -1272,9 +1272,13 @@ async function testTunnel() {
     paintTunnel({ ...(state.tunnel || {}), running: false });
     return;
   }
+  // What came out the far end is the answer; the exit the server is set to
+  // is the detail. Said in that order, and the restart is mentioned rather
+  // than hidden - it explains why the button took a few seconds longer.
+  const woke = r.restarted ? 'Restarted a stale session. ' : '';
   said($('tunnelSaid'),
-       `Up. The server is leaving by ${r.exit || 'the exit it was left on'}.`,
-       'good');
+       `${woke}Carrying traffic — it comes out at ${r.seen || 'the far end'}`
+       + `${r.exit ? `, through ${r.exit}` : ''}.`, 'good');
   paintTunnel({ ...(state.tunnel || {}), running: true });
   paintWay();
 }

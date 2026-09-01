@@ -913,13 +913,31 @@ class Api:
         return {'ok': True, 'mode': mode}
 
     def testTunnel(self):
-        """Start the client if it is not up and ask the server what it is
-        leaving by. Two answers in one: the client runs, and the far end is
-        reachable and takes the API password."""
+        """Carry something through it, rather than checking that a port is open.
+
+        Three answers in one: the client runs, the far end is reachable and
+        takes the API password, and traffic actually comes out the other side.
+        The last is the one a port check misses - restart the server under a
+        multiplexed session and what is left answers the connection and then
+        503s everything, which looks exactly like a healthy tunnel from here.
+
+        A wedged session is worth recovering from rather than reporting, so
+        the client is restarted once and asked again. Once, and then it is
+        told to you: a Test button that retries forever is a Test button that
+        never finishes.
+        """
         try:
             client = self._tunnel_client()
             client.start()
+            seen, restarted = None, False
+            try:
+                seen = client.probe()
+            except Exception:
+                restarted = True
+                client.restart()
+                seen = client.probe()
             return {'ok': True, 'exit': client.current_exit(),
+                    'seen': seen, 'restarted': restarted,
                     'running': client.listening()}
         except RuntimeError as e:
             return {'ok': False, 'error': str(e)}
