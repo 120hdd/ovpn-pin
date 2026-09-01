@@ -51,6 +51,7 @@ import base64
 import collections
 import concurrent.futures as cf
 import difflib
+import glob
 import json
 import os
 import re
@@ -59,9 +60,12 @@ import shutil
 import socket
 import ssl
 import struct
+import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 
 # This file lives in core/, and every path built from here is one of the
 # reader's own things - the credentials, the pinned configs, .state - which
@@ -2740,8 +2744,314 @@ def serve(listen_host, listen_port, exit_, quiet):
 # turned into the flags the parser already knows. A verb rather than a flag
 # because that is how the rest of the repo is typed - `ovpn connect`, `ovpn
 # stop` - and `ovpn proxy connect uk-lon` should not be the odd one out.
+#------------------------------------------------------------ the tunnel
+
+# A server of your own, reached through a CDN, standing where the exit used
+# to. install-server.sh puts the far end up; this is the near one.
+#
+# The client is gost, which speaks the multiplexed WebSocket this needs and
+# has been measured doing it. What lives here is only what has to be agreed
+# on by both ends and by the window - the ports, the paths and the file that
+# is written from them - so that there is one copy of it and not three.
+
+TUNNEL_PORTS = {'single': 9090, 'multi': 9091, 'bulk': 9092}
+TUNNEL_PATHS = {'single': '/gw', 'multi': '/ex', 'bulk': '/gwb'}
+
+# Destinations that skip the tunnel. Iranian traffic arrives faster on the
+# direct line, and sending it abroad and back spends the server's transfer
+# allowance to make it slower. Domain rules only match domains - gost does
+# not resolve a name to see whether its address falls in a range - so the
+# Iranian services that are not on .ir have to be named.
+TUNNEL_BYPASS = [
+    '127.0.0.1', 'localhost',
+    '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16',
+    '*.ir', '.ir',
+    '*.digikala.com', '*.aparat.com', '*.filimo.com',
+    '*.varzesh3.com', '*.telewebion.com', '*.blogfa.com',
+]
+
+TUNNEL_SETTINGS = os.path.join(ROOT, '.state', 'tunnel.json')
+
+
+def tunnel_config_text(domain, password):
+    """The gost client's configuration, as gost wants it.
+
+    Written rather than shipped: the domain and the password are the only
+    things that vary, and a file the tool owns cannot drift out of step with
+    the server it was installed against.
+    """
+    services, chains = [], []
+    for mode, port in TUNNEL_PORTS.items():
+        services.append(
+            f'  - name: {mode}\n'
+            f'    addr: "127.0.0.1:{port}"\n'
+            f'    handler: {{type: http, chain: ch-{mode}}}\n'
+            f'    listener: {{type: tcp}}\n')
+        # Only the bulk path goes unmultiplexed, so one heavy transfer cannot
+        # stall everything sharing the session with it.
+        dialer = 'wss' if mode == 'bulk' else 'mwss'
+        chains.append(
+            f'  - name: ch-{mode}\n'
+            f'    hops:\n'
+            f'      - name: t\n'
+            f'        bypass: go-direct\n'
+            f'        nodes:\n'
+            f'          - name: server\n'
+            f'            addr: {domain}:443\n'
+            f'            connector:\n'
+            f'              type: http\n'
+            f'              auth: {{username: relay, password: {password}}}\n'
+            f'            dialer:\n'
+            f'              type: {dialer}\n'
+            f'              metadata: {{path: {TUNNEL_PATHS[mode]}, '
+            f'mux.keepaliveInterval: 10s}}\n')
+    matchers = ', '.join(m if not m.startswith('*') else f"'{m}'"
+                         for m in TUNNEL_BYPASS)
+    return ('services:\n' + ''.join(services) +
+            'chains:\n' + ''.join(chains) +
+            'bypasses:\n  - name: go-direct\n'
+            f'    matchers: [{matchers}]\n'
+            'log:\n  level: info\n')
+
+
+def tunnel_settings():
+    """What the installer printed, as this machine has it.
+
+    Missing is the common case the first time, so it is answered with the
+    whole of what to do rather than with the name of a file.
+    """
+    try:
+        with open(TUNNEL_SETTINGS, encoding='utf-8') as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        saved = {}
+    missing = [k for k in ('domain', 'password') if not saved.get(k)]
+    if missing:
+        die('this machine has not been told where your tunnel is',
+            f'Put it in {TUNNEL_SETTINGS}:\n\n'
+            '    {\n'
+            '      "domain": "yourdomain.com",\n'
+            '      "password": "the tunnel password",\n'
+            '      "apiPassword": "the api password"\n'
+            '    }\n\n'
+            'All three are printed by install-server.sh when it finishes. If\n'
+            'the server is already set up and you have lost them, they are on\n'
+            'it in /etc/gost/tunnel.pw and /etc/gost/api.pw.\n\n'
+            'No server yet?  tunnel/install-server.sh <domain> - run it there,\n'
+            'once, against a domain pointed at it through Cloudflare.')
+    return saved
+
+
+def tunnel_client():
+    """gost, wherever this copy keeps it."""
+    name = 'gost.exe' if os.name == 'nt' else 'gost'
+    here = os.path.join(ROOT, 'tunnel', name)
+    if os.path.isfile(here):
+        return here
+    for folder in os.environ.get('PATH', '').split(os.pathsep):
+        path = os.path.join(folder.strip('"'), name)
+        if os.path.isfile(path):
+            return path
+    die('the tunnel client is not installed',
+        'gost carries the tunnel; this only points a proxy at it.\n\n'
+        f'Put the binary in {os.path.join(ROOT, "tunnel")} or on your PATH.\n'
+        'It is one file, from github.com/go-gost/gost/releases.')
+
+
+def tunnel_listening(mode='single'):
+    sock = socket.socket()
+    sock.settimeout(0.4)
+    try:
+        return sock.connect_ex(('127.0.0.1', TUNNEL_PORTS[mode])) == 0
+    finally:
+        sock.close()
+
+
+def tunnel_up(saved, quiet=False):
+    """Bring the client up if it is not already, and say nothing if it was.
+
+    Nothing here waits on the far end. gost listens at once and dials when
+    the first connection arrives, so a server that is down shows up as a
+    failed request rather than as a client that will not start - the first
+    is something you can act on and the second is not.
+    """
+    if tunnel_listening():
+        return False
+    exe = tunnel_client()
+    state = os.path.join(ROOT, '.state', 'tunnel')
+    os.makedirs(state, exist_ok=True)
+    config = os.path.join(state, 'config.yaml')
+    with open(config, 'w', encoding='utf-8') as f:
+        f.write(tunnel_config_text(saved['domain'], saved['password']))
+    out = open(os.path.join(state, 'gost.out'), 'w', encoding='utf-8')
+    kw = {'creationflags': 0x08 | 0x200} if os.name == 'nt' \
+        else {'start_new_session': True}
+    subprocess.Popen([exe, '-C', config], cwd=state, stdin=subprocess.DEVNULL,
+                     stdout=out, stderr=subprocess.STDOUT, **kw)
+    for _ in range(40):
+        if tunnel_listening():
+            if not quiet:
+                field('client', f'started, listening on {TUNNEL_PORTS["single"]}'
+                                f'-{TUNNEL_PORTS["bulk"]}')
+            return True
+        time.sleep(0.25)
+    try:
+        with open(os.path.join(state, 'gost.out'), encoding='utf-8') as f:
+            said = f.read().strip()[-400:]
+    except OSError:
+        said = ''
+    die('the tunnel client did not come up', said or 'It printed nothing.')
+
+
+def tunnel_api(saved, path, payload=None, method='GET'):
+    """The server's own configuration, over the same domain.
+
+    Named user agent because the default is not: a CDN in front answers 403
+    to `Python-urllib/3.x` before the request reaches the server, which reads
+    exactly like the API refusing the password and is not.
+    """
+    if not saved.get('apiPassword'):
+        die('no api password for this tunnel',
+            'Changing the exit goes through the server\'s own API, and that\n'
+            f'needs the second password. Add "apiPassword" to {TUNNEL_SETTINGS}.')
+    url = f'https://{saved["domain"]}/api/{path}'
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(url, data=data, method=method)
+    token = base64.b64encode(f'relay:{saved["apiPassword"]}'.encode()).decode()
+    req.add_header('Authorization', f'Basic {token}')
+    req.add_header('User-Agent', 'ovpn-pin')
+    if data:
+        req.add_header('Content-Type', 'application/json')
+    try:
+        with urllib.request.urlopen(req, timeout=25) as r:
+            body = r.read()
+        return json.loads(body) if body else {}
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            die('the server would not take the api password',
+                f'Check "apiPassword" in {TUNNEL_SETTINGS} against '
+                '/etc/gost/api.pw on the server.')
+        die(f'the server answered {e.code}', f'{method} {path}')
+    except urllib.error.URLError as e:
+        die(f'{saved["domain"]} could not be reached', f'{e.reason}')
+
+
+TUNNEL_LINE = (
+    ('connect', 'through your server, then out at a provider exit'),
+    ('cdn',     'out at your server itself - one address, quickest'),
+    ('country', 'change which exit connect leaves by, live'),
+    ('status',  'what is set up, what is running, where it leaves'),
+)
+
+
+def tunnel_help():
+    h, d, b, o = C['head'], C['dim'], C['bold'], C['off']
+    listing = '\n'.join(f'    {b}ovpn proxy tunnel {v:<9}{o}{d}{w}{o}'
+                         for v, w in TUNNEL_LINE)
+    print(phrase(f"""
+  {h}{b}ovpn proxy tunnel{o} - serve the proxy through a server of your own
+  rather than straight at an exit.
+
+{listing}
+
+    {d}connect and cdn are the two ways out. Both go through your server;
+    they differ in where they come back out - at a provider exit with its
+    country, or at the server's own address, which is quicker and steadier
+    and always the same place.{o}
+
+    {b}ovpn proxy tunnel country de{o}   {d}germany, from now on{o}
+    {b}ovpn proxy tunnel connect --port 8899{o}
+
+    Set up once with {b}tunnel/install-server.sh{o} on the server, and put what
+    it prints in {b}.state/tunnel.json{o}.
+"""))
+    return 0
+
+
+def do_tunnel(argv):
+    """The tunnel verbs. Returns the flags `connect` should run with, or
+    raises SystemExit for the ones that are complete in themselves."""
+    word = argv[0] if argv else 'status'
+    known = [v for v, _ in TUNNEL_LINE]
+    if word in ('-h', '--help', 'help'):
+        raise SystemExit(tunnel_help())
+    if word not in known:
+        die(f'no such tunnel command: {word}',
+            'They are: ' + ', '.join(known))
+
+    saved = tunnel_settings()
+
+    if word == 'status':
+        head('Tunnel')
+        field('domain', saved['domain'])
+        field('client', 'running' if tunnel_listening() else 'not running')
+        if saved.get('apiPassword') and tunnel_listening():
+            chain = tunnel_api(saved, 'config/chains/exit-chain').get('data') or {}
+            try:
+                field('leaves by', chain['hops'][0]['nodes'][0]['addr'])
+            except (KeyError, IndexError):
+                pass
+        for rec in read_states():
+            field('serving', f'127.0.0.1:{rec["port"]}   {rec["name"]}')
+        raise SystemExit(0)
+
+    if word == 'country':
+        if len(argv) < 2:
+            die('which country?', 'ovpn proxy tunnel country de')
+        want = argv[1].lower()
+        ip, name = pick_country(want)
+        user, password = read_auth(os.path.join(ROOT, '.ovpn-auth'))
+        tunnel_api(saved, 'config/chains/exit-chain', method='PUT', payload={
+            'name': 'exit-chain',
+            'hops': [{'name': 'exit', 'nodes': [{
+                'name': want, 'addr': f'{ip}:443',
+                'connector': {'type': 'http',
+                              'auth': {'username': user, 'password': password}},
+                'dialer': {'type': 'tls', 'tls': {'secure': False}},
+            }]}],
+        })
+        head('Tunnel')
+        field('country', f'{want} - {name}')
+        field('exit', ip)
+        ok('Set on the server. Connections from now on leave by it; ones '
+           'already open keep the exit they were made through.')
+        raise SystemExit(0)
+
+    # connect and cdn: bring the client up, then let main() serve as usual
+    mode = 'multi' if word == 'connect' else 'single'
+    head('Tunnel')
+    field('domain', saved['domain'])
+    field('through', 'a provider exit' if mode == 'multi'
+          else 'your server itself')
+    tunnel_up(saved)
+    # Everything after the word is still meant for connect - --port, --listen,
+    # --quiet. Dropping it made `tunnel connect --port 8899` come up on 8888
+    # and say so, which is the kind of wrong that looks right.
+    return ['--tunnel', f'127.0.0.1:{TUNNEL_PORTS[mode]}'] + argv[1:]
+
+
+def pick_country(code):
+    """One address for that country, out of whatever is pinned.
+
+    Not probed from here on purpose. The connection is made from the tunnel
+    server, so a probe from this machine measures the wrong leg entirely -
+    and fails on exits that are only blocked on this line.
+    """
+    folder = os.path.join(ROOT, 'pinned')
+    hits = sorted(glob.glob(os.path.join(folder, f'{code}-*.ovpn')))
+    if not hits:
+        die(f'nothing pinned for {code}',
+            f'Looked in {folder}. Pin some first:  ovpn pin')
+    ip, name = read_config(hits[0])
+    return ip, name
+
+
 VERBS = {'connect': [], 'sweep': ['--sweep'], 'env': ['--env'],
          'status': ['--status'], 'stop': ['--stop'], 'help': ['--usage']}
+
+# Its own word rather than a flag on connect, because it has commands of
+# its own underneath it and a flag cannot have those.
+TUNNEL_VERB = 'tunnel'
 
 # One line each, in the order they are usually typed rather than
 # alphabetically. The help page lists these, and so does the message for a
@@ -2750,6 +3060,7 @@ VERB_LINE = (
     ('connect', 'serve a proxy through an exit'),
     ('status',  'what is running, and through which exit'),
     ('stop',    'end one of them, or all of them'),
+    ('tunnel',  'serve through a server of your own instead of an exit'),
     ('sweep',   'ask a folder of exits what they serve, and rank them'),
     ('env',     'print the exports that send a terminal through it'),
     ('help',    'this page, or one command on its own'),
@@ -3119,6 +3430,9 @@ def read_verb(argv):
             die(f'no help for  ovpn proxy {asked}',
                 f'The commands are: {listing}')
         raise SystemExit(do_help())
+
+    if argv and argv[0] == TUNNEL_VERB:
+        return do_tunnel(argv[1:])
 
     if argv and argv[0] in VERBS:
         # `ovpn proxy connect -h` is the command asking about itself, which is

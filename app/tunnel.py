@@ -29,72 +29,19 @@ import time
 import urllib.error
 import urllib.request
 
-# The local ports the three modes listen on. Above the range the command line
-# half of the repo uses for its own proxies, so a tunnel and a hand-started
-# `ovpn proxy` can be up together without either having to move.
-PORTS = {'single': 9090, 'multi': 9091, 'bulk': 9092}
+import engine
 
-# Which server path each mode asks for. These are what install-server.sh
-# publishes; changing one means changing it there too.
-PATHS = {'single': '/gw', 'multi': '/ex', 'bulk': '/gwb'}
+px = engine.px
 
-# Destinations that skip the tunnel entirely. Iranian traffic reaches its
-# destination faster and cheaper on the direct line, and sending it abroad
-# and back would spend the server's transfer allowance to make it slower.
-# Domain rules only match domains - gost does not resolve a name to see
-# whether its address falls in a range - so the well-known Iranian services
-# that are not on .ir have to be named.
-BYPASS = [
-    '127.0.0.1', 'localhost',
-    '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16',
-    '*.ir', '.ir',
-    '*.digikala.com', '*.aparat.com', '*.filimo.com',
-    '*.varzesh3.com', '*.telewebion.com', '*.blogfa.com',
-]
-
-
-def _hop(domain, password, path, multiplexed=True):
-    return f"""      - name: t
-        bypass: go-direct
-        nodes:
-          - name: server
-            addr: {domain}:443
-            connector:
-              type: http
-              auth: {{username: relay, password: {password}}}
-            dialer:
-              type: {'mwss' if multiplexed else 'wss'}
-              metadata: {{path: {path}, mux.keepaliveInterval: 10s}}
-"""
-
-
-def config_text(domain, password):
-    """The whole client configuration, as gost wants it.
-
-    Written from here rather than shipped as a file the user edits: the
-    domain and the password are the only things that vary, and a config the
-    app owns is one that cannot drift out of step with the server it was
-    installed against.
-    """
-    services, chains = [], []
-    for mode, port in PORTS.items():
-        services.append(
-            f'  - name: {mode}\n'
-            f'    addr: "127.0.0.1:{port}"\n'
-            f'    handler: {{type: http, chain: ch-{mode}}}\n'
-            f'    listener: {{type: tcp}}\n')
-        chains.append(
-            f'  - name: ch-{mode}\n'
-            f'    hops:\n' +
-            _hop(domain, password, PATHS[mode], multiplexed=(mode != 'bulk')))
-    matchers = ', '.join(
-        m if not m.startswith('*') else f"'{m}'" for m in BYPASS)
-    return ('services:\n' + ''.join(services) +
-            'chains:\n' + ''.join(chains) +
-            'bypasses:\n'
-            '  - name: go-direct\n'
-            f'    matchers: [{matchers}]\n'
-            'log:\n  level: info\n')
+# Borrowed, not restated. The ports, the paths and the file written from
+# them have to be agreed on by this, by the command line and by the server's
+# installer, and three copies of that agreement drift the first time one of
+# them learns something. engine has already loaded the module; asking it
+# again would only parse the same file twice.
+PORTS = px.TUNNEL_PORTS
+PATHS = px.TUNNEL_PATHS
+BYPASS = px.TUNNEL_BYPASS
+config_text = px.tunnel_config_text
 
 
 class Tunnel:
