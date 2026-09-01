@@ -123,6 +123,13 @@ def _diagnostics_to_file(name):
 
 SETTINGS = os.path.join(paths.STATE_DIR, 'settings.json')
 
+# What the window opens at. The height is set by the front of the app
+# rather than by the settings sheet, which scrolls: the card, the orb
+# above it and the hint below have to sit together without the orb
+# being squeezed into an oval to make room.
+WINDOW_W = 400
+WINDOW_H = 740
+
 
 def load_settings():
     try:
@@ -1346,6 +1353,13 @@ def ui_check(window):
         # PowerShell to ask whether another VPN holds the default route, and
         # reading it sooner reads an empty line and calls that a result.
         time.sleep(4)
+        # Does the front of the app fit the window it is given? A card that
+        # has grown a control since the size was chosen scrolls, or clips the
+        # thing above it, and neither shows up in a screenshot of the part
+        # that did fit.
+        said['fits'] = window.evaluate_js(
+            "JSON.stringify({needs: document.querySelector('.app').scrollHeight,"
+            " has: window.innerHeight})")
         said['settingsOpen'] = window.evaluate_js(
             "document.getElementById('prefs').open")
         said['settings'] = shot('settings')
@@ -1593,14 +1607,26 @@ def main():
     undo = install_safety(api)
 
     settings = api._settings
+
+    # The way-out strip and its line cost the card about eighty pixels, and
+    # the orb is what paid: its height is what is left over, so it went from
+    # round to squeezed without the page ever overflowing. A window saved
+    # before that control existed is now too short for its own contents, so
+    # it is raised once here rather than left for somebody to find by
+    # dragging the edge. Only upwards, and only to the new floor - a window
+    # deliberately made taller than that keeps the size it was given.
+    if settings.get('h') and settings['h'] < WINDOW_H:
+        settings['h'] = WINDOW_H
+        save_settings(settings)
+
     window = webview.create_window(
         APP_NAME,
         os.path.join(paths.UI_DIR, 'index.html'),
         js_api=api,
-        width=settings.get('w', 400),
-        height=settings.get('h', 660),
+        width=settings.get('w', WINDOW_W),
+        height=settings.get('h', WINDOW_H),
         x=settings.get('x'), y=settings.get('y'),
-        min_size=(380, 560),
+        min_size=(380, 640),
         background_color='#111113',
         resizable=True,
         text_select=False,
