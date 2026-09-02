@@ -6,6 +6,7 @@ version beside your other state:
 
     core/ovpn-mobile.py pinned
     core/ovpn-mobile.py success --count 12
+    core/ovpn-mobile.py success --all --every-address
     core/ovpn-mobile.py pinned/de-fra.prod.surfshark.com_tcp_138.199.19.157.ovpn
     core/ovpn-mobile.py pinned success/02.0s-fr-par*.ovpn --out phone
 
@@ -147,7 +148,7 @@ def answers(ip, name, user, password, bind, timeout=8):
         return None
 
 
-def gather(paths, limit, check=None):
+def gather(paths, limit, check=None, every_address=False):
     """The exits to put in the file, as (address, name, tag) triples.
 
     One address per exit, and the first one wins. Deliberately not
@@ -155,6 +156,12 @@ def gather(paths, limit, check=None):
     underscore, which in the sweep's own output includes the seconds, so two
     addresses for one exit measured at different speeds read as two exits.
     Here the name is derived first and the deduplication happens on that.
+
+    With every_address the deduplication is on the address instead, so a
+    folder holding nine ways into be-anr yields nine entries rather than the
+    quickest of them. Longer picker on the phone, and the honest shape when
+    what you want is somewhere to go when one address starts being filtered:
+    the nine are one exit but they are not one route.
 
     With check set, an exit is not finished at its first address - the rest
     are tried until one answers, and only then does the exit count as taken.
@@ -165,14 +172,18 @@ def gather(paths, limit, check=None):
         read += 1
         ip, from_comment = px.read_config(path)
         name = exit_name(os.path.basename(path), from_comment)
-        if name in seen:
+        # Two files can still hold the same address for the same exit - the
+        # sweep writes one per run - so --every-address deduplicates too,
+        # just on a key that lets a second address through.
+        key = (name, ip) if every_address else name
+        if key in seen:
             continue
         if check is not None:
             took = answers(ip, name, *check)
             if took is None:
                 continue        # another address for this exit may still do
             print(f'    {name:<30}{ip:<17}{took:.2f}s')
-        seen.add(name)
+        seen.add(key)
         # de-fra.prod.surfshark.com + 138.199.19.157 -> de-fra-138.199.19.157.
         # The address is in the tag on purpose: two addresses for one exit are
         # two different verdicts, and a tag that hides which one answered is a
@@ -192,7 +203,7 @@ TUNNEL_TAG = 'tunnel'
 GROUP_TAG = 'relay'
 
 
-def tunnel_outbound(tunnel, resolver=None):
+def tunnel_outbounds(tunnel, resolver=None, interval='30m'):
     """A server of your own, in the one language every phone client speaks.
 
     Not the tunnel the desktop uses. That one is an HTTP proxy over a
@@ -204,26 +215,55 @@ def tunnel_outbound(tunnel, resolver=None):
     No TLS settings beyond the name: the certificate is the CDN's, which is
     the point of putting one in front - the address the phone dials is the
     CDN's too, and that is what makes it reachable at all.
+
+    With addresses, the CDN is dialled by address rather than by name and the
+    name moves to the SNI and the Host header, for the reason the desktop
+    does the same: the addresses the domain resolves to get filtered here,
+    and the ones it does not resolve to answer perfectly well. Several go in
+    rather than one, under a group that tests them - a phone is on a
+    different network from the machine that measured them, and the one that
+    answers here is not always the one that answers there.
     """
-    domain, uuid, path = tunnel
-    out = {
-        'type': 'vless',
+    domain, uuid, path, edges = tunnel
+    def door(tag, addr, pinned):
+        out = {
+            'type': 'vless',
+            'tag': tag,
+            'server': addr,
+            'server_port': 443,
+            'uuid': uuid,
+            'tls': {'enabled': True, 'server_name': domain},
+            'transport': {'type': 'ws', 'path': path,
+                          **({'headers': {'Host': domain}} if pinned else {})},
+        }
+        if resolver:
+            # Required, not decoration. From 1.14 an outbound whose server is
+            # a name has to say which resolver looks it up once more than one
+            # is configured - and the moment a tunnel is added there are two.
+            # Left out, every request died ten seconds in with `lookup
+            # <domain>: context deadline exceeded`, which reads like the
+            # server being down and is not.
+            out['domain_resolver'] = resolver
+        return out
+
+    if not edges:
+        return [door(TUNNEL_TAG, domain, False)]
+    doors = [door(f'{TUNNEL_TAG}-{n}', ip, True)
+             for n, ip in enumerate(edges, 1)]
+    # The tag the exits detour through stays `tunnel`; what it names is now a
+    # group rather than a door. Everything downstream of it is unchanged,
+    # which is the point of having named it in one place.
+    doors.append({
+        'type': 'urltest',
         'tag': TUNNEL_TAG,
-        'server': domain,
-        'server_port': 443,
-        'uuid': uuid,
-        'tls': {'enabled': True, 'server_name': domain},
-        'transport': {'type': 'ws', 'path': path},
-    }
-    if resolver:
-        # Required, not decoration. From 1.14 an outbound whose server is a
-        # name has to say which resolver looks it up once more than one is
-        # configured - and the moment a tunnel is added there are two. Left
-        # out, every request died ten seconds in with `lookup <domain>:
-        # context deadline exceeded`, which reads like the server being down
-        # and is not.
-        out['domain_resolver'] = resolver
-    return out
+        'outbounds': [d['tag'] for d in doors],
+        # An address for the same reason the exit group uses one: this test
+        # runs before anything has resolved anything.
+        'url': 'https://1.1.1.1/cdn-cgi/trace',
+        'interval': interval,
+        'tolerance': 100,
+    })
+    return doors
 
 
 def outbounds_for(exits, user, password, exit_port, interval, tunnel=None,
@@ -276,7 +316,7 @@ def outbounds_for(exits, user, password, exit_port, interval, tunnel=None,
         # picker. `exit` first, because a country is the reason most people
         # opened the app - the server's own address is the quieter, quicker
         # answer for when it is not.
-        outs.insert(0, tunnel_outbound(tunnel, resolver))
+        outs[:0] = tunnel_outbounds(tunnel, resolver, interval)
         outs.append({
             'type': 'selector',
             'tag': GROUP_TAG,
@@ -433,23 +473,32 @@ def clash_yaml(exits, user, password, exit_port, interval, nodes_only=False,
         'proxies:',
     ]
     if tunnel:
-        domain, uuid, path = tunnel
-        L += [
-            f'  - name: {yaml_string(TUNNEL_TAG)}',
-            '    type: vless',
-            f'    server: {domain}',
-            '    port: 443',
-            f'    uuid: {yaml_string(uuid)}',
-            "    flow: ''",
-            '    tls: true',
-            f'    servername: {domain}',
-            '    network: ws',
-            '    ws-opts:',
-            f'      path: {yaml_string(path)}',
-            '    udp: true',
-            '    # Your own server, through a CDN. dialer-proxy below sends',
-            '    # every exit out through it - Clash spells detour that way.',
-        ]
+        domain, uuid, path, edges = tunnel
+        # By address when there are addresses, with the name kept in
+        # servername and in the Host header: the ones the domain resolves to
+        # are the ones that get filtered, and the CDN serves the domain from
+        # any of theirs given those two.
+        for n, addr in enumerate(edges or [domain], 1):
+            L += [
+                f'  - name: {yaml_string(TUNNEL_TAG if not edges else f"{TUNNEL_TAG}-{n}")}',
+                '    type: vless',
+                f'    server: {addr}',
+                '    port: 443',
+                f'    uuid: {yaml_string(uuid)}',
+                "    flow: ''",
+                '    tls: true',
+                f'    servername: {domain}',
+                '    network: ws',
+                '    ws-opts:',
+                f'      path: {yaml_string(path)}',
+            ]
+            if edges:
+                L += ['      headers:', f'        Host: {domain}']
+            L += [
+                '    udp: true',
+                '    # Your own server, through a CDN. dialer-proxy below sends',
+                '    # every exit out through it - Clash spells detour that way.',
+            ]
 
     for ip, name, tag in exits:
         L += [
@@ -477,6 +526,16 @@ def clash_yaml(exits, user, password, exit_port, interval, nodes_only=False,
     L += [f'    url: "https://1.1.1.1/cdn-cgi/trace"',
           f'    interval: {seconds}',
           '    tolerance: 100']
+
+    if tunnel and tunnel[3]:
+        # The name the exits dial through stays the same; behind it is now a
+        # group that tests the addresses rather than a single one of them.
+        L += ['', f'  - name: {yaml_string(TUNNEL_TAG)}', '    type: url-test',
+              '    proxies:']
+        L += [f'      - {yaml_string(f"{TUNNEL_TAG}-{n}")}'
+              for n in range(1, len(tunnel[3]) + 1)]
+        L += ['    url: "https://1.1.1.1/cdn-cgi/trace"',
+              f'    interval: {seconds}', '    tolerance: 100']
 
     if tunnel:
         L += ['', f'  - name: {yaml_string(GROUP_TAG)}', '    type: select',
@@ -524,6 +583,11 @@ def main():
                         'more chances and more logins an hour; see note.md')
     p.add_argument('--all', action='store_true',
                    help='take every config found, however many that is')
+    p.add_argument('--every-address', action='store_true',
+                   help='keep every address, not just the quickest one per '
+                        'exit. A folder of 37 configs covering 9 exits gives '
+                        '37 entries rather than 9. --all is about how many '
+                        'files get read; this is about how many survive')
     p.add_argument('--check', action='store_true',
                    help='ask each address whether it takes the credentials '
                         'now, and skip the ones that do not. Slower, and the '
@@ -551,12 +615,42 @@ def main():
                    help='the VLESS uuid install-server.sh printed')
     p.add_argument('--ws-path', default='/vl',
                    help='the path on that domain (/vl)')
+    p.add_argument('--edge', action='append', metavar='IP',
+                   help='dial the CDN at this address instead of whatever the '
+                        'domain resolves to. Repeatable. Left out, the '
+                        'addresses are measured here first')
+    p.add_argument('--no-edge', action='store_true',
+                   help='write the domain and let the phone resolve it, the '
+                        'way this did before the addresses started being '
+                        'filtered')
     args = p.parse_args()
 
     if args.tunnel and not args.uuid:
         p.error('--tunnel needs --uuid: the domain says where the server is, '
                 'the uuid is what lets you in. install-server.sh prints both.')
-    tunnel = (args.tunnel, args.uuid, args.ws_path) if args.tunnel else None
+
+    # Which addresses the phone should dial the CDN at. Measured rather than
+    # asked for, because the answer changes: the two the domain resolves to
+    # were dead for the better part of an hour on the day this was written
+    # and answering again by the end of it. Three of them, not the six the
+    # desktop keeps - they show up in the phone's node list, and a picker
+    # with six identical-looking entries is worse than one with three.
+    edges = []
+    if args.tunnel and not args.no_edge:
+        edges = list(args.edge or [])
+        if not edges:
+            print()
+            print('  finding which CDN addresses carry ' + args.tunnel)
+            edges, tally = px.edge_scan(args.tunnel)
+            edges = edges[:3]
+            if edges:
+                print(f'  {tally["ok"]} of {sum(tally.values())} answered - '
+                      + ', '.join(edges))
+            else:
+                print('  none of them answered, so the domain goes in as '
+                      'itself and the phone will resolve it')
+    tunnel = ((args.tunnel, args.uuid, args.ws_path, edges)
+              if args.tunnel else None)
 
     paths = args.paths or [os.path.join(ROOT, 'pinned')]
     found = []
@@ -568,7 +662,8 @@ def main():
     if check:
         print('\n  asking each address whether it answers'
               + (f', leaving from {args.bind}' if args.bind else '') + ':')
-    exits, read = gather(found, 0 if args.all else max(1, args.count), check)
+    exits, read = gather(found, 0 if args.all else max(1, args.count),
+                         check, args.every_address)
 
     # An --out that names an extension has already said which format it wants,
     # and honouring that beats writing phone.yaml.json.
@@ -598,7 +693,13 @@ def main():
     print()
     for fmt, path in written:
         print(f'  wrote {path}   ({fmt})')
-    print(f'  {len(exits)} exit{"" if len(exits) == 1 else "s"}, read from '
+    # With one address per exit these two counts are the same number and
+    # saying it twice is noise; when they differ it is the whole point.
+    names = len({name for _, name, _ in exits})
+    count = (f'{len(exits)} addresses across {names} exits'
+             if names != len(exits)
+             else f'{len(exits)} exit{"" if len(exits) == 1 else "s"}')
+    print(f'  {count}, read from '
           f'{read} of the {len(found)} config'
           f'{"" if len(found) == 1 else "s"} those paths hold, '
           f're-tested every {args.interval}:')

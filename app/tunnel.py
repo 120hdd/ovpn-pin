@@ -51,6 +51,7 @@ edge_scan = px.edge_scan
 edge_cache_load = px.edge_cache_load
 edge_cache_save = px.edge_cache_save
 diagnose = px.tunnel_diagnose
+mirror = px.tunnel_mirror
 EDGE_KEEP = px.EDGE_KEEP
 
 
@@ -85,6 +86,9 @@ class Tunnel:
         text = config_text(self.domain, self.password, edges)
         with open(self.config_path, 'w', encoding='utf-8') as f:
             f.write(text)
+        # And into any other client folder this machine has been told about,
+        # so the copy in Startup is not left dialling last month's addresses.
+        mirror(text)
         return self.config_path
 
     def edges(self):

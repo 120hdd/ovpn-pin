@@ -217,9 +217,18 @@ Back on your own machine, put those in `.state/tunnel.json`:
 {
   "domain": "yourdomain.com",
   "password": "the tunnel password",
-  "apiPassword": "the api password"
+  "apiPassword": "the api password",
+  "clients": ["C:/Users/you/gost"]
 }
 ```
+
+`clients` is optional and is there for a machine that has more than one copy of
+the client — the one this repo starts, and the one somebody put in Startup
+months ago. Each reads its own file, and nothing tells the forgotten one that
+the addresses moved. Listed here, it gets written too, and what was there is
+kept beside it as `config.yaml.before-pinning` the first time. A running client
+is not restarted, because that is a decision with a dropped connection in it —
+it reads the new file the next time it starts.
 
 And then:
 
@@ -380,9 +389,17 @@ core/ovpn-mobile.py pinned --count 20 \
     --tunnel yourdomain.com --uuid <the uuid the installer printed>
 ```
 
-The file keeps its shape. One outbound goes in front, each exit gains a
+The file keeps its shape. The way in goes in front, each exit gains a
 `detour` — `dialer-proxy`, in Clash — and a selector goes on the end, so the
 phone has both ways out and switches between them in its own proxy picker.
+
+The way in is three addresses rather than the domain, measured before the file
+is written, under a group that tests them. Same reasoning as the desktop: the
+addresses the domain resolves to are the ones that get filtered. Three and not
+one because the phone is on a different network from the machine that measured
+them, and the address that answers here does not always answer there. `--edge
+IP` names them yourself; `--no-edge` writes the domain and lets the phone
+resolve it, the way this worked before any of it was filtered.
 
 Two habits are worth keeping. Generate **two** versions, one with the tunnel
 and one without, so a phone still works on a day the server does not. And pick

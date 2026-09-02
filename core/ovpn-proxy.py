@@ -3014,6 +3014,15 @@ def tunnel_edges(state_dir, domain, rescan=False, quiet=False):
     if not found:
         # Nothing to write is worse than something stale: the old list at
         # least dials addresses that worked once, and gost will tell us so.
+        # Said out loud, because the file that comes out of this is a working
+        # file with the old problem in it, and silence would make that look
+        # like success. It happens - the filtering comes and goes, and a scan
+        # that lands in a bad minute finds nothing where one a minute later
+        # finds twenty-eight.
+        if not quiet:
+            warn(f'no address answered for {domain} just now',
+                 'The name goes in as itself, which is what it did before. '
+                 'Worth running again in a minute.')
         return edge_cache_load(state_dir, domain)
     found = found[:EDGE_KEEP]
     edge_cache_save(state_dir, domain, found)
@@ -3082,6 +3091,57 @@ def tunnel_config_text(domain, password, edges=None):
             'bypasses:\n  - name: go-direct\n'
             f'    matchers: [{matchers}]\n'
             'log:\n  level: info\n')
+
+
+def tunnel_extra_clients():
+    """Other folders holding a copy of this client, from the settings file.
+
+    There is usually more than one gost on a machine that has had one for a
+    while - the one this repo starts, and the one somebody put in Startup
+    months ago and forgot. They read their own file and nothing tells them
+    the addresses have moved, so the forgotten one quietly goes on dialling
+    what stopped answering. Listing it here means one scan fixes both.
+
+    Read softly on purpose: no settings file, no list, no complaint. This is
+    a convenience, and a missing convenience is not an error.
+    """
+    try:
+        with open(TUNNEL_SETTINGS, encoding='utf-8') as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return []
+    return [d for d in saved.get('clients', []) if isinstance(d, str)]
+
+
+def tunnel_mirror(text, quiet=True):
+    """Put the same configuration in the other client folders.
+
+    The first time one is written over, what was there is kept beside it.
+    Not for undo - the file is generated and can be generated again - but
+    because the copy somebody hand-edited is the only record of what they
+    hand-edited, and finding that out afterwards is expensive.
+    """
+    done = []
+    for folder in tunnel_extra_clients():
+        target = os.path.join(folder, 'config.yaml')
+        if not os.path.isdir(folder):
+            continue
+        keep = target + '.before-pinning'
+        if os.path.isfile(target) and not os.path.isfile(keep):
+            try:
+                shutil.copyfile(target, keep)
+            except OSError:
+                pass
+        try:
+            with open(target, 'w', encoding='utf-8') as f:
+                f.write(text)
+        except OSError as e:
+            warn(f'could not write {target}', str(e))
+            continue
+        done.append(target)
+        if not quiet:
+            field('also', target)
+    return done
 
 
 def tunnel_settings():
@@ -3189,9 +3249,11 @@ def tunnel_write_config(saved, edges=None, quiet=True):
     os.makedirs(TUNNEL_STATE, exist_ok=True)
     if edges is None:
         edges = tunnel_edges(TUNNEL_STATE, saved['domain'], quiet=quiet)
+    text = tunnel_config_text(saved['domain'], saved['password'], edges)
     config = os.path.join(TUNNEL_STATE, 'config.yaml')
     with open(config, 'w', encoding='utf-8') as f:
-        f.write(tunnel_config_text(saved['domain'], saved['password'], edges))
+        f.write(text)
+    tunnel_mirror(text, quiet)
     return config
 
 
