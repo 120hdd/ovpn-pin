@@ -580,7 +580,10 @@
         <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg></span>
         <h3 class="pane__title">Time the servers properly</h3>
       </div>
-      <p class="pane__why">Connects to each one for real, writes how long its
+      <!-- Rewritten per route below. What the test does is not the same
+           sentence for all three, and a paragraph describing OpenVPN above a
+           run that never touches it is worse than no paragraph. -->
+      <p class="pane__why" id="sweepWhy">Connects to each one for real, writes how long its
         handshake took on the front of its name, and drops it again. That is the
         number the list is ordered by, and the only way to know it. Your
         connection goes down and up once per server, so reckon in minutes.</p>
@@ -592,6 +595,27 @@
         <p class="path path--flush mono" id="sweepFolder">—</p>
         <button class="btn btn--quiet btn--auto" id="sweepPick" type="button">Another folder…</button>
       </div>
+
+      <!-- The route is the first choice because it changes what the rest of
+           the pane means. A time taken by dialling an exit from this line is
+           a time for a leg nothing uses once the tunnel is in - and the two
+           disagree in practice, not in theory. -->
+      <p class="lede"><svg class="ico ico--sm" aria-hidden="true"><use href="#i-route"/></svg>Which leg to measure</p>
+      <ul class="scope" id="sweepRoute">
+        <li><button class="scope__row" type="button" data-route="provider" aria-pressed="true">
+          <span class="scope__name">Straight at the exit</span>
+          <span class="scope__why">dialled from this line. Takes your connection down and up once per server, and needs administrator</span>
+          <span class="scope__count">—</span></button></li>
+        <li><button class="scope__row" type="button" data-route="server+exit" aria-pressed="false">
+          <span class="scope__name">Through your server, out at the exit</span>
+          <span class="scope__why">the leg your traffic actually takes now. Nothing disconnects, one at a time</span>
+          <span class="scope__count">—</span></button></li>
+        <li><button class="scope__row" type="button" data-route="server" aria-pressed="false">
+          <span class="scope__name">Your server itself</span>
+          <span class="scope__why">one address, so one row rather than a folder</span>
+          <span class="scope__count">—</span></button></li>
+      </ul>
+      <p class="pane__why pane__why--tight" id="routeSaid"></p>
 
       <!-- The counts are the decision, so they sit on the choices rather than
            in a sentence underneath them. -->

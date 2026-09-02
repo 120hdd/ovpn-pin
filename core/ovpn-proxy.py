@@ -583,6 +583,17 @@ class LocalExit(Exit):
         return raw
 
 
+def proxy_auth(exit_):
+    """The credentials line, where there are credentials.
+
+    A tunnel's local end has none - it is a socket on this machine, and a
+    password between two processes protects nothing the machine does not
+    already have. Sent anyway it becomes the literal string `Basic None`,
+    which is a header that says what went wrong and is still wrong.
+    """
+    return f'Proxy-Authorization: Basic {exit_.auth}\r\n' if exit_.auth else ''
+
+
 def fetch(exit_, host, path='/', timeout=20, cap=65536):
     """One HTTPS request through the exit. Returns status, headers, the first
     of the body, and how long until that first byte arrived."""
@@ -590,11 +601,10 @@ def fetch(exit_, host, path='/', timeout=20, cap=65536):
     outer = exit_.connect()
     try:
         outer.settimeout(timeout)
-        outer.sendall(
+        outer.sendall((
             f'CONNECT {host}:443 HTTP/1.1\r\n'
             f'Host: {host}:443\r\n'
-            f'Proxy-Authorization: Basic {exit_.auth}\r\n'
-            f'\r\n'.encode())
+            + proxy_auth(exit_) + '\r\n').encode())
         head = b''
         while b'\r\n\r\n' not in head:
             chunk = outer.recv(4096)
@@ -702,11 +712,10 @@ def can_connect(exit_, timeout):
     outer = exit_.connect()
     try:
         outer.settimeout(timeout)
-        outer.sendall(
+        outer.sendall((
             f'CONNECT www.cloudflare.com:443 HTTP/1.1\r\n'
             f'Host: www.cloudflare.com:443\r\n'
-            f'Proxy-Authorization: Basic {exit_.auth}\r\n'
-            f'\r\n'.encode())
+            + proxy_auth(exit_) + '\r\n').encode())
         head = b''
         while b'\r\n\r\n' not in head:
             chunk = outer.recv(4096)
@@ -729,7 +738,39 @@ def can_connect(exit_, timeout):
             pass
 
 
-def sweep_one(path, auth, sites, timeout, connect_only=False, bind=None):
+# The three ways a sweep can reach an exit, in the words the window uses for
+# them. They are not the same measurement wearing different clothes: dialled
+# from here, an exit is being asked whether it answers *this* line, and since
+# the traffic started leaving through the server that is the wrong leg to be
+# timing. Same account, same exit, measured both ways within a minute: six
+# uploads straight at it were refused with `Proxy CONNECT aborted` while
+# every one through the server went at 1.2-1.8 MB/s.
+SWEEP_ROUTES = ('provider', 'server', 'server+exit')
+ROUTE_SAYS = {
+    'provider':    'dialled straight at each exit from this line',
+    'server':      'through your own server, which is one address and one row',
+    'server+exit': 'through your server, then out at each exit in turn',
+}
+
+
+def sweep_one(path, auth, sites, timeout, connect_only=False, bind=None,
+              through='provider', saved=None):
+    """One row of the table: what this exit is worth by the chosen route.
+
+    The route changes what is being asked, not how it is asked. Everything
+    below the first few lines - the CONNECT, the trace, the per-site fetches,
+    the verdict - is the same code either way, because a number measured two
+    different ways is not two numbers.
+    """
+    if through == 'server':
+        # Nothing to iterate: the server is one address and it is the same
+        # address for every config in the folder. So this route makes one row
+        # and says what it is, rather than five hundred copies of it.
+        row = {'name': 'your server', 'ip': '127.0.0.1', 'exit': '',
+               'ttfb': None, 'sites': {}}
+        return sweep_measured(LocalExit('127.0.0.1', TUNNEL_PORTS['single']),
+                              row, sites, timeout, connect_only)
+
     name = os.path.basename(path)
     try:
         ip, host = read_config(path)
@@ -738,9 +779,35 @@ def sweep_one(path, auth, sites, timeout, connect_only=False, bind=None):
     if not host:
         return {'name': name, 'verdict': 'no pin comment', 'exit': '', 'ttfb': None, 'sites': {}}
 
-    exit_ = Exit(ip, 443, host, auth[0], auth[1], bind)
     row = {'name': name, 'ip': ip, 'exit': '', 'ttfb': None, 'sites': {}}
+    if through == 'server+exit':
+        # The server holds one exit chain, so this is a setting and not an
+        # argument: it has to be changed before each measurement and the
+        # measurements cannot overlap. do_sweep is what keeps them from it.
+        try:
+            tunnel_set_exit(saved, ip, auth[0], auth[1],
+                            name=base_of(name) or 'sweep')
+        except RuntimeError as e:
+            row['verdict'] = str(e)[:60]
+            return row
+        exit_ = LocalExit('127.0.0.1', TUNNEL_PORTS['multi'])
+    else:
+        exit_ = Exit(ip, 443, host, auth[0], auth[1], bind)
+    return sweep_measured(exit_, row, sites, timeout, connect_only)
 
+
+def base_of(name):
+    """`de-fra` out of `de-fra.prod.surfshark.com_tcp_1.2.3.4.ovpn`, for the
+    label the server files the exit under. Cosmetic - it shows up in
+    `tunnel status` - but a chain named `sweep` for an hour after a sweep is
+    a small lie that costs somebody ten minutes later."""
+    return name.split('.', 1)[0]
+
+
+def sweep_measured(exit_, row, sites, timeout, connect_only=False):
+    """The measurement itself, once something has decided what to measure
+    through. Kept apart from that decision so all three routes are timed by
+    the same code and can be compared with each other."""
     if connect_only:
         try:
             row['ttfb'] = can_connect(exit_, timeout)
@@ -776,7 +843,44 @@ def sweep_one(path, auth, sites, timeout, connect_only=False, bind=None):
 
 
 def do_sweep(folder, out_dir, sites, timeout, jobs, first, one_per,
-             state_dir, auth_file, connect_only=False, bind=None):
+             state_dir, auth_file, connect_only=False, bind=None,
+             through='provider'):
+    saved = None
+    if through not in SWEEP_ROUTES:
+        die(f'no such route: {through}', 'They are: ' + ', '.join(SWEEP_ROUTES))
+    if through != 'provider':
+        saved = tunnel_settings()
+        mode = 'single' if through == 'server' else 'multi'
+        if not tunnel_listening(mode):
+            die('the tunnel client is not running',
+                'This route measures what happens on the far side of your\n'
+                'own server, so the client has to be up to measure through.\n\n'
+                '    ovpn proxy tunnel cdn      brings it up and stays\n'
+                '    ovpn proxy tunnel status   says whether it is up')
+        # One exit chain on the server means one measurement at a time. Told
+        # rather than silently corrected: a sweep that was asked for eight at
+        # a time and quietly does one takes eight times as long as the person
+        # waiting for it expects.
+        if through == 'server+exit' and jobs != 1:
+            print(f'\n  one at a time, not {jobs}: the server holds a single '
+                  f'exit chain\n  and two measurements would overwrite each '
+                  f'other mid-flight.')
+            jobs = 1
+
+    if through == 'server':
+        # No folder to walk. The route has one address in it.
+        row = sweep_one(None, read_auth(auth_file), sites, timeout,
+                        connect_only, bind, through, saved)
+        head('Your server')
+        field('answers as', row['exit'] or row['verdict'])
+        field('first byte', f"{row['ttfb']:.2f}s" if row['ttfb'] else '-')
+        for site, verdict in row['sites'].items():
+            # Under one label rather than one each: a hostname is longer
+            # than the label column and printing it there runs the two words
+            # together, which is how `www.reddit.comblocked` happens.
+            field('serves', f'{site}  {verdict}')
+        raise SystemExit(0 if row['verdict'] == 'ok' else 1)
+
     if not os.path.isdir(folder):
         die(f'no such folder: {folder}')
     names = sorted(f for f in os.listdir(folder) if f.endswith('.ovpn'))
@@ -804,6 +908,7 @@ def do_sweep(folder, out_dir, sites, timeout, jobs, first, one_per,
 
     auth = read_auth(auth_file)
     print(f'\n  {len(names)} configs from {folder}')
+    print(f'  {ROUTE_SAYS[through]}')
     if sites:
         print(f'  also asking each exit for: {", ".join(sites)}')
     print(f'  {jobs} at a time - nothing is connected, so they do not queue '
@@ -813,7 +918,8 @@ def do_sweep(folder, out_dir, sites, timeout, jobs, first, one_per,
     done = 0
     with cf.ThreadPoolExecutor(max_workers=jobs) as pool:
         futures = {pool.submit(sweep_one, os.path.join(folder, n),
-                               auth, sites, timeout, connect_only, bind): n
+                               auth, sites, timeout, connect_only, bind,
+                               through, saved): n
                    for n in names}
         for fut in cf.as_completed(list(futures)):
             done += 1
@@ -3339,17 +3445,53 @@ def tunnel_way_in(saved, force=False, quiet=False):
     return 'repaired'
 
 
-def tunnel_api(saved, path, payload=None, method='GET'):
+def tunnel_set_exit(saved, ip, user, password, name='current'):
+    """Point the server's exit chain at one address, live.
+
+    One request, and it takes effect on the next connection through the
+    multi-IP mode - nothing restarts at either end, and connections already
+    open keep the exit they were made through. Written once here because
+    three callers want it now: the country verb, the window, and the sweep
+    that measures each exit from the far side of the tunnel.
+
+    Soft, because the sweep asks this once per config and a server that
+    refuses one of them is a row in the table rather than the end of the run.
+    """
+    tunnel_api(saved, 'config/chains/exit-chain', method='PUT', soft=True,
+               payload={
+                   'name': 'exit-chain',
+                   'hops': [{'name': 'exit', 'nodes': [{
+                       'name': name, 'addr': f'{ip}:443',
+                       'connector': {'type': 'http',
+                                     'auth': {'username': user,
+                                              'password': password}},
+                       'dialer': {'type': 'tls', 'tls': {'secure': False}},
+                   }]}],
+               })
+    return True
+
+
+def tunnel_api(saved, path, payload=None, method='GET', soft=False):
     """The server's own configuration, over the same domain.
 
     Named user agent because the default is not: a CDN in front answers 403
     to `Python-urllib/3.x` before the request reaches the server, which reads
     exactly like the API refusing the password and is not.
+
+    soft turns every one of the endings below into a RuntimeError instead of
+    the end of the program. A command asking one question should stop when
+    the answer is no; a sweep asking five hundred should write the no down
+    and go on to the next.
     """
+    def wrong(msg, detail=''):
+        if soft:
+            raise RuntimeError(': '.join(x for x in (msg, detail) if x))
+        die(msg, detail)
+
     if not saved.get('apiPassword'):
-        die('no api password for this tunnel',
-            'Changing the exit goes through the server\'s own API, and that\n'
-            f'needs the second password. Add "apiPassword" to {TUNNEL_SETTINGS}.')
+        wrong('no api password for this tunnel',
+              'Changing the exit goes through the server\'s own API, and that\n'
+              f'needs the second password. Add "apiPassword" to {TUNNEL_SETTINGS}.')
     url = f'https://{saved["domain"]}/api/{path}'
     data = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(url, data=data, method=method)
@@ -3364,12 +3506,12 @@ def tunnel_api(saved, path, payload=None, method='GET'):
         return json.loads(body) if body else {}
     except urllib.error.HTTPError as e:
         if e.code == 401:
-            die('the server would not take the api password',
-                f'Check "apiPassword" in {TUNNEL_SETTINGS} against '
-                '/etc/gost/api.pw on the server.')
-        die(f'the server answered {e.code}', f'{method} {path}')
+            wrong('the server would not take the api password',
+                  f'Check "apiPassword" in {TUNNEL_SETTINGS} against '
+                  '/etc/gost/api.pw on the server.')
+        wrong(f'the server answered {e.code}', f'{method} {path}')
     except urllib.error.URLError as e:
-        die(f'{saved["domain"]} could not be reached', f'{e.reason}')
+        wrong(f'{saved["domain"]} could not be reached', f'{e.reason}')
 
 
 TUNNEL_LINE = (
@@ -3458,15 +3600,7 @@ def do_tunnel(argv):
         want = argv[1].lower()
         ip, name = pick_country(want)
         user, password = read_auth(os.path.join(ROOT, '.ovpn-auth'))
-        tunnel_api(saved, 'config/chains/exit-chain', method='PUT', payload={
-            'name': 'exit-chain',
-            'hops': [{'name': 'exit', 'nodes': [{
-                'name': want, 'addr': f'{ip}:443',
-                'connector': {'type': 'http',
-                              'auth': {'username': user, 'password': password}},
-                'dialer': {'type': 'tls', 'tls': {'secure': False}},
-            }]}],
-        })
+        tunnel_set_exit(saved, ip, user, password, name=want)
         head('Tunnel')
         field('country', f'{want} - {name}')
         field('exit', ip)
@@ -3793,6 +3927,18 @@ def verb_help(verb):
                       only that an exit will talk to you{o}
     {b}--site{o} a.com,b.com  also ask each exit for those. {d}An exit has to
                       serve all of them to be kept{o}
+    {b}--through{o} ROUTE   which way to reach each exit {d}(provider){o}
+                      {d}provider{o}     dialled from this line, as it always was
+                      {d}server+exit{o}  through your server, then out at the exit
+                      {d}server{o}       your server itself - one row, not a sweep
+
+    {d}The route is the measurement, not a detail of it. Since traffic
+    started leaving through the server, a time taken from this line is a
+    time for a leg nothing uses any more - and the two disagree: the same
+    exit refused six uploads straight from here in the minute it carried
+    them at 1.2-1.8 MB/s through the server. server+exit goes one at a
+    time, because the server holds one exit chain.{o}
+
     {b}--one-per{o}         one address per exit rather than all of them
     {b}--first{o} N         stop after N {d}(overrides the forty-at-a-time cap){o}
     {b}--jobs{o} N          how many at once {d}(12){o}
@@ -3941,6 +4087,13 @@ def main():
     p.add_argument('--site', action='append', default=[],
                    help='also ask each exit for this host. Repeatable, or comma '
                         'separated. An exit has to serve all of them to be kept')
+    p.add_argument('--through', default='provider', choices=SWEEP_ROUTES,
+                   metavar='ROUTE',
+                   help='which way --sweep reaches each exit: provider dials '
+                        'it from here, server+exit goes through your own '
+                        'server first and out at the exit, server measures '
+                        'the server itself. provider is the default and is '
+                        'what this always did')
     p.add_argument('--jobs', type=int, default=12,
                    help='how many exits to ask at once during --sweep (12)')
     p.add_argument('--first', type=int, help='stop --sweep after this many')
@@ -4051,7 +4204,7 @@ def main():
                 'question of whether that exit is served the page.')
         do_sweep(args.dir, args.out, sites, args.timeout, args.jobs,
                  args.first, args.one_per, os.path.join(ROOT, '.state'),
-                 args.auth, args.connect_only, args.bind)
+                 args.auth, args.connect_only, args.bind, args.through)
         return
 
     # Said before the work rather than after the port clash, because the fix

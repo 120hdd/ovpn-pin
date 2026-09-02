@@ -614,7 +614,8 @@ class Api:
         return {'sites': self._settings.get('sites', ''),
                 'scope': self._settings.get('sweepScope', 'all'),
                 'chosen': self._settings.get('sweepLandlords', []),
-                'first': int(self._settings.get('sweepFirst', 0) or 0)}
+                'first': int(self._settings.get('sweepFirst', 0) or 0),
+                'through': self._settings.get('sweepRoute', 'provider')}
 
     def sweepPlan(self, folder=None, quick=False, **over):
         """What a test would cost and what would stop it, asked before the
@@ -629,6 +630,19 @@ class Api:
                                                if v is not None}}
         return self._sweep.plan(self._engine, folder or None,
                                 ask_windows=not quick, **choices)
+
+    def setSweepRoute(self, route=None):
+        """Which leg the test measures, kept between runs.
+
+        Its own call rather than another argument to setSweepScope, because
+        changing it changes what the pane is allowed to say: the route
+        decides which blockers apply, and asking for them under the old route
+        would show a UAC warning for a run that never elevates.
+        """
+        if route in sweep.ROUTES:
+            self._settings['sweepRoute'] = route
+            save_settings(self._settings)
+        return self.sweepPlan(quick=True)
 
     def setSweepScope(self, scope=None, chosen=None, first=None):
         """One address each, or one per location, or one per company - and
@@ -1315,6 +1329,34 @@ def ui_check(window):
     os.makedirs(out, exist_ok=True)
     said = {}
 
+    def our_window():
+        """This process's own top-level window, by process id.
+
+        The caption is not an identity: a built Relay open beside the one
+        being checked answers to the same name, and whichever Windows hands
+        back first is the one that gets photographed.
+        """
+        mine, found = os.getpid(), []
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND,
+                            ctypes.wintypes.LPARAM)
+        def each(handle, _):
+            length = ctypes.windll.user32.GetWindowTextLengthW(handle)
+            if length:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                ctypes.windll.user32.GetWindowTextW(handle, buf, length + 1)
+                if buf.value == APP_NAME:
+                    owner = ctypes.wintypes.DWORD()
+                    ctypes.windll.user32.GetWindowThreadProcessId(
+                        handle, ctypes.byref(owner))
+                    if owner.value == mine:
+                        found.append(handle)
+                        return False
+            return True
+
+        ctypes.windll.user32.EnumWindows(each, 0)
+        return found[0] if found else 0
+
     def shot(name):
         """Our own window, asked to draw itself.
 
@@ -1328,13 +1370,20 @@ def ui_check(window):
 
         PW_RENDERFULLCONTENT, because WebView2 draws through DWM and the plain
         call comes back with the page missing.
+
+        Found by process rather than by title. FindWindowW takes the first
+        window with that caption, and a built copy of this app open on the
+        same desktop has exactly that caption - so a check run while the
+        person has Relay open photographed *their* window instead of its own,
+        and reported the size it meant to capture rather than the size it got.
+        Every picture in that run came back 237x39 and said 600x1110.
         """
         try:
             from PIL import Image
             user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
-            handle = user32.FindWindowW(None, APP_NAME)
+            handle = our_window()
             if not handle:
-                return 'no picture: our window was not found by title'
+                return 'no picture: our window was not found'
             rect = ctypes.wintypes.RECT()
             user32.GetWindowRect(handle, ctypes.byref(rect))
             w, h = rect.right - rect.left, rect.bottom - rect.top

@@ -1909,9 +1909,60 @@ function drawSiteFolders(folders, current) {
 // live but changes nothing is worse than one that is plainly out of reach.
 function lockChoices(locked) {
   for (const el of document.querySelectorAll('#sweepScope .scope__row, '
+                                             + '#sweepRoute .scope__row, '
                                              + '#sweepLords .chip, #lookUpOwners')) {
     el.disabled = locked;
   }
+}
+
+/* The routes, and what each would cost in minutes. Minutes rather than a
+   count, because the count is the same for two of them and the minutes are
+   not - dialling five hundred exits is an afternoon and asking the server
+   about them is a quarter of an hour. */
+const ROUTE_WHY = {
+  'provider': 'Connects to each one for real, writes how long its handshake '
+    + 'took on the front of its name, and drops it again. That is the number '
+    + 'the list is ordered by, and the only way to know it. Your connection '
+    + 'goes down and up once per server, so reckon in minutes.',
+  'server+exit': 'Points your server at each exit in turn and measures from '
+    + 'the far side of the tunnel — which is the leg your traffic takes now, '
+    + 'and it does not agree with the other one. Nothing disconnects and '
+    + 'nothing is elevated, so this runs in the background.',
+  'server': 'Asks what your own server serves, with no exit in front of it. '
+    + 'One address and one row: the quickest way to tell a site refusing your '
+    + 'server from a site refusing the exits.',
+};
+
+const ROUTE_SAYS = {
+  'provider': 'Times the OpenVPN handshake from here. The honest number for '
+    + 'a connection you make yourself, and the wrong one for traffic that '
+    + 'leaves through your server.',
+  'server+exit': 'Sets each exit on your server in turn and measures from '
+    + 'the far side of the tunnel. One at a time, because the server holds a '
+    + 'single exit chain.',
+  'server': 'Asks what your own server serves, without any exit in front of '
+    + 'it. The quickest answer to whether a site is refusing the server '
+    + 'rather than the exits.',
+};
+
+function drawRoute(plan) {
+  const now = plan.route || 'provider';
+  for (const row of $('sweepRoute').querySelectorAll('.scope__row')) {
+    const route = row.dataset.route;
+    row.setAttribute('aria-pressed', String(route === now));
+    const cell = row.querySelector('.scope__count');
+    const mins = (plan.routeMinutes || {})[route];
+    const text = mins == null ? '—' : `${mins} min`;
+    if (cell.textContent !== text) {
+      cell.textContent = text;
+      cell.classList.remove('turned');
+      void cell.offsetWidth;
+      cell.classList.add('turned');
+    }
+    row.disabled = !!state.sweep;
+  }
+  $('routeSaid').textContent = ROUTE_SAYS[now] || '';
+  if (ROUTE_WHY[now]) $('sweepWhy').textContent = ROUTE_WHY[now];
 }
 
 function drawScope(plan) {
@@ -1998,6 +2049,7 @@ function paintSweepPlan(plan) {
   if (document.activeElement !== $('sweepFirst')) {
     $('sweepFirst').value = plan.first ? String(plan.first) : '';
   }
+  drawRoute(plan);
   drawScope(plan);
   drawLandlords(plan);
   drawSiteFolders(plan.siteFolders, plan.into);
@@ -2308,6 +2360,17 @@ $('sweepScope').addEventListener('click', async (e) => {
   const row = e.target.closest('.scope__row');
   if (!row || state.sweep) return;
   paintSweepPlan(await window.pywebview.api.setSweepScope(row.dataset.scope));
+});
+
+$('sweepRoute').addEventListener('click', async (e) => {
+  const row = e.target.closest('.scope__row');
+  if (!row || state.sweep) return;
+  // Marked before the round trip so the click lands at once; the answer
+  // brings the minutes and the blockers, which are what actually changed.
+  for (const other of $('sweepRoute').querySelectorAll('.scope__row')) {
+    other.setAttribute('aria-pressed', String(other === row));
+  }
+  paintSweepPlan(await window.pywebview.api.setSweepRoute(row.dataset.route));
 });
 
 $('sweepLords').addEventListener('click', async (e) => {

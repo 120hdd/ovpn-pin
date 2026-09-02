@@ -326,6 +326,33 @@ seconds — level with going out at the server directly.
 Changing country is one request to the server's own API. Nothing restarts,
 and connections already open keep the exit they were made through.
 
+### Which leg a test measures
+
+A sweep asks each exit how quick it is, and the answer depends on who is
+asking. Dialled from this line, it says whether that address answers *here* —
+which was the only question worth asking until the traffic started leaving
+through the server, and is the wrong one now. The two disagree, and not
+subtly: the same exit refused six uploads straight from this line in the same
+minute it carried them at 1.2–1.8 MB/s through the server.
+
+So the sweep takes a route:
+
+```bash
+ovpn proxy sweep --through provider      # dialled from here, as it always was
+ovpn proxy sweep --through server+exit   # through your server, out at each exit
+ovpn proxy sweep --through server        # your server itself, one row
+```
+
+`server+exit` sets each exit on the server through its API and measures from
+the far side of the tunnel, one at a time — the server holds a single exit
+chain, so two at once would each be reading the exit the other had just set.
+It needs no administrator and takes nothing down, which is the other half of
+why it is worth having: the provider route drops your connection once per
+server and the tunnel routes do not touch it.
+
+The window has the same three as a choice at the top of the test pane, with
+what each would cost in minutes on it.
+
 ### When the way in gets filtered
 
 The domain is reached through Cloudflare, and Cloudflare hands out two
