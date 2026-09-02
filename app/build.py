@@ -84,6 +84,35 @@ def make_shortcut(target, folder, name, icon=None):
         return None
 
 
+def stop_tunnel_client():
+    """End a gost this app started, so dist/ can be deleted.
+
+    It outlives the window on purpose - a connection should not drop because
+    somebody closed a settings sheet - which also means it outlives the copy
+    of the app that started it. Found by which process holds the port rather
+    than by name: someone else's gost is not ours to kill.
+    """
+    if os.name != 'nt':
+        return
+    try:
+        out = subprocess.run(['netstat', '-ano'], capture_output=True,
+                             text=True, timeout=10).stdout
+    except Exception:
+        return
+    for port in (9090, 9091, 9092):
+        for line in out.splitlines():
+            bits = line.split()
+            if (len(bits) >= 5 and bits[0] == 'TCP' and bits[3] == 'LISTENING'
+                    and bits[1].endswith(f':{port}')):
+                try:
+                    subprocess.run(['taskkill', '/PID', bits[4], '/F'],
+                                   capture_output=True, timeout=10)
+                    print(f'tunnel client on {port}: stopped so dist/ can go')
+                except Exception:
+                    pass
+                break
+
+
 def main():
     if os.name != 'nt':
         raise SystemExit('This builds a Windows app, so it has to run on Windows.')
@@ -92,6 +121,12 @@ def main():
         raise SystemExit(
             'Standing inside dist/ stops it being deleted, and the build then\n'
             'fails on a permission error. Run this from somewhere else.')
+
+    # The tunnel client the last build's app started is still running, and
+    # its log sits inside dist/. PyInstaller cleans that folder itself and
+    # fails on the open handle with a permission error naming a file nobody
+    # would connect to a build - so it is said here, where it can be acted on.
+    stop_tunnel_client()
 
     for path in (DIST, WORK):
         shutil.rmtree(path, ignore_errors=True)
@@ -118,6 +153,11 @@ def main():
         '--hidden-import', 'paths',
         '--hidden-import', 'sweep',
         '--hidden-import', 'pin',
+        # Named like the rest of them. main.py imports it, but every
+        # local module here is declared rather than discovered, and one
+        # that is not is a build that runs and a window that cannot
+        # find its own tunnel.
+        '--hidden-import', 'tunnel',
         # pystray is imported inside a function so a machine without it still
         # runs. PyInstaller only follows imports it can see statically, so
         # without these the tray silently does not exist in the built app -
@@ -196,6 +236,25 @@ def main():
         print('sweep scripts: MISSING - the app can connect, but "Time the '
               'servers properly" and "Pin them to real addresses" will both '
               'say they have nothing to run')
+
+    # The tunnel client, and the script that sets up the far end of it.
+    # Copied beside the exe for the same reason the PowerShell files are:
+    # paths.gost_exe() looks in DATA_DIR, which frozen is here and not inside
+    # _internal. Without this the app builds, runs, shows the whole tunnel
+    # pane and then says it cannot find a client - which is a worse failure
+    # than not offering the feature at all.
+    tunnelled = 0
+    for name in ('gost.exe', 'install-server.sh'):
+        src = os.path.join(ROOT, 'tunnel', name)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(out, name))
+            tunnelled += 1
+    if tunnelled == 2:
+        print('tunnel: client and installer copied')
+    else:
+        print('tunnel: MISSING - the app will connect through the provider, '
+              'but "Your own tunnel" will say it has no client to run. Put '
+              'gost.exe and install-server.sh in tunnel/ and build again.')
 
     # Who each address is rented from. Already paid for - one HTTP request per
     # hundred addresses, with a deliberate wait between them - and without it

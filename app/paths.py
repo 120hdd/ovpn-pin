@@ -43,6 +43,30 @@ STATE_DIR = os.path.join(DATA_DIR, '.state')
 AUTH_FILE = os.path.join(DATA_DIR, '.ovpn-auth')
 SAVED_PROXY = os.path.join(STATE_DIR, 'system-proxy-before.json')
 
+# The tunnel client, and the folder its configuration and log live in.
+# Frozen, the build puts gost beside the exe; from the repo it is in tunnel/.
+# PATH last, so a developer who already has one does not need a second copy.
+TUNNEL_DIR = DATA_DIR if FROZEN else os.path.join(DATA_DIR, 'tunnel')
+TUNNEL_STATE = os.path.join(STATE_DIR, 'tunnel')
+
+
+INSTALLER = os.path.join(TUNNEL_DIR, 'install-server.sh')
+
+
+def gost_exe():
+    """The tunnel client binary, or None if there is not one to run."""
+    name = 'gost.exe' if os.name == 'nt' else 'gost'
+    for folder in (DATA_DIR, TUNNEL_DIR):
+        path = os.path.join(folder, name)
+        if os.path.isfile(path):
+            return path
+    for folder in os.environ.get('PATH', '').split(os.pathsep):
+        path = os.path.join(folder.strip('"'), name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
 # The PowerShell half. In the repo it is in windows/, with the rest of the
 # Windows side. The build copies both scripts out of there and puts them
 # beside the exe rather than inside _internal - Sweep-OvpnExits.ps1 looks for
@@ -67,13 +91,18 @@ def servers_dir():
     return os.path.join(DATA_DIR, SERVER_DIRS[0])
 
 
-def worker_argv(ip, host, port, auth):
-    """What to run to get a proxy process, on either side of freezing."""
-    if FROZEN:
-        return [sys.executable, WORKER_FLAG, ip, '--host', host,
-                '--port', str(port), '--auth', auth, '--quiet']
-    return [sys.executable, PROXY_PY, ip, '--host', host,
-            '--port', str(port), '--auth', auth, '--quiet']
+def worker_argv(ip, host, port, auth, tunnel=None):
+    """What to run to get a proxy process, on either side of freezing.
+
+    With `tunnel` set the worker carries traffic through a proxy already
+    running on this machine instead of dialling an exit, so the address is
+    the whole of what it needs: no config, no certificate name, no account.
+    """
+    head = [sys.executable] + ([WORKER_FLAG] if FROZEN else [PROXY_PY])
+    if tunnel:
+        return head + ['--tunnel', tunnel, '--port', str(port), '--quiet']
+    return head + [ip, '--host', host,
+                   '--port', str(port), '--auth', auth, '--quiet']
 
 
 def point_proxy_module_at_data(px):

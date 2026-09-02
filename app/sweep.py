@@ -48,6 +48,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -225,6 +226,22 @@ TIME_PREFIX = re.compile(r'^\d{1,3}(?:\.\d+)?s-')
 
 SCOPES = ('all', 'location', 'company-location', 'company')
 
+# Which leg gets timed. Not three flavours of one measurement: dialled from
+# here, an exit is being asked whether it answers *this* line, and traffic
+# has not left that way since the tunnel went in. The two disagree in
+# practice - the same exit refused six uploads straight from this line in the
+# minute it carried them at 1.2-1.8 MB/s through the server.
+ROUTES = ('provider', 'server', 'server+exit')
+
+# Seconds a tunnel-route row costs: the exit is set on the server, then the
+# trace is fetched, then each named site. Measured at about two seconds for
+# the pair and a second a site, sequential because the server holds one exit
+# chain. Against the provider route's quarter-minute per server, which is
+# what dialling OpenVPN costs whatever else is true.
+TUNNEL_SECONDS = 2.0
+TUNNEL_SITE_SECONDS = 1.0
+TUNNEL_TIMEOUT = 20
+
 
 def owners_path():
     return os.path.join(paths.STATE_DIR, 'owners.tsv')
@@ -322,20 +339,22 @@ def landlords(folder):
     return ordered, unknown
 
 
-def selection(folder, scope='all', chosen=None, first=0):
-    """How many servers a given set of choices actually comes to.
+def selected_names(folder, scope='all', chosen=None, first=0):
+    """Which servers a given set of choices actually comes to.
 
-    The same grouping the sweep does, done here for the count alone - which
-    is the whole reason the choices are worth making. "Two hundred and
-    twenty-three minutes" and "eleven minutes" are different decisions, and
-    the difference has to be visible before the UAC prompt rather than after
-    it.
+    The same grouping the sweep does. It used to count the groups and throw
+    the names away, which was enough while the only thing that needed them
+    was an elevated script doing its own grouping - and stopped being enough
+    the moment a route arrived that measures the exits from in here.
+
+    The first of each group in name order, so two runs of the same choices
+    cover the same servers.
     """
     if scope not in SCOPES:
         scope = 'all'
     cache = owner_cache()
     wanted = set(chosen or [])
-    keys = set()
+    seen, picked = set(), []
     for name in configs_in(folder):
         owner = format_owner(cache.get(config_address(folder, name) or ''))
         if wanted and owner not in wanted:
@@ -345,15 +364,29 @@ def selection(folder, scope='all', chosen=None, first=0):
             # company to be one-per.
             continue
         if scope == 'location':
-            keys.add(location_key(name))
+            key = location_key(name)
         elif scope == 'company':
-            keys.add(owner)
+            key = owner
         elif scope == 'company-location':
-            keys.add(f'{owner}|{location_key(name)}')
+            key = f'{owner}|{location_key(name)}'
         else:
-            keys.add(name)
-    count = len(keys)
-    return min(count, first) if first else count
+            key = name
+        if key in seen:
+            continue
+        seen.add(key)
+        picked.append(name)
+    return picked[:first] if first else picked
+
+
+def selection(folder, scope='all', chosen=None, first=0):
+    """How many that comes to.
+
+    The whole reason the choices are worth making. "Two hundred and
+    twenty-three minutes" and "eleven minutes" are different decisions, and
+    the difference has to be visible before the UAC prompt rather than after
+    it.
+    """
+    return len(selected_names(folder, scope, chosen, first))
 
 
 def site_folders():
@@ -379,7 +412,7 @@ def site_folders():
     return out
 
 
-def estimate_minutes(count, sites=0):
+def estimate_minutes(count, sites=0, through='provider'):
     """The script's own arithmetic, plus what naming sites adds to it.
 
     Rounded up, and never zero - a sweep of one server is not an instant
@@ -388,6 +421,11 @@ def estimate_minutes(count, sites=0):
     costs; SECONDS_PER_SITE is deliberately generous, because an estimate that
     runs over is worse than one that comes in early.
     """
+    if through != 'provider':
+        # No tunnel to raise and none to take down: what a row costs here is
+        # one request to set the exit and one or two to measure it.
+        each = (TUNNEL_SECONDS + sites * TUNNEL_SITE_SECONDS) / 60
+        return max(1, math.ceil((1 if through == 'server' else count) * each))
     each = MINUTES_EACH + sites * (SECONDS_PER_SITE / 60)
     return max(1, math.ceil(count * each))
 
@@ -559,10 +597,12 @@ class Sweep:
         self.results = []
         self.error = None
         self.into = None
+        self.sites = []
 
     #-- before it starts --------------------------------------------------
 
-    def blockers(self, engine, folder=None, ask_windows=True):
+    def blockers(self, engine, folder=None, ask_windows=True,
+                 through='provider'):
         """Everything that would make a sweep fail or lie, asked before the
         UAC prompt rather than after it. A person who has just approved
         administrator rights for something that then says "openvpn is not
@@ -576,6 +616,8 @@ class Sweep:
         """
         folder = folder or engine.folder
         out = []
+        if through != 'provider':
+            return self._tunnel_blockers(folder, through)
         if os.name != 'nt':
             out.append({'kind': 'windows',
                         'say': 'This test only runs on Windows.'})
@@ -614,8 +656,44 @@ class Sweep:
                                    f'off as dead.'})
         return out
 
+    def _tunnel_blockers(self, folder, through):
+        """What would stop a run through the tunnel.
+
+        A shorter list than the other route's, and that is the point of it:
+        nothing is elevated, no driver is involved, no adapter is taken over,
+        and another VPN holding the default route does not matter because the
+        exit is reached through a socket on this machine. What is needed is
+        a tunnel that exists and a client that is up.
+        """
+        import engine as engine_mod                      # noqa: E402
+        px = engine_mod.px
+        out = []
+        try:
+            px.tunnel_settings()
+        except SystemExit:
+            out.append({'kind': 'no-tunnel',
+                        'say': 'No tunnel is set up, and this route measures '
+                               'what happens on the far side of one. Fill in '
+                               'the domain and the two passwords above.'})
+            return out
+        if not px.tunnel_listening('single' if through == 'server' else 'multi'):
+            out.append({'kind': 'tunnel-down',
+                        'say': 'The tunnel client is not running. Press Test '
+                               'in the tunnel pane above - it starts it and '
+                               'says whether the far end answers.'})
+        if through != 'server' and not configs_in(folder):
+            out.append({'kind': 'no-configs',
+                        'say': 'No .ovpn files in that folder, so there is '
+                               'nothing to test.'})
+        if not os.path.isfile(paths.AUTH_FILE):
+            out.append({'kind': 'no-auth',
+                        'say': 'No provider credentials on file. The server '
+                               'signs in to each exit with them on your '
+                               'behalf, so it cannot do it without them.'})
+        return out
+
     def plan(self, engine, folder=None, sites=None, scope='all', chosen=None,
-             first=0, ask_windows=True):
+             first=0, ask_windows=True, through='provider'):
         folder = folder or engine.folder
         named = clean_sites(sites)
         companies, untraced = landlords(folder)
@@ -632,8 +710,15 @@ class Sweep:
                 # Each named site is another request per exit, on a connection
                 # that has just come up. Measured against the sweep's own
                 # quarter-minute, that is roughly a fifth of one each.
-                'minutes': estimate_minutes(count, len(named)),
+                'minutes': estimate_minutes(count, len(named), through),
                 'sites': named,
+                'route': through if through in ROUTES else 'provider',
+                # What each route would cost, for the same reason the scope
+                # counts are here: the price of the other choice belongs next
+                # to the choice and not one click behind it.
+                'routeMinutes': {r: estimate_minutes(
+                    1 if r == 'server' else count, len(named), r)
+                    for r in ROUTES},
                 'siteTestDir': sitetest_dir(),
                 'siteFolders': site_folders(),
                 'scope': scope if scope in SCOPES else 'all',
@@ -647,24 +732,30 @@ class Sweep:
                 'untraced': untraced,
                 'first': first,
                 'openvpn': find_openvpn(),
-                'blockers': self.blockers(engine, folder, ask_windows),
+                'blockers': self.blockers(engine, folder, ask_windows,
+                                          through),
                 'state': self.state}
 
     #-- running it --------------------------------------------------------
 
     def start(self, engine, folder, emit, sites=None, scope='all',
-              chosen=None, first=0):
+              chosen=None, first=0, through='provider'):
+        through = through if through in ROUTES else 'provider'
         with self.lock:
             if self.state == 'running':
                 return {'ok': False, 'error': 'A test is already running.'}
-            blockers = self.blockers(engine, folder)
+            blockers = self.blockers(engine, folder, True, through)
             if blockers:
                 return {'ok': False, 'error': blockers[0]['say'],
                         'blockers': blockers}
 
             named = clean_sites(sites)
             chosen = list(chosen or [])
-            total = selection(folder, scope, chosen, first)
+            # One row, and it is the server: there is nothing in the folder
+            # to iterate, because the folder is full of exits and this route
+            # does not go out at one.
+            total = (1 if through == 'server'
+                     else selection(folder, scope, chosen, first))
             if not total:
                 return {'ok': False,
                         'error': 'Those choices leave no servers to test.'}
@@ -674,14 +765,23 @@ class Sweep:
             self.results = []
             self.error = None
             self.into = engine.folder
+            self.sites = named
+            # The stop file is how the elevated run is asked to stop and it
+            # is checked by the tunnel run too. Left behind by a cancelled
+            # run, it would stop the next one before its first row.
+            try:
+                os.remove(self._stop_path())
+            except OSError:
+                pass
             self.thread = threading.Thread(
-                target=self._run,
+                target=self._run if through == 'provider' else self._run_tunnel,
                 args=(folder, engine.folder, total, named, scope, chosen,
-                      first, emit),
+                      first, emit) + ((through,) if through != 'provider'
+                                      else ()),
                 daemon=True)
             self.thread.start()
-        return {'ok': True, 'count': total, 'sites': named,
-                'minutes': estimate_minutes(total, len(named))}
+        return {'ok': True, 'count': total, 'sites': named, 'route': through,
+                'minutes': estimate_minutes(total, len(named), through)}
 
     def cancel(self):
         if self.state != 'running':
@@ -725,6 +825,16 @@ class Sweep:
                 '-File', script_path(),
                 '-PinnedDir', folder,
                 '-SuccessDir', into,
+                # Said rather than left to the script, which guesses .state is
+                # two folders up from itself. That is right in the repo and
+                # wrong in a bundle, where both scripts sit beside the exe -
+                # and the way it goes wrong is silent. The owners cache lives
+                # in here, the landlord chips are read out of it, and
+                # -Landlord is matched against what the sweep reads out of
+                # its own copy: two caches, filled by whichever lookup
+                # service answered, spelling the same company two ways, and
+                # every name the window offered matches nothing.
+                '-StateDir', paths.STATE_DIR,
                 # The sweep asks two questions at a terminal that a window has
                 # to answer for it: whether an afternoon is an acceptable price
                 # and whether the VPN it can see is really one. Both were put
@@ -790,6 +900,104 @@ class Sweep:
             return
 
         self._read_along(total, emit)
+
+    def _run_tunnel(self, folder, into, total, sites, scope, chosen, first,
+                    emit, through):
+        """The same table, measured through the tunnel instead of by dialling.
+
+        Nothing is elevated, nothing is connected and nothing goes down: the
+        exits are reached through the local end of the tunnel, which is a
+        socket on this machine. So this is an ordinary thread rather than an
+        elevated PowerShell being read through its own log file, and it stops
+        when it is asked to stop rather than when the file appears.
+
+        One at a time, and not as a limitation of the code. The server holds
+        a single exit chain, so two measurements at once would each be
+        reading the exit the other had just set.
+        """
+        import engine as engine_mod                      # noqa: E402
+        px = engine_mod.px
+        try:
+            saved = px.tunnel_settings()
+        except SystemExit:
+            self._finish(emit, error='This machine has not been told where '
+                                     'your tunnel is. Fill the domain and the '
+                                     'passwords in above.')
+            return
+
+        mode = 'single' if through == 'server' else 'multi'
+        if not px.tunnel_listening(mode):
+            self._finish(emit, error='The tunnel client is not running, and '
+                                     'this route measures what happens on the '
+                                     'far side of it. Test it above first.')
+            return
+
+        auth = px.read_auth(paths.AUTH_FILE)
+        names = ([None] if through == 'server'
+                 else selected_names(folder, scope, chosen, first))
+        done = 0
+        for name in names:
+            if os.path.isfile(self._stop_path()):
+                self._finish(emit, cancelled=True)
+                return
+            done += 1
+            self.progress = {'done': done, 'total': len(names),
+                             'name': name or 'your server', 'ip': ''}
+            emit({'phase': 'testing', **self.progress})
+            try:
+                row = px.sweep_one(
+                    os.path.join(folder, name) if name else None,
+                    auth, sites, TUNNEL_TIMEOUT, False, None, through, saved)
+            except Exception as e:                       # noqa: BLE001
+                row = {'name': name or 'your server', 'verdict': str(e)[:60],
+                       'ttfb': None, 'exit': '', 'sites': {}}
+            self._tunnel_result(emit, row, folder, into, sites)
+        self._finish(emit)
+
+    def _tunnel_result(self, emit, row, folder, into, sites):
+        """One measured exit, filed where the other engine files them.
+
+        The window and the folders have to look the same whichever route
+        took the measurement. What differs is which leg was timed, and that
+        belongs in the number rather than in where the file went.
+        """
+        good = row.get('verdict') == 'ok'
+        served = [s for s, v in row.get('sites', {}).items() if v == 'ok']
+        kept = None
+        if good and len(served) == len(sites) and row.get('name'):
+            kept = self._keep(folder, row, into)
+            for host in served:
+                self._keep(folder, row,
+                           os.path.join(sitetest_dir(), name_tag(host)))
+        said = row.get('verdict') or ''
+        outcome = ('up' if good
+                   else 'noconnect' if 'no proxy' in said
+                   else 'unreachable')
+        entry = {'name': row.get('name') or 'your server', 'outcome': outcome,
+                 'seconds': row.get('ttfb'), 'kept': kept,
+                 'detail': None if good else said,
+                 'verdict': said, 'exit': row.get('exit'),
+                 'sites': [{'host': h, 'served': v == 'ok'}
+                           for h, v in row.get('sites', {}).items()]}
+        self.results.append(entry)
+        emit({'phase': 'result', **entry})
+
+    def _keep(self, folder, row, into):
+        """Copy the config in under its measured time, named the way the
+        other engine names them - these folders are read by sorting on the
+        name, and that is what puts the quickest first."""
+        source = os.path.join(folder, row['name'])
+        if not os.path.isfile(source):
+            return None
+        try:
+            import engine as engine_mod                  # noqa: E402
+            os.makedirs(into, exist_ok=True)
+            tenths = engine_mod.px.fmt_tenths(row.get('ttfb') or 0)
+            target = os.path.join(into, f"{tenths}-{row['name']}")
+            shutil.copyfile(source, target)
+            return target
+        except OSError:
+            return None
 
     def _read_along(self, total, emit):
         """Follow the log while it is written, and say what it says.
@@ -930,6 +1138,11 @@ class Sweep:
               # these folders carry what earlier sweeps found too, and a
               # cancelled run leaves the older entries standing.
               'siteFolders': site_folders(),
+              # Where the ones that worked ended up. Obvious from inside this
+              # file and not from the window, which until now said seven came
+              # up and left you to guess where seven files had gone.
+              'into': self.into,
+              'siteTestDir': sitetest_dir() if self.sites else None,
               'cancelled': cancelled,
               'error': error,
               'log': self._log_path()})

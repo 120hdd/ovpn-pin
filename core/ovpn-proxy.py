@@ -51,6 +51,7 @@ import base64
 import collections
 import concurrent.futures as cf
 import difflib
+import glob
 import json
 import os
 import re
@@ -59,9 +60,12 @@ import shutil
 import socket
 import ssl
 import struct
+import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 
 # This file lives in core/, and every path built from here is one of the
 # reader's own things - the credentials, the pinned configs, .state - which
@@ -552,6 +556,44 @@ class InnerTLS:
                 return b''
 
 
+class LocalExit(Exit):
+    """The upstream is a proxy on this machine, not an exit abroad.
+
+    The tunnel modes put a local proxy in front - gost, holding a multiplexed
+    WebSocket to the user's own server - and everything above this line is
+    left alone: the same CONNECT, the same relay(), the same meter, the same
+    host list. What goes away is only what was there because the exit was
+    reached across the open internet. There is no TLS to wrap, because this
+    hop is a loopback socket; no certificate to check, for the same reason;
+    and no credentials to send, because a password between two processes on
+    one machine protects nothing the machine does not already have.
+
+    Subclassed rather than written beside Exit so take(), the warm pool and
+    the tally keep working unchanged - the one method that reaches the
+    upstream is the only thing that differs.
+    """
+
+    def __init__(self, ip, port, warm=0):
+        super().__init__(ip, port, ip, '', '', None, warm)
+        self.auth = None
+
+    def connect(self):
+        raw = socket.create_connection((self.ip, self.port), timeout=20)
+        raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        return raw
+
+
+def proxy_auth(exit_):
+    """The credentials line, where there are credentials.
+
+    A tunnel's local end has none - it is a socket on this machine, and a
+    password between two processes protects nothing the machine does not
+    already have. Sent anyway it becomes the literal string `Basic None`,
+    which is a header that says what went wrong and is still wrong.
+    """
+    return f'Proxy-Authorization: Basic {exit_.auth}\r\n' if exit_.auth else ''
+
+
 def fetch(exit_, host, path='/', timeout=20, cap=65536):
     """One HTTPS request through the exit. Returns status, headers, the first
     of the body, and how long until that first byte arrived."""
@@ -559,11 +601,10 @@ def fetch(exit_, host, path='/', timeout=20, cap=65536):
     outer = exit_.connect()
     try:
         outer.settimeout(timeout)
-        outer.sendall(
+        outer.sendall((
             f'CONNECT {host}:443 HTTP/1.1\r\n'
             f'Host: {host}:443\r\n'
-            f'Proxy-Authorization: Basic {exit_.auth}\r\n'
-            f'\r\n'.encode())
+            + proxy_auth(exit_) + '\r\n').encode())
         head = b''
         while b'\r\n\r\n' not in head:
             chunk = outer.recv(4096)
@@ -671,11 +712,10 @@ def can_connect(exit_, timeout):
     outer = exit_.connect()
     try:
         outer.settimeout(timeout)
-        outer.sendall(
+        outer.sendall((
             f'CONNECT www.cloudflare.com:443 HTTP/1.1\r\n'
             f'Host: www.cloudflare.com:443\r\n'
-            f'Proxy-Authorization: Basic {exit_.auth}\r\n'
-            f'\r\n'.encode())
+            + proxy_auth(exit_) + '\r\n').encode())
         head = b''
         while b'\r\n\r\n' not in head:
             chunk = outer.recv(4096)
@@ -698,7 +738,39 @@ def can_connect(exit_, timeout):
             pass
 
 
-def sweep_one(path, auth, sites, timeout, connect_only=False, bind=None):
+# The three ways a sweep can reach an exit, in the words the window uses for
+# them. They are not the same measurement wearing different clothes: dialled
+# from here, an exit is being asked whether it answers *this* line, and since
+# the traffic started leaving through the server that is the wrong leg to be
+# timing. Same account, same exit, measured both ways within a minute: six
+# uploads straight at it were refused with `Proxy CONNECT aborted` while
+# every one through the server went at 1.2-1.8 MB/s.
+SWEEP_ROUTES = ('provider', 'server', 'server+exit')
+ROUTE_SAYS = {
+    'provider':    'dialled straight at each exit from this line',
+    'server':      'through your own server, which is one address and one row',
+    'server+exit': 'through your server, then out at each exit in turn',
+}
+
+
+def sweep_one(path, auth, sites, timeout, connect_only=False, bind=None,
+              through='provider', saved=None):
+    """One row of the table: what this exit is worth by the chosen route.
+
+    The route changes what is being asked, not how it is asked. Everything
+    below the first few lines - the CONNECT, the trace, the per-site fetches,
+    the verdict - is the same code either way, because a number measured two
+    different ways is not two numbers.
+    """
+    if through == 'server':
+        # Nothing to iterate: the server is one address and it is the same
+        # address for every config in the folder. So this route makes one row
+        # and says what it is, rather than five hundred copies of it.
+        row = {'name': 'your server', 'ip': '127.0.0.1', 'exit': '',
+               'ttfb': None, 'sites': {}}
+        return sweep_measured(LocalExit('127.0.0.1', TUNNEL_PORTS['single']),
+                              row, sites, timeout, connect_only)
+
     name = os.path.basename(path)
     try:
         ip, host = read_config(path)
@@ -707,9 +779,35 @@ def sweep_one(path, auth, sites, timeout, connect_only=False, bind=None):
     if not host:
         return {'name': name, 'verdict': 'no pin comment', 'exit': '', 'ttfb': None, 'sites': {}}
 
-    exit_ = Exit(ip, 443, host, auth[0], auth[1], bind)
     row = {'name': name, 'ip': ip, 'exit': '', 'ttfb': None, 'sites': {}}
+    if through == 'server+exit':
+        # The server holds one exit chain, so this is a setting and not an
+        # argument: it has to be changed before each measurement and the
+        # measurements cannot overlap. do_sweep is what keeps them from it.
+        try:
+            tunnel_set_exit(saved, ip, auth[0], auth[1],
+                            name=base_of(name) or 'sweep')
+        except RuntimeError as e:
+            row['verdict'] = str(e)[:60]
+            return row
+        exit_ = LocalExit('127.0.0.1', TUNNEL_PORTS['multi'])
+    else:
+        exit_ = Exit(ip, 443, host, auth[0], auth[1], bind)
+    return sweep_measured(exit_, row, sites, timeout, connect_only)
 
+
+def base_of(name):
+    """`de-fra` out of `de-fra.prod.surfshark.com_tcp_1.2.3.4.ovpn`, for the
+    label the server files the exit under. Cosmetic - it shows up in
+    `tunnel status` - but a chain named `sweep` for an hour after a sweep is
+    a small lie that costs somebody ten minutes later."""
+    return name.split('.', 1)[0]
+
+
+def sweep_measured(exit_, row, sites, timeout, connect_only=False):
+    """The measurement itself, once something has decided what to measure
+    through. Kept apart from that decision so all three routes are timed by
+    the same code and can be compared with each other."""
     if connect_only:
         try:
             row['ttfb'] = can_connect(exit_, timeout)
@@ -745,7 +843,44 @@ def sweep_one(path, auth, sites, timeout, connect_only=False, bind=None):
 
 
 def do_sweep(folder, out_dir, sites, timeout, jobs, first, one_per,
-             state_dir, auth_file, connect_only=False, bind=None):
+             state_dir, auth_file, connect_only=False, bind=None,
+             through='provider'):
+    saved = None
+    if through not in SWEEP_ROUTES:
+        die(f'no such route: {through}', 'They are: ' + ', '.join(SWEEP_ROUTES))
+    if through != 'provider':
+        saved = tunnel_settings()
+        mode = 'single' if through == 'server' else 'multi'
+        if not tunnel_listening(mode):
+            die('the tunnel client is not running',
+                'This route measures what happens on the far side of your\n'
+                'own server, so the client has to be up to measure through.\n\n'
+                '    ovpn proxy tunnel cdn      brings it up and stays\n'
+                '    ovpn proxy tunnel status   says whether it is up')
+        # One exit chain on the server means one measurement at a time. Told
+        # rather than silently corrected: a sweep that was asked for eight at
+        # a time and quietly does one takes eight times as long as the person
+        # waiting for it expects.
+        if through == 'server+exit' and jobs != 1:
+            print(f'\n  one at a time, not {jobs}: the server holds a single '
+                  f'exit chain\n  and two measurements would overwrite each '
+                  f'other mid-flight.')
+            jobs = 1
+
+    if through == 'server':
+        # No folder to walk. The route has one address in it.
+        row = sweep_one(None, read_auth(auth_file), sites, timeout,
+                        connect_only, bind, through, saved)
+        head('Your server')
+        field('answers as', row['exit'] or row['verdict'])
+        field('first byte', f"{row['ttfb']:.2f}s" if row['ttfb'] else '-')
+        for site, verdict in row['sites'].items():
+            # Under one label rather than one each: a hostname is longer
+            # than the label column and printing it there runs the two words
+            # together, which is how `www.reddit.comblocked` happens.
+            field('serves', f'{site}  {verdict}')
+        raise SystemExit(0 if row['verdict'] == 'ok' else 1)
+
     if not os.path.isdir(folder):
         die(f'no such folder: {folder}')
     names = sorted(f for f in os.listdir(folder) if f.endswith('.ovpn'))
@@ -773,6 +908,7 @@ def do_sweep(folder, out_dir, sites, timeout, jobs, first, one_per,
 
     auth = read_auth(auth_file)
     print(f'\n  {len(names)} configs from {folder}')
+    print(f'  {ROUTE_SAYS[through]}')
     if sites:
         print(f'  also asking each exit for: {", ".join(sites)}')
     print(f'  {jobs} at a time - nothing is connected, so they do not queue '
@@ -782,7 +918,8 @@ def do_sweep(folder, out_dir, sites, timeout, jobs, first, one_per,
     done = 0
     with cf.ThreadPoolExecutor(max_workers=jobs) as pool:
         futures = {pool.submit(sweep_one, os.path.join(folder, n),
-                               auth, sites, timeout, connect_only, bind): n
+                               auth, sites, timeout, connect_only, bind,
+                               through, saved): n
                    for n in names}
         for fut in cf.as_completed(list(futures)):
             done += 1
@@ -1225,8 +1362,9 @@ def with_our_auth(head, exit_):
     # After the request line, wherever that turns out to be. A client is
     # allowed to send a blank line before it, and inserting at 1 regardless
     # would put the credentials where the request line should be.
-    at = next((i for i, l in enumerate(lines) if l.strip()), 0) + 1
-    lines.insert(at, b'Proxy-Authorization: Basic ' + exit_.auth.encode())
+    if exit_.auth:
+        at = next((i for i, l in enumerate(lines) if l.strip()), 0) + 1
+        lines.insert(at, b'Proxy-Authorization: Basic ' + exit_.auth.encode())
     return b'\r\n'.join(lines) + HEAD_END
 
 
@@ -1531,8 +1669,12 @@ def open_tunnel(exit_, target, head=None):
     has always relied on.
     """
     if head is None:
+        # A tunnel's local end needs no credentials, and sending them to
+        # it would only put them somewhere they are not read.
+        credentials = (f'Proxy-Authorization: Basic {exit_.auth}\r\n'
+                       if exit_.auth else '')
         head = (f'CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n'
-                f'Proxy-Authorization: Basic {exit_.auth}\r\n\r\n').encode()
+                f'{credentials}\r\n').encode()
 
     upstream, warm = exit_.take()
     for attempt in (1, 2):
@@ -2433,10 +2575,15 @@ def do_detach(args, exit_):
     except OSError as e:
         die('nowhere to put the detached proxy\'s output', f'{out_path}: {e}')
 
-    argv = [sys.executable, os.path.abspath(__file__), exit_.ip,
-            '--host', exit_.host, '--port', str(args.port),
-            '--exit-port', str(exit_.port), '--listen', args.listen,
-            '--auth', args.auth, '--warm', str(exit_.warm)]
+    if exit_.auth is None:          # a tunnel: the address is the whole story
+        argv = [sys.executable, os.path.abspath(__file__),
+                '--tunnel', f'{exit_.ip}:{exit_.port}',
+                '--port', str(args.port), '--listen', args.listen]
+    else:
+        argv = [sys.executable, os.path.abspath(__file__), exit_.ip,
+                '--host', exit_.host, '--port', str(args.port),
+                '--exit-port', str(exit_.port), '--listen', args.listen,
+                '--auth', args.auth, '--warm', str(exit_.warm)]
     if exit_.bind:
         argv += ['--bind', exit_.bind]
     if args.quiet:
@@ -2625,8 +2772,16 @@ def serve(listen_host, listen_port, exit_, quiet):
 
     head('Up')
     ok(f'{C["bold"]}http://{listen_host}:{listen_port}{C["off"]}')
-    field('exit', f'{exit_.ip}:{exit_.port}   {exit_.host}')
-    field('certificate', f'checked against {exit_.host}, and the name is not sent')
+    if exit_.auth is None:
+        # A tunnel has no exit of its own to name and no certificate of its
+        # own to check - saying otherwise would send someone looking for a
+        # hostname and a pin that are not there.
+        field('through', f'tunnel at {exit_.ip}:{exit_.port}')
+        field('exit', 'whatever the far end of the tunnel uses')
+    else:
+        field('exit', f'{exit_.ip}:{exit_.port}   {exit_.host}')
+        field('certificate',
+              f'checked against {exit_.host}, and the name is not sent')
     if exit_.bind:
         field('leaving via', exit_.bind)
     # Said plainly, because the whole point of a second port is that the
@@ -2727,8 +2882,800 @@ def serve(listen_host, listen_port, exit_, quiet):
 # turned into the flags the parser already knows. A verb rather than a flag
 # because that is how the rest of the repo is typed - `ovpn connect`, `ovpn
 # stop` - and `ovpn proxy connect uk-lon` should not be the odd one out.
+#------------------------------------------------------------ the tunnel
+
+# A server of your own, reached through a CDN, standing where the exit used
+# to. install-server.sh puts the far end up; this is the near one.
+#
+# The client is gost, which speaks the multiplexed WebSocket this needs and
+# has been measured doing it. What lives here is only what has to be agreed
+# on by both ends and by the window - the ports, the paths and the file that
+# is written from them - so that there is one copy of it and not three.
+
+TUNNEL_PORTS = {'single': 9090, 'multi': 9091, 'bulk': 9092}
+TUNNEL_PATHS = {'single': '/gw', 'multi': '/ex', 'bulk': '/gwb'}
+
+# Destinations that skip the tunnel. Iranian traffic arrives faster on the
+# direct line, and sending it abroad and back spends the server's transfer
+# allowance to make it slower. Domain rules only match domains - gost does
+# not resolve a name to see whether its address falls in a range - so the
+# Iranian services that are not on .ir have to be named.
+TUNNEL_BYPASS = [
+    '127.0.0.1', 'localhost',
+    '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16',
+    '*.ir', '.ir',
+    '*.digikala.com', '*.aparat.com', '*.filimo.com',
+    '*.varzesh3.com', '*.telewebion.com', '*.blogfa.com',
+]
+
+TUNNEL_SETTINGS = os.path.join(ROOT, '.state', 'tunnel.json')
+TUNNEL_STATE = os.path.join(ROOT, '.state', 'tunnel')
+
+
+# The way in, when the way in is the thing that broke.
+#
+# Everything above assumes the domain resolves to an address this line can
+# reach. For a while it did. Then both Cloudflare addresses behind the
+# domain went dark on 443 from Iran - the SYN simply unanswered - while port
+# 80 to the same addresses still connected, which rules out the server, the
+# certificate and SNI filtering in one measurement. What was blocked was the
+# address, and the address is the one part of this that nothing on the
+# server can change.
+#
+# It is recoverable from here because Cloudflare is anycast: any edge
+# address that carries the zone answers for it, given the name in the SNI
+# and in the Host header. On the day it broke, 22 of 40 addresses spread
+# across their ranges answered while the two DNS was handing out did not.
+# So the repair is to stop letting DNS choose.
+#
+# The name is not dropped, only the dialling. It stays in the SNI, where the
+# certificate is checked against it, and in the Host header, without which
+# Cloudflare answers 1034 and serves nobody.
+
+# One or two addresses per block rather than a sweep of the ranges. The
+# blocking is done by prefix, not by single address - 104.21.10.10 answered
+# on a day when 104.21.2.20 and 104.21.32.20 did not - so a wide, thin
+# spread finds a live prefix faster than a deep scan of a dead one.
+CF_EDGE_BLOCKS = (
+    '104.16', '104.17', '104.18', '104.19', '104.20', '104.21',
+    '104.22', '104.23', '104.24', '104.25', '104.26', '104.27',
+    '172.64', '172.65', '172.66', '172.67', '172.68', '172.69',
+    '172.70', '172.71',
+    '188.114.96', '188.114.97', '188.114.98', '188.114.99',
+    '162.159.135', '162.159.140', '108.162.192', '141.101.90',
+)
+CF_EDGE_HOSTS = ('10.10', '60.60')
+
+# How many go into the configuration. More than one because the first can
+# die mid-session and gost should step over it rather than stop; not many
+# more because every extra one is another address to step over on the way
+# to a live one, at about half a second each.
+EDGE_KEEP = 6
+
+
+def edge_candidates():
+    """The addresses worth asking, as whole addresses."""
+    out = []
+    for block in CF_EDGE_BLOCKS:
+        for host in CF_EDGE_HOSTS:
+            tail = host if block.count('.') == 1 else host.split('.')[0]
+            out.append(f'{block}.{tail}')
+    return list(dict.fromkeys(out))
+
+
+def edge_probe(domain, ip, timeout=3.0):
+    """What one edge address is worth, asked without a password.
+
+    `/api/config` answers 401 to a request carrying no credentials, and that
+    401 is the whole test: it says the address is reachable, that the name
+    on the certificate matches, that Cloudflare recognises the zone, and
+    that what stands behind it is our nginx and our gost rather than
+    somebody else's site. Nothing secret is sent to find that out, which is
+    what makes it safe to fire at several dozen strangers' addresses at once.
+
+    Returns (verdict, seconds), where the verdict is what to do about it:
+
+        ok        use it
+        blocked   never answered - the case this whole section exists for
+        foreign   reachable, but not carrying this zone
+        origin    the edge is fine and the server behind it is not
+        odd       answered with something none of the above describes
+    """
+    started = time.time()
+    ctx = ssl.create_default_context()
+    try:
+        raw = socket.create_connection((ip, 443), timeout=timeout)
+    except OSError:
+        return 'blocked', time.time() - started
+    try:
+        raw.settimeout(timeout)
+        with ctx.wrap_socket(raw, server_hostname=domain) as sock:
+            sock.sendall(
+                f'GET /api/config HTTP/1.1\r\n'
+                f'Host: {domain}\r\n'
+                f'User-Agent: Relay (ovpn-pin)\r\n'
+                f'Connection: close\r\n\r\n'.encode())
+            said = sock.recv(4096).decode('latin-1', 'replace')
+    except (OSError, ssl.SSLError, ValueError):
+        return 'blocked', time.time() - started
+    finally:
+        try:
+            raw.close()
+        except OSError:
+            pass
+    took = time.time() - started
+    try:
+        code = int(said.split(' ', 2)[1])
+    except (IndexError, ValueError):
+        return 'odd', took
+    if code in (200, 401):
+        return 'ok', took
+    # Cloudflare's own numbers for a server it cannot reach. They arrive
+    # through a perfectly good edge address, which is exactly why they are
+    # worth telling apart from one that is blocked: scanning for another
+    # address would never end, and would never have been the problem.
+    if code in (502, 520, 521, 522, 523, 524, 525, 526):
+        return 'origin', took
+    return ('foreign' if 400 <= code < 500 else 'odd'), took
+
+
+def edge_scan(domain, timeout=2.5, workers=28, candidates=None):
+    """Which addresses will carry this zone from this line, fastest first.
+
+    Everything is asked rather than stopping at the first that answers. The
+    whole set costs a few seconds at this width - the blocked ones are what
+    it waits for, and they are the majority on a bad day, which is why the
+    cutoff here is shorter than the one a single address gets: a live edge
+    answers in about a third of a second even with twenty-seven others
+    handshaking beside it. The tally is what
+    tells a filtered line apart from a dead server, and the times are what
+    make the choice a choice rather than whichever thread won.
+    """
+    pool = list(candidates or edge_candidates())
+    live, tally = [], collections.Counter()
+    with cf.ThreadPoolExecutor(max_workers=workers) as ex:
+        asked = ex.map(lambda ip: (ip,) + edge_probe(domain, ip, timeout), pool)
+        for ip, verdict, took in asked:
+            tally[verdict] += 1
+            if verdict == 'ok':
+                live.append((took, ip))
+    live.sort()
+    return [ip for _, ip in live], tally
+
+
+def edge_cache(state_dir):
+    return os.path.join(state_dir, 'edges.json')
+
+
+def edge_cache_load(state_dir, domain):
+    """What was found last time, if it was found for this domain.
+
+    Keyed by domain because the addresses only mean anything alongside the
+    name that is sent with them: pointed at a different server, a kept list
+    would dial strangers with the wrong Host header and be told 1034 by
+    every one of them.
+    """
+    try:
+        with open(edge_cache(state_dir), encoding='utf-8') as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return []
+    if saved.get('domain') != domain:
+        return []
+    return [ip for ip in saved.get('edges', []) if isinstance(ip, str)]
+
+
+def edge_cache_save(state_dir, domain, edges):
+    os.makedirs(state_dir, exist_ok=True)
+    with open(edge_cache(state_dir), 'w', encoding='utf-8') as f:
+        json.dump({'domain': domain, 'edges': list(edges),
+                   'checked': int(time.time())}, f, indent=2)
+
+
+def domain_addresses(domain):
+    """What DNS says, which is what a client with no list of its own dials."""
+    try:
+        got = socket.getaddrinfo(domain, 443, socket.AF_INET, socket.SOCK_STREAM)
+    except OSError:
+        return []
+    return list(dict.fromkeys(a[4][0] for a in got))
+
+
+def line_is_up(timeout=3.0):
+    """Whether this machine has any internet at all.
+
+    Asked of domestic addresses that are in the bypass list anyway, so the
+    answer cannot depend on the thing being diagnosed. Two of them, because
+    one site being down is not the same as the line being down.
+    """
+    for host in ('www.digikala.com', 'www.aparat.com'):
+        try:
+            socket.create_connection((host, 443), timeout=timeout).close()
+            return True
+        except OSError:
+            continue
+    return False
+
+
+def tunnel_diagnose(domain, edges=(), timeout=3.0):
+    """Which of the several failures that all look like 503 this one is.
+
+    From inside the tunnel every one of them is the same event: gost cannot
+    reach the far end, so it answers 503 and the window says the tunnel is
+    down. They want opposite things done about them, though - one is fixed
+    by finding another address and the rest are only made worse by looking,
+    because a scan that cannot succeed still takes the time and still ends
+    by blaming the wrong thing.
+
+    Returns (verdict, what it means), the verdict being one of:
+
+        edges-fine     the way in is open; the fault is further along
+        server-down    the edge answers, your server behind it does not
+        wrong-zone     the addresses answer, but for somebody else
+        no-internet    this line has nothing at all
+        edges-blocked  the addresses are filtered - the one a scan repairs
+    """
+    addrs = list(edges) or domain_addresses(domain)
+    if not addrs:
+        return ('no-internet' if not line_is_up() else 'edges-blocked',
+                f'{domain} does not resolve from here')
+    with cf.ThreadPoolExecutor(max_workers=min(8, len(addrs))) as ex:
+        seen = dict(zip(addrs, ex.map(
+            lambda ip: edge_probe(domain, ip, timeout)[0], addrs)))
+    if 'ok' in seen.values():
+        alive = [ip for ip, v in seen.items() if v == 'ok']
+        return 'edges-fine', 'the way in is open through ' + ', '.join(alive[:3])
+    if 'origin' in seen.values():
+        return 'server-down', ('the CDN reached your server and it did not '
+                               'answer - that is the server, not the way in')
+    if 'foreign' in seen.values():
+        return 'wrong-zone', ('the addresses answer, but not for '
+                              f'{domain} any more')
+    if not line_is_up():
+        return 'no-internet', 'this line cannot reach anything'
+    return 'edges-blocked', (f'every address {domain} is dialled by is '
+                             'filtered on this line')
+
+
+def tunnel_edges(state_dir, domain, rescan=False, quiet=False):
+    """The addresses to write into the configuration.
+
+    Kept on purpose. A scan before every start would put seconds onto the
+    common case - the one where nothing is wrong - to save them in the rare
+    one, and the rare one is already asking somebody to wait.
+    """
+    if not rescan:
+        cached = edge_cache_load(state_dir, domain)
+        if cached:
+            return cached
+    found, tally = edge_scan(domain)
+    if not found:
+        # Nothing to write is worse than something stale: the old list at
+        # least dials addresses that worked once, and gost will tell us so.
+        # Said out loud, because the file that comes out of this is a working
+        # file with the old problem in it, and silence would make that look
+        # like success. It happens - the filtering comes and goes, and a scan
+        # that lands in a bad minute finds nothing where one a minute later
+        # finds twenty-eight.
+        if not quiet:
+            warn(f'no address answered for {domain} just now',
+                 'The name goes in as itself, which is what it did before. '
+                 'Worth running again in a minute.')
+        return edge_cache_load(state_dir, domain)
+    found = found[:EDGE_KEEP]
+    edge_cache_save(state_dir, domain, found)
+    if not quiet:
+        field('way in', f'{found[0]} - {tally["ok"]} of '
+                        f'{sum(tally.values())} addresses answered')
+    return found
+
+
+def tunnel_config_text(domain, password, edges=None):
+    """The gost client's configuration, as gost wants it.
+
+    Written rather than shipped: the domain and the password are the only
+    things that vary, and a file the tool owns cannot drift out of step with
+    the server it was installed against.
+
+    Given `edges`, the addresses are dialled and the name moves to the two
+    places it is still needed. They go in as several nodes under one
+    selector rather than as a single best choice, so an address that goes
+    dark mid-session costs a retry instead of the tunnel: measured at 1.8s
+    for a request that had to step over two blocked addresses to reach a
+    live one, against 0.9s for the ones after it.
+    """
+    services, chains = [], []
+    for mode, port in TUNNEL_PORTS.items():
+        services.append(
+            f'  - name: {mode}\n'
+            f'    addr: "127.0.0.1:{port}"\n'
+            f'    handler: {{type: http, chain: ch-{mode}}}\n'
+            f'    listener: {{type: tcp}}\n')
+        # Only the bulk path goes unmultiplexed, so one heavy transfer cannot
+        # stall everything sharing the session with it.
+        dialer = 'wss' if mode == 'bulk' else 'mwss'
+        nodes = ''
+        for n, addr in enumerate(edges or [domain], 1):
+            nodes += (
+                f'          - name: {f"edge-{n}" if edges else "server"}\n'
+                f'            addr: {addr}:443\n'
+                f'            connector:\n'
+                f'              type: http\n'
+                f'              auth: {{username: relay, password: {password}}}\n'
+                f'            dialer:\n'
+                f'              type: {dialer}\n')
+            if edges:
+                nodes += f'              tls: {{serverName: {domain}}}\n'
+            nodes += (
+                f'              metadata: {{path: {TUNNEL_PATHS[mode]}, '
+                + (f'host: {domain}, dial.timeout: 4s, ' if edges else '')
+                + 'mux.keepaliveInterval: 10s}\n')
+        chains.append(
+            f'  - name: ch-{mode}\n'
+            f'    hops:\n'
+            f'      - name: t\n'
+            f'        bypass: go-direct\n'
+            # fifo rather than round: the list is in the order they were
+            # timed, so the first is the fastest and the rest are what to
+            # fall back to. Spreading across them would be paying for the
+            # slow ones on every connection.
+            + ('        selector: {strategy: fifo, maxFails: 1, '
+               'failTimeout: 60s}\n' if edges else '')
+            + '        nodes:\n' + nodes)
+    matchers = ', '.join(m if not m.startswith('*') else f"'{m}'"
+                         for m in TUNNEL_BYPASS)
+    return ('services:\n' + ''.join(services) +
+            'chains:\n' + ''.join(chains) +
+            'bypasses:\n  - name: go-direct\n'
+            f'    matchers: [{matchers}]\n'
+            'log:\n  level: info\n')
+
+
+def tunnel_extra_clients():
+    """Other folders holding a copy of this client, from the settings file.
+
+    There is usually more than one gost on a machine that has had one for a
+    while - the one this repo starts, and the one somebody put in Startup
+    months ago and forgot. They read their own file and nothing tells them
+    the addresses have moved, so the forgotten one quietly goes on dialling
+    what stopped answering. Listing it here means one scan fixes both.
+
+    Read softly on purpose: no settings file, no list, no complaint. This is
+    a convenience, and a missing convenience is not an error.
+    """
+    try:
+        with open(TUNNEL_SETTINGS, encoding='utf-8') as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return []
+    return [d for d in saved.get('clients', []) if isinstance(d, str)]
+
+
+def tunnel_mirror(text, quiet=True):
+    """Put the same configuration in the other client folders.
+
+    The first time one is written over, what was there is kept beside it.
+    Not for undo - the file is generated and can be generated again - but
+    because the copy somebody hand-edited is the only record of what they
+    hand-edited, and finding that out afterwards is expensive.
+    """
+    done = []
+    for folder in tunnel_extra_clients():
+        target = os.path.join(folder, 'config.yaml')
+        if not os.path.isdir(folder):
+            continue
+        keep = target + '.before-pinning'
+        if os.path.isfile(target) and not os.path.isfile(keep):
+            try:
+                shutil.copyfile(target, keep)
+            except OSError:
+                pass
+        try:
+            with open(target, 'w', encoding='utf-8') as f:
+                f.write(text)
+        except OSError as e:
+            warn(f'could not write {target}', str(e))
+            continue
+        done.append(target)
+        if not quiet:
+            field('also', target)
+    return done
+
+
+def tunnel_settings():
+    """What the installer printed, as this machine has it.
+
+    Missing is the common case the first time, so it is answered with the
+    whole of what to do rather than with the name of a file.
+    """
+    try:
+        with open(TUNNEL_SETTINGS, encoding='utf-8') as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        saved = {}
+    missing = [k for k in ('domain', 'password') if not saved.get(k)]
+    if missing:
+        die('this machine has not been told where your tunnel is',
+            f'Put it in {TUNNEL_SETTINGS}:\n\n'
+            '    {\n'
+            '      "domain": "yourdomain.com",\n'
+            '      "password": "the tunnel password",\n'
+            '      "apiPassword": "the api password"\n'
+            '    }\n\n'
+            'All three are printed by install-server.sh when it finishes. If\n'
+            'the server is already set up and you have lost them, they are on\n'
+            'it in /etc/gost/tunnel.pw and /etc/gost/api.pw.\n\n'
+            'No server yet?  tunnel/install-server.sh <domain> - run it there,\n'
+            'once, against a domain pointed at it through Cloudflare.')
+    return saved
+
+
+def tunnel_client():
+    """gost, wherever this copy keeps it."""
+    name = 'gost.exe' if os.name == 'nt' else 'gost'
+    here = os.path.join(ROOT, 'tunnel', name)
+    if os.path.isfile(here):
+        return here
+    for folder in os.environ.get('PATH', '').split(os.pathsep):
+        path = os.path.join(folder.strip('"'), name)
+        if os.path.isfile(path):
+            return path
+    die('the tunnel client is not installed',
+        'gost carries the tunnel; this only points a proxy at it.\n\n'
+        f'Put the binary in {os.path.join(ROOT, "tunnel")} or on your PATH.\n'
+        'It is one file, from github.com/go-gost/gost/releases.')
+
+
+def tunnel_listening(mode='single'):
+    sock = socket.socket()
+    sock.settimeout(0.4)
+    try:
+        return sock.connect_ex(('127.0.0.1', TUNNEL_PORTS[mode])) == 0
+    finally:
+        sock.close()
+
+
+def tunnel_owner_pid(port):
+    """Whatever holds that port, by port rather than by name.
+
+    The client is often somebody else's - left running by the window, or by
+    the shortcut in Startup - and killing every gost on the machine to be
+    rid of one would take theirs with it.
+    """
+    try:
+        if os.name == 'nt':
+            out = subprocess.run(['netstat', '-ano'], capture_output=True,
+                                 text=True, timeout=10).stdout
+            for line in out.splitlines():
+                bits = line.split()
+                if (len(bits) >= 5 and bits[0] == 'TCP'
+                        and bits[1].endswith(f':{port}')
+                        and bits[3] == 'LISTENING'):
+                    return int(bits[4])
+        else:
+            out = subprocess.run(['ss', '-lntp'], capture_output=True,
+                                 text=True, timeout=10).stdout
+            for line in out.splitlines():
+                if f':{port} ' in line and 'pid=' in line:
+                    return int(line.split('pid=')[1].split(',')[0])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def tunnel_down():
+    """Stop the client, whoever started it."""
+    pid = tunnel_owner_pid(TUNNEL_PORTS['single'])
+    if not pid:
+        return False
+    try:
+        if os.name == 'nt':
+            subprocess.run(['taskkill', '/PID', str(pid), '/F'],
+                           capture_output=True, timeout=10)
+        else:
+            os.kill(pid, 15)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    for _ in range(20):
+        if not tunnel_listening():
+            return True
+        time.sleep(0.25)
+    return True
+
+
+def tunnel_write_config(saved, edges=None, quiet=True):
+    os.makedirs(TUNNEL_STATE, exist_ok=True)
+    if edges is None:
+        edges = tunnel_edges(TUNNEL_STATE, saved['domain'], quiet=quiet)
+    text = tunnel_config_text(saved['domain'], saved['password'], edges)
+    config = os.path.join(TUNNEL_STATE, 'config.yaml')
+    with open(config, 'w', encoding='utf-8') as f:
+        f.write(text)
+    tunnel_mirror(text, quiet)
+    return config
+
+
+def tunnel_up(saved, quiet=False):
+    """Bring the client up if it is not already, and say nothing if it was.
+
+    Nothing here waits on the far end. gost listens at once and dials when
+    the first connection arrives, so a server that is down shows up as a
+    failed request rather than as a client that will not start - the first
+    is something you can act on and the second is not.
+    """
+    if tunnel_listening():
+        return False
+    exe = tunnel_client()
+    config = tunnel_write_config(saved, quiet=quiet)
+    out = open(os.path.join(TUNNEL_STATE, 'gost.out'), 'w', encoding='utf-8')
+    kw = {'creationflags': 0x08 | 0x200} if os.name == 'nt' \
+        else {'start_new_session': True}
+    subprocess.Popen([exe, '-C', config], cwd=TUNNEL_STATE,
+                     stdin=subprocess.DEVNULL, stdout=out,
+                     stderr=subprocess.STDOUT, **kw)
+    for _ in range(40):
+        if tunnel_listening():
+            if not quiet:
+                field('client', f'started, listening on {TUNNEL_PORTS["single"]}'
+                                f'-{TUNNEL_PORTS["bulk"]}')
+            return True
+        time.sleep(0.25)
+    try:
+        with open(os.path.join(TUNNEL_STATE, 'gost.out'), encoding='utf-8') as f:
+            said = f.read().strip()[-400:]
+    except OSError:
+        said = ''
+    die('the tunnel client did not come up', said or 'It printed nothing.')
+
+
+def tunnel_way_in(saved, force=False, quiet=False):
+    """Make sure there is a way in, and find another one if there is not.
+
+    The cheap question is asked first and is nearly always the only one:
+    does the address currently being dialled still answer? That costs about
+    a third of a second, which is why it can sit in front of every connect
+    without being noticed. Only when it fails does the rest of this run -
+    and even then a scan is not automatic, because most of the ways this
+    can fail are not fixed by another address and would be hidden by
+    pretending they were.
+
+    Returns the verdict, having already repaired the one it can repair.
+    """
+    domain = saved['domain']
+    edges = edge_cache_load(TUNNEL_STATE, domain)
+    if not force:
+        if edges and edge_probe(domain, edges[0])[0] == 'ok':
+            return 'edges-fine'
+        verdict, why = tunnel_diagnose(domain, edges)
+        if verdict not in ('edges-blocked', 'wrong-zone'):
+            if verdict != 'edges-fine':
+                warn(why)
+            return verdict
+        warn(why, 'Looking for one that is not.')
+    found, tally = edge_scan(domain)
+    if not found:
+        warn(f'no way in to {domain} from this line',
+             f'{sum(tally.values())} addresses tried, none of them answered. '
+             'If this line reaches the rest of the internet, the domain is '
+             'the thing being filtered rather than the address, and another '
+             'address will not help.')
+        return 'no-way-in'
+    found = found[:EDGE_KEEP]
+    edge_cache_save(TUNNEL_STATE, domain, found)
+    if not quiet:
+        field('way in', f'{found[0]}   {tally["ok"]} of {sum(tally.values())} '
+                        'addresses answered')
+    if tunnel_listening():
+        # The running client is holding the old list. Nothing short of a
+        # restart makes it read the new one: the API rewrites the server's
+        # own chains, not the client's.
+        tunnel_write_config(saved, found)
+        tunnel_down()
+        tunnel_up(saved, quiet=quiet)
+    else:
+        tunnel_write_config(saved, found)
+    return 'repaired'
+
+
+def tunnel_set_exit(saved, ip, user, password, name='current'):
+    """Point the server's exit chain at one address, live.
+
+    One request, and it takes effect on the next connection through the
+    multi-IP mode - nothing restarts at either end, and connections already
+    open keep the exit they were made through. Written once here because
+    three callers want it now: the country verb, the window, and the sweep
+    that measures each exit from the far side of the tunnel.
+
+    Soft, because the sweep asks this once per config and a server that
+    refuses one of them is a row in the table rather than the end of the run.
+    """
+    tunnel_api(saved, 'config/chains/exit-chain', method='PUT', soft=True,
+               payload={
+                   'name': 'exit-chain',
+                   'hops': [{'name': 'exit', 'nodes': [{
+                       'name': name, 'addr': f'{ip}:443',
+                       'connector': {'type': 'http',
+                                     'auth': {'username': user,
+                                              'password': password}},
+                       'dialer': {'type': 'tls', 'tls': {'secure': False}},
+                   }]}],
+               })
+    return True
+
+
+def tunnel_api(saved, path, payload=None, method='GET', soft=False):
+    """The server's own configuration, over the same domain.
+
+    Named user agent because the default is not: a CDN in front answers 403
+    to `Python-urllib/3.x` before the request reaches the server, which reads
+    exactly like the API refusing the password and is not.
+
+    soft turns every one of the endings below into a RuntimeError instead of
+    the end of the program. A command asking one question should stop when
+    the answer is no; a sweep asking five hundred should write the no down
+    and go on to the next.
+    """
+    def wrong(msg, detail=''):
+        if soft:
+            raise RuntimeError(': '.join(x for x in (msg, detail) if x))
+        die(msg, detail)
+
+    if not saved.get('apiPassword'):
+        wrong('no api password for this tunnel',
+              'Changing the exit goes through the server\'s own API, and that\n'
+              f'needs the second password. Add "apiPassword" to {TUNNEL_SETTINGS}.')
+    url = f'https://{saved["domain"]}/api/{path}'
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(url, data=data, method=method)
+    token = base64.b64encode(f'relay:{saved["apiPassword"]}'.encode()).decode()
+    req.add_header('Authorization', f'Basic {token}')
+    req.add_header('User-Agent', 'ovpn-pin')
+    if data:
+        req.add_header('Content-Type', 'application/json')
+    try:
+        with urllib.request.urlopen(req, timeout=25) as r:
+            body = r.read()
+        return json.loads(body) if body else {}
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            wrong('the server would not take the api password',
+                  f'Check "apiPassword" in {TUNNEL_SETTINGS} against '
+                  '/etc/gost/api.pw on the server.')
+        wrong(f'the server answered {e.code}', f'{method} {path}')
+    except urllib.error.URLError as e:
+        wrong(f'{saved["domain"]} could not be reached', f'{e.reason}')
+
+
+TUNNEL_LINE = (
+    ('connect', 'through your server, then out at a provider exit'),
+    ('cdn',     'out at your server itself - one address, quickest'),
+    ('country', 'change which exit connect leaves by, live'),
+    ('status',  'what is set up, what is running, where it leaves'),
+    ('scan',    'find another way in when the CDN address is filtered'),
+)
+
+
+def tunnel_help():
+    h, d, b, o = C['head'], C['dim'], C['bold'], C['off']
+    listing = '\n'.join(f'    {b}ovpn proxy tunnel {v:<9}{o}{d}{w}{o}'
+                         for v, w in TUNNEL_LINE)
+    print(phrase(f"""
+  {h}{b}ovpn proxy tunnel{o} - serve the proxy through a server of your own
+  rather than straight at an exit.
+
+{listing}
+
+    {d}connect and cdn are the two ways out. Both go through your server;
+    they differ in where they come back out - at a provider exit with its
+    country, or at the server's own address, which is quicker and steadier
+    and always the same place.{o}
+
+    {b}ovpn proxy tunnel country de{o}   {d}germany, from now on{o}
+    {b}ovpn proxy tunnel connect --port 8899{o}
+
+    {d}scan is for the day the tunnel stops and nothing on the server is
+    wrong. The domain is reached through a CDN, and the addresses it hands
+    out get filtered; any other address of theirs that carries the zone
+    will do instead. connect and cdn check this on their own and only scan
+    when they have to - the verb is here for when you want to force it.{o}
+
+    Set up once with {b}tunnel/install-server.sh{o} on the server, and put what
+    it prints in {b}.state/tunnel.json{o}.
+"""))
+    return 0
+
+
+def do_tunnel(argv):
+    """The tunnel verbs. Returns the flags `connect` should run with, or
+    raises SystemExit for the ones that are complete in themselves."""
+    word = argv[0] if argv else 'status'
+    known = [v for v, _ in TUNNEL_LINE]
+    if word in ('-h', '--help', 'help'):
+        raise SystemExit(tunnel_help())
+    if word not in known:
+        die(f'no such tunnel command: {word}',
+            'They are: ' + ', '.join(known))
+
+    saved = tunnel_settings()
+
+    if word == 'status':
+        head('Tunnel')
+        field('domain', saved['domain'])
+        edges = edge_cache_load(TUNNEL_STATE, saved['domain'])
+        verdict, why = tunnel_diagnose(saved['domain'], edges)
+        field('way in', ', '.join(edges[:3]) if edges
+              else 'whatever DNS answers with')
+        field('checked', why)
+        field('client', 'running' if tunnel_listening() else 'not running')
+        if saved.get('apiPassword') and tunnel_listening():
+            chain = tunnel_api(saved, 'config/chains/exit-chain').get('data') or {}
+            try:
+                field('leaves by', chain['hops'][0]['nodes'][0]['addr'])
+            except (KeyError, IndexError):
+                pass
+        for rec in read_states():
+            field('serving', f'127.0.0.1:{rec["port"]}   {rec["name"]}')
+        raise SystemExit(0)
+
+    if word == 'scan':
+        head('Tunnel')
+        field('domain', saved['domain'])
+        was_running = tunnel_listening()
+        if tunnel_way_in(saved, force=True) == 'repaired':
+            ok('Kept, and written into the client configuration.'
+               + (' The client was restarted onto it.' if was_running else ''))
+        raise SystemExit(0)
+
+    if word == 'country':
+        if len(argv) < 2:
+            die('which country?', 'ovpn proxy tunnel country de')
+        want = argv[1].lower()
+        ip, name = pick_country(want)
+        user, password = read_auth(os.path.join(ROOT, '.ovpn-auth'))
+        tunnel_set_exit(saved, ip, user, password, name=want)
+        head('Tunnel')
+        field('country', f'{want} - {name}')
+        field('exit', ip)
+        ok('Set on the server. Connections from now on leave by it; ones '
+           'already open keep the exit they were made through.')
+        raise SystemExit(0)
+
+    # connect and cdn: bring the client up, then let main() serve as usual
+    mode = 'multi' if word == 'connect' else 'single'
+    head('Tunnel')
+    field('domain', saved['domain'])
+    field('through', 'a provider exit' if mode == 'multi'
+          else 'your server itself')
+    tunnel_up(saved)
+    tunnel_way_in(saved)
+    # Everything after the word is still meant for connect - --port, --listen,
+    # --quiet. Dropping it made `tunnel connect --port 8899` come up on 8888
+    # and say so, which is the kind of wrong that looks right.
+    return ['--tunnel', f'127.0.0.1:{TUNNEL_PORTS[mode]}'] + argv[1:]
+
+
+def pick_country(code):
+    """One address for that country, out of whatever is pinned.
+
+    Not probed from here on purpose. The connection is made from the tunnel
+    server, so a probe from this machine measures the wrong leg entirely -
+    and fails on exits that are only blocked on this line.
+    """
+    folder = os.path.join(ROOT, 'pinned')
+    hits = sorted(glob.glob(os.path.join(folder, f'{code}-*.ovpn')))
+    if not hits:
+        die(f'nothing pinned for {code}',
+            f'Looked in {folder}. Pin some first:  ovpn pin')
+    ip, name = read_config(hits[0])
+    return ip, name
+
+
 VERBS = {'connect': [], 'sweep': ['--sweep'], 'env': ['--env'],
          'status': ['--status'], 'stop': ['--stop'], 'help': ['--usage']}
+
+# Its own word rather than a flag on connect, because it has commands of
+# its own underneath it and a flag cannot have those.
+TUNNEL_VERB = 'tunnel'
 
 # One line each, in the order they are usually typed rather than
 # alphabetically. The help page lists these, and so does the message for a
@@ -2737,6 +3684,7 @@ VERB_LINE = (
     ('connect', 'serve a proxy through an exit'),
     ('status',  'what is running, and through which exit'),
     ('stop',    'end one of them, or all of them'),
+    ('tunnel',  'serve through a server of your own instead of an exit'),
     ('sweep',   'ask a folder of exits what they serve, and rank them'),
     ('env',     'print the exports that send a terminal through it'),
     ('help',    'this page, or one command on its own'),
@@ -3011,6 +3959,18 @@ def verb_help(verb):
                       only that an exit will talk to you{o}
     {b}--site{o} a.com,b.com  also ask each exit for those. {d}An exit has to
                       serve all of them to be kept{o}
+    {b}--through{o} ROUTE   which way to reach each exit {d}(provider){o}
+                      {d}provider{o}     dialled from this line, as it always was
+                      {d}server+exit{o}  through your server, then out at the exit
+                      {d}server{o}       your server itself - one row, not a sweep
+
+    {d}The route is the measurement, not a detail of it. Since traffic
+    started leaving through the server, a time taken from this line is a
+    time for a leg nothing uses any more - and the two disagree: the same
+    exit refused six uploads straight from here in the minute it carried
+    them at 1.2-1.8 MB/s through the server. server+exit goes one at a
+    time, because the server holds one exit chain.{o}
+
     {b}--one-per{o}         one address per exit rather than all of them
     {b}--first{o} N         stop after N {d}(overrides the forty-at-a-time cap){o}
     {b}--jobs{o} N          how many at once {d}(12){o}
@@ -3107,6 +4067,9 @@ def read_verb(argv):
                 f'The commands are: {listing}')
         raise SystemExit(do_help())
 
+    if argv and argv[0] == TUNNEL_VERB:
+        return do_tunnel(argv[1:])
+
     if argv and argv[0] in VERBS:
         # `ovpn proxy connect -h` is the command asking about itself, which is
         # a different question from `ovpn proxy -h` - and used to be answered
@@ -3156,6 +4119,13 @@ def main():
     p.add_argument('--site', action='append', default=[],
                    help='also ask each exit for this host. Repeatable, or comma '
                         'separated. An exit has to serve all of them to be kept')
+    p.add_argument('--through', default='provider', choices=SWEEP_ROUTES,
+                   metavar='ROUTE',
+                   help='which way --sweep reaches each exit: provider dials '
+                        'it from here, server+exit goes through your own '
+                        'server first and out at the exit, server measures '
+                        'the server itself. provider is the default and is '
+                        'what this always did')
     p.add_argument('--jobs', type=int, default=12,
                    help='how many exits to ask at once during --sweep (12)')
     p.add_argument('--first', type=int, help='stop --sweep after this many')
@@ -3175,6 +4145,11 @@ def main():
                                   'the config when not given')
     p.add_argument('--exit-port', type=int, default=443,
                    help="the exit's proxy port (443)")
+    p.add_argument('--tunnel', metavar='HOST:PORT',
+                   help='carry the traffic through a proxy already running on this\n'
+                        'machine - the local end of a tunnel to your own server -\n'
+                        'instead of dialling an exit. No certificate check and no\n'
+                        'credentials: that hop does not leave the machine.')
     p.add_argument('--auth', default=os.path.join(ROOT, '.ovpn-auth'),
                    help='file holding username and password, one per line')
     # OVPN_OUT_DIR is how the rest of the repo is told which folder to act on
@@ -3261,10 +4236,8 @@ def main():
                 'question of whether that exit is served the page.')
         do_sweep(args.dir, args.out, sites, args.timeout, args.jobs,
                  args.first, args.one_per, os.path.join(ROOT, '.state'),
-                 args.auth, args.connect_only, args.bind)
+                 args.auth, args.connect_only, args.bind, args.through)
         return
-
-    user, password = read_auth(args.auth)
 
     # Said before the work rather than after the port clash, because the fix
     # is usually "you already have one" and not "pick another port".
@@ -3275,6 +4248,31 @@ def main():
             f'{running["pid"]}.\n'
             f'    ovpn proxy stop --port {args.port}   ends it\n'
             f'    ovpn proxy connect --port 8899  puts this one beside it')
+
+    # A tunnel is already up and already abroad; there is no exit to choose,
+    # no certificate to pin and no account to authenticate. Everything the
+    # rest of main() does is about reaching one, so none of it applies.
+    if args.tunnel:
+        where, _, tport = args.tunnel.rpartition(':')
+        if not tport.isdigit():
+            die(f'{args.tunnel!r} is not a host and port',
+                'It looks like  --tunnel 127.0.0.1:9090  - the address the '
+                'local\nend of your tunnel listens on.')
+        exit_ = LocalExit(where or '127.0.0.1', int(tport))
+        head('Exit')
+        field('through', f'tunnel at {exit_.ip}:{exit_.port}')
+        try:
+            exit_.connect().close()
+        except OSError as e:
+            die(f'nothing is listening at {exit_.ip}:{exit_.port}', f'{e}\n'
+                'Start the tunnel client first - without it this proxy would '
+                'come\nup healthy and answer 502 to everything.')
+        if args.detach:
+            raise SystemExit(do_detach(args, exit_))
+        serve(args.listen, args.port, exit_, args.quiet)
+        return
+
+    user, password = read_auth(args.auth)
 
     if not args.target:
         ip, name, chosen = pick_live(args.dir, (user, password), args.jobs,

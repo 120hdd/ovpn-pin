@@ -177,6 +177,27 @@
     </div>
 
     <div class="stack">
+      <!-- Which way out, above the exit picker because it decides whether
+           that picker means anything. Three, and deliberately not three
+           flavours of one thing: the first needs nothing set up and cannot
+           carry an upload, the second is a machine of your own abroad, the
+           third is that machine handing the last leg to an exit so the
+           country is still a choice. The line underneath says which of those
+           you are looking at - the strip alone would be three words and a
+           guess. -->
+      <div class="way" id="wayWrap" data-way="surfshark">
+        <div class="seg seg--three" id="way" data-way="surfshark">
+          <i class="seg__slide" aria-hidden="true"></i>
+          <button class="seg__opt" type="button" data-way="surfshark"
+                  aria-pressed="true">Provider</button>
+          <button class="seg__opt" type="button" data-way="single"
+                  aria-pressed="false">Your server</button>
+          <button class="seg__opt" type="button" data-way="multi"
+                  aria-pressed="false">Server + exit</button>
+        </div>
+        <p class="note way__note" id="wayNote"></p>
+      </div>
+
       <button class="btn btn--quiet" id="pick" type="button">
         <span class="pick__flag" id="pickFlag" aria-hidden="true">
           <svg viewBox="0 0 20 20" width="16" height="16">
@@ -489,7 +510,88 @@
     </section>
 
     <!-- 4 · a path and two verbs -->
-    <section class="pane pane--strip" style="--i:3">
+    <!-- 4 · the server of your own. Its own pane rather than a line, because
+         unlike everything above it this one cannot be answered by choosing:
+         there is a machine to set up first, and a pane that says so is
+         cheaper than a switch that silently does nothing. -->
+    <section class="pane pane--gate" id="prefTunnel" style="--i:3">
+      <div class="pane__head">
+        <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg></span>
+        <h3 class="pane__title">Your own tunnel</h3>
+        <span class="pill" id="tunnelPill" data-state="off">not set</span>
+      </div>
+      <p class="pane__why">A server you rent, reached through a CDN, carrying
+        the traffic instead of the provider's proxy. It is here because the
+        provider's stopped carrying <b>uploads</b> — measured on this line, the
+        same file went up at 1&#8209;10&nbsp;Mbit with half the attempts dying,
+        and 40&#8209;80&nbsp;Mbit through a tunnel.</p>
+
+      <div class="pane__body">
+        <p class="lede"><svg class="ico" aria-hidden="true"><use href="#i-tower"/></svg>Once, on the server</p>
+        <p class="pane__why pane__why--tight">Point a domain at it on Cloudflare
+          with the cloud <b>on</b>, then paste this into an SSH session as
+          <b>root</b>. Safe to run twice, leaves other sites on the box alone,
+          and prints the two passwords below when it finishes.</p>
+        <div class="pane__row pane__row--code">
+          <code class="path path--flush mono" id="tunnelCmd">install-server.sh yourdomain.com &lt;surfshark-user&gt; &lt;surfshark-pass&gt;</code>
+          <button class="btn btn--quiet btn--auto" id="tunnelCopy" type="button">Copy</button>
+        </div>
+        <p class="note" id="tunnelCmdNote">Copy takes the whole installer, not
+          just this line — one paste, nothing to upload first. Fill your
+          Surfshark username and password in where the brackets are.</p>
+
+        <p class="lede"><svg class="ico" aria-hidden="true"><use href="#i-socket"/></svg>Then, here</p>
+        <p class="pane__why pane__why--tight">Both are made by the installer and
+          printed at the end. The <b>tunnel</b> one keeps strangers who find the
+          domain from using it as an open proxy; the <b>API</b> one is what lets
+          this window change the exit country. Lost them? They are on the server
+          in <span class="mono">/etc/gost/tunnel.pw</span> and
+          <span class="mono">/etc/gost/api.pw</span>.</p>
+        <label class="field">
+          <span class="field__cap">Domain</span>
+          <input class="field__in mono" id="tunnelDomain" type="text"
+                 placeholder="yourdomain.com" autocomplete="off"
+                 autocapitalize="off" spellcheck="false">
+        </label>
+        <label class="field">
+          <span class="field__cap">Tunnel password</span>
+          <span class="field__pair">
+            <input class="field__in mono" id="tunnelPass" type="password" placeholder="not set"
+                   autocomplete="off" spellcheck="false">
+            <button class="field__peek" id="tunnelPeek" type="button"
+                    aria-pressed="false" aria-label="Show the password">
+              <svg class="ico" aria-hidden="true"><use href="#i-eye"/></svg>
+            </button>
+          </span>
+        </label>
+        <label class="field">
+          <span class="field__cap">API password</span>
+          <span class="field__pair">
+            <input class="field__in mono" id="tunnelApi" type="password" placeholder="not set"
+                   autocomplete="off" spellcheck="false">
+            <button class="field__peek" id="tunnelApiPeek" type="button"
+                    aria-pressed="false" aria-label="Show the password">
+              <svg class="ico" aria-hidden="true"><use href="#i-eye"/></svg>
+            </button>
+          </span>
+        </label>
+        <!-- The third button is for the failure that reads like a broken
+             server and is not. The domain is reached through a CDN, and the
+             addresses it hands out get filtered here; any other address of
+             theirs that carries the domain does the job instead. Test looks
+             for one on its own when that is what went wrong - this is for
+             forcing it. -->
+        <div class="pane__row">
+          <button class="btn btn--quiet btn--auto" id="tunnelSave" type="button">Save</button>
+          <button class="btn btn--quiet btn--auto" id="tunnelTest" type="button">Test</button>
+          <button class="btn btn--quiet btn--auto" id="tunnelScan" type="button">Find a way in</button>
+          <p class="note" id="tunnelSaid"></p>
+        </div>
+        <p class="pane__why pane__why--tight" id="tunnelWayIn" hidden></p>
+      </div>
+    </section>
+
+    <section class="pane pane--strip" style="--i:4">
       <div class="pane__head">
         <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg></span>
         <h3 class="pane__title">Server folder</h3>
@@ -509,7 +611,7 @@
     <!-- 5 · a folder in, a folder out, and the one decision in between.
          Shaped as the route it describes rather than as another form: three
          nodes on a line, which is what the operation is. -->
-    <section class="pane pane--pipe" id="prefPin" style="--i:4">
+    <section class="pane pane--pipe" id="prefPin" style="--i:5">
       <div class="pane__head">
         <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-pin"/></svg></span>
         <h3 class="pane__title">Pin them to real addresses</h3>
@@ -613,12 +715,15 @@
     </section>
 
     <!-- 6 · the heavy one -->
-    <section class="pane pane--major" id="prefSweep" style="--i:5">
+    <section class="pane pane--major" id="prefSweep" style="--i:6">
       <div class="pane__head">
         <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg></span>
         <h3 class="pane__title">Time the servers properly</h3>
       </div>
-      <p class="pane__why">Connects to each one for real, writes how long its
+      <!-- Rewritten per route below. What the test does is not the same
+           sentence for all three, and a paragraph describing OpenVPN above a
+           run that never touches it is worse than no paragraph. -->
+      <p class="pane__why" id="sweepWhy">Connects to each one for real, writes how long its
         handshake took on the front of its name, and drops it again. That is the
         number the list is ordered by, and the only way to know it. Your
         connection goes down and up once per server, so reckon in minutes.</p>
@@ -630,6 +735,27 @@
         <p class="path path--flush mono" id="sweepFolder">—</p>
         <button class="btn btn--quiet btn--auto" id="sweepPick" type="button">Another folder…</button>
       </div>
+
+      <!-- The route is the first choice because it changes what the rest of
+           the pane means. A time taken by dialling an exit from this line is
+           a time for a leg nothing uses once the tunnel is in - and the two
+           disagree in practice, not in theory. -->
+      <p class="lede"><svg class="ico ico--sm" aria-hidden="true"><use href="#i-route"/></svg>Which leg to measure</p>
+      <ul class="scope" id="sweepRoute">
+        <li><button class="scope__row" type="button" data-route="provider" aria-pressed="true">
+          <span class="scope__name">Straight at the exit</span>
+          <span class="scope__why">dialled from this line. Takes your connection down and up once per server, and needs administrator</span>
+          <span class="scope__count">—</span></button></li>
+        <li><button class="scope__row" type="button" data-route="server+exit" aria-pressed="false">
+          <span class="scope__name">Through your server, out at the exit</span>
+          <span class="scope__why">the leg your traffic actually takes now. Nothing disconnects, one at a time</span>
+          <span class="scope__count">—</span></button></li>
+        <li><button class="scope__row" type="button" data-route="server" aria-pressed="false">
+          <span class="scope__name">Your server itself</span>
+          <span class="scope__why">one address, so one row rather than a folder</span>
+          <span class="scope__count">—</span></button></li>
+      </ul>
+      <p class="pane__why pane__why--tight" id="routeSaid"></p>
 
       <!-- The counts are the decision, so they sit on the choices rather than
            in a sentence underneath them. -->
@@ -718,6 +844,9 @@
       </div>
 
       <p class="note" id="sweepSaid"></p>
+      <!-- "Seven came up" is only half an answer: seven files went somewhere,
+           and the window used to leave you to guess where. -->
+      <p class="path path--bare mono" id="sweepWhere" hidden></p>
       <div class="meter" id="sweepMeter" hidden><i id="sweepBar"></i></div>
       <ol class="tally" id="sweepTally" hidden></ol>
     </section>
@@ -727,7 +856,7 @@
     <section class="screen" data-screen="about-this-copy" hidden>
 
     <!-- 7 · a footnote, and shaped like one -->
-    <section class="pane pane--foot" style="--i:6">
+    <section class="pane pane--foot" style="--i:7">
       <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-info"/></svg></span>
       <p class="path path--bare mono" id="aboutPaths">—</p>
     </section>

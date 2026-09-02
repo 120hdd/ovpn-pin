@@ -22,6 +22,7 @@ in a box:
 """
 
 import atexit
+import base64
 import ctypes
 # Up here rather than inside the two functions that want it. Imported in a
 # function body, `ctypes` becomes a local name for that whole body - and the
@@ -122,6 +123,13 @@ def _diagnostics_to_file(name):
 
 SETTINGS = os.path.join(paths.STATE_DIR, 'settings.json')
 
+# What the window opens at. The height is set by the front of the app
+# rather than by the settings sheet, which scrolls: the card, the orb
+# above it and the hint below have to sit together without the orb
+# being squeezed into an oval to make room.
+WINDOW_W = 400
+WINDOW_H = 740
+
 
 def load_settings():
     try:
@@ -196,7 +204,12 @@ def run_selftest():
            # above answers for it too - these are the two folders.
            'pinSource': pin.source_dir(),
            'pinSourceCount': len(sweep.configs_in(pin.source_dir())),
-           'pinOut': pin.out_dir()}
+           'pinOut': pin.out_dir(),
+           # And the tunnel. Named here because "no tunnel client found" in
+           # the window is a sentence about this machine, and this is where
+           # questions about what a copy can see get answered.
+           'tunnelClient': paths.gost_exe(),
+           'tunnelInstaller': os.path.isfile(paths.INSTALLER)}
     try:
         saved = load_settings()
         e = engine.Engine(winproxy.SystemProxy(paths.SAVED_PROXY),
@@ -333,6 +346,7 @@ os.environ.setdefault('WEBVIEW2_DEFAULT_BACKGROUND_COLOR', '00111113')
 import engine                                                # noqa: E402
 import pin                                                   # noqa: E402
 import sweep                                                 # noqa: E402
+import tunnel                                                # noqa: E402
 import webview                                               # noqa: E402
 import winproxy                                              # noqa: E402
 import accounts                                              # noqa: E402
@@ -372,6 +386,8 @@ class Api:
         # One reachability test at a time. It is eight connections wide
         # already; two of them racing would measure each other.
         self._testing = False
+        self._tunnel = None
+        self._tunnel_key = None
 
     # -- talking to the page ----------------------------------------------
 
@@ -474,6 +490,7 @@ class Api:
                 'favourites': self._settings.get('favourites') or [],
                 'sortBy': self._settings.get('sortBy', 'ping'),
                 'keepOnClose': bool(self._settings.get('keepOnClose')),
+                'mode': self._settings.get('mode', 'surfshark'),
                 'hasCredentials': self._has_credentials(),
                 'username': self._engine.username(),
                 'about': (f'{APP_NAME}  -  port {self._engine.port}'
@@ -950,7 +967,8 @@ class Api:
         return {'sites': self._settings.get('sites', ''),
                 'scope': self._settings.get('sweepScope', 'all'),
                 'chosen': self._settings.get('sweepLandlords', []),
-                'first': int(self._settings.get('sweepFirst', 0) or 0)}
+                'first': int(self._settings.get('sweepFirst', 0) or 0),
+                'through': self._settings.get('sweepRoute', 'provider')}
 
     def sweepPlan(self, folder=None, quick=False, **over):
         """What a test would cost and what would stop it, asked before the
@@ -965,6 +983,19 @@ class Api:
                                                if v is not None}}
         return self._sweep.plan(self._engine, folder or None,
                                 ask_windows=not quick, **choices)
+
+    def setSweepRoute(self, route=None):
+        """Which leg the test measures, kept between runs.
+
+        Its own call rather than another argument to setSweepScope, because
+        changing it changes what the pane is allowed to say: the route
+        decides which blockers apply, and asking for them under the old route
+        would show a UAC warning for a run that never elevates.
+        """
+        if route in sweep.ROUTES:
+            self._settings['sweepRoute'] = route
+            save_settings(self._settings)
+        return self.sweepPlan(quick=True)
 
     def setSweepScope(self, scope=None, chosen=None, first=None):
         """One address each, or one per location, or one per company - and
@@ -1322,6 +1353,188 @@ class Api:
         save_settings(self._settings)
         return {'ok': True}
 
+    # -- the tunnel of your own -------------------------------------------
+
+    def _tunnel_client(self):
+        """The gost client, built from what the installer printed.
+
+        Rebuilt whenever the settings change rather than held: the domain and
+        the passwords are the whole of its identity, and an object still
+        holding the old ones is the kind of thing that fails a long way from
+        where it was caused.
+        """
+        st = self._settings
+        exe = paths.gost_exe()
+        if not exe:
+            raise RuntimeError('no-client')
+        if not st.get('tunnelDomain'):
+            raise RuntimeError('not-set-up')
+        want = (exe, st.get('tunnelDomain'), st.get('tunnelPassword', ''),
+                st.get('tunnelApiPassword', ''))
+        if not self._tunnel or self._tunnel_key != want:
+            self._tunnel = tunnel.Tunnel(
+                exe=exe, workdir=paths.TUNNEL_STATE, domain=want[1],
+                password=want[2], api_password=want[3])
+            self._tunnel_key = want
+        return self._tunnel
+
+    def tunnelPlan(self):
+        """What the settings pane draws. The passwords go back as whether
+        they are set, never as themselves - the page has no use for them and
+        a screenshot of the settings sheet should not be a leak."""
+        st = self._settings
+        client = None
+        try:
+            client = self._tunnel_client()
+        except RuntimeError:
+            pass
+        return {
+            'mode': st.get('mode', 'surfshark'),
+            'domain': st.get('tunnelDomain', ''),
+            'hasPassword': bool(st.get('tunnelPassword')),
+            'hasApiPassword': bool(st.get('tunnelApiPassword')),
+            'hasClient': bool(paths.gost_exe()),
+            'running': bool(client and client.listening()),
+            'edges': client.edges() if client else [],
+        }
+
+    def installCommand(self, domain=None, user=None, password=None):
+        """One line that puts the installer on the server and runs it.
+
+        The pane used to show `./install-server.sh …`, which quietly assumed
+        the script was already there - and it never is. Nothing hosts it, so
+        the script travels inside the command: base64 in a single line, which
+        an SSH session takes as one paste and a phone can manage.
+
+        The Surfshark credentials are left as placeholders rather than filled
+        in. They would otherwise sit in a clipboard and, on most machines, in
+        a shell history file on a server, to save the person two words.
+        """
+        try:
+            with open(paths.INSTALLER, 'rb') as f:
+                blob = base64.b64encode(f.read()).decode()
+        except OSError as e:
+            return {'ok': False, 'error': f'the installer is missing: {e}'}
+        host = (domain or '').strip() or 'yourdomain.com'
+        return {'ok': True, 'command':
+                "mkdir -p /opt/relay && echo '" + blob + "' | base64 -d "
+                "> /opt/relay/install-server.sh && bash "
+                f"/opt/relay/install-server.sh {host} "
+                f"{user or '<surfshark-user>'} {password or '<surfshark-pass>'}"}
+
+    def saveTunnel(self, domain=None, password=None, apiPassword=None):
+        """Keep what was typed. Blank means unchanged, not cleared: the page
+        never sends the passwords back, so treating empty as "erase" would
+        wipe them every time the domain was edited."""
+        if domain is not None:
+            self._settings['tunnelDomain'] = domain.strip()
+        if password:
+            self._settings['tunnelPassword'] = password.strip()
+        if apiPassword:
+            self._settings['tunnelApiPassword'] = apiPassword.strip()
+        save_settings(self._settings)
+        self._tunnel = None
+        return self.tunnelPlan()
+
+    def setMode(self, mode):
+        if mode not in ('surfshark', 'single', 'multi'):
+            return {'ok': False, 'error': 'unknown-mode'}
+        self._settings['mode'] = mode
+        save_settings(self._settings)
+        return {'ok': True, 'mode': mode}
+
+    def testTunnel(self):
+        """Carry something through it, rather than checking that a port is open.
+
+        Three answers in one: the client runs, the far end is reachable and
+        takes the API password, and traffic actually comes out the other side.
+        The last is the one a port check misses - restart the server under a
+        multiplexed session and what is left answers the connection and then
+        503s everything, which looks exactly like a healthy tunnel from here.
+
+        A wedged session is worth recovering from rather than reporting, so
+        the client is restarted once and asked again. Once, and then it is
+        told to you: a Test button that retries forever is a Test button that
+        never finishes.
+
+        Past that there is one more thing worth trying, because there is one
+        more thing that is worth telling apart. A restart does not help when
+        the CDN address the domain resolves to has been filtered, and from
+        in here that failure is indistinguishable from a dead server - both
+        are a 503. So the third attempt asks which it is before acting, and
+        only goes looking for another address when that is the answer. The
+        other verdicts are reported rather than worked around: a scan cannot
+        fix a server that is down, and running one anyway would spend the
+        time and then blame the wrong thing.
+        """
+        try:
+            client = self._tunnel_client()
+            client.start()
+            seen, restarted, found = None, False, []
+            try:
+                seen = client.probe()
+            except Exception:
+                restarted = True
+                try:
+                    client.restart()
+                    seen = client.probe()
+                except Exception:
+                    verdict, why = client.diagnose()
+                    if verdict not in ('edges-blocked', 'wrong-zone'):
+                        return {'ok': False, 'error': why, 'verdict': verdict,
+                                'restarted': True,
+                                'running': client.listening()}
+                    found, tally = client.rescan()
+                    if not found:
+                        return {'ok': False, 'verdict': 'no-way-in',
+                                'restarted': True,
+                                'error': f'none of the {sum(tally.values())} '
+                                         'addresses tried could reach your '
+                                         'server - it looks like the domain '
+                                         'is being filtered rather than the '
+                                         'address',
+                                'running': client.listening()}
+                    try:
+                        seen = client.probe()
+                    except Exception as e:
+                        return {'ok': False, 'verdict': 'still-down',
+                                'repaired': found, 'restarted': True,
+                                'error': f'found a way in at {found[0]} and '
+                                         f'the tunnel still will not carry '
+                                         f'anything: {str(e)[:120]}',
+                                'running': client.listening()}
+            return {'ok': True, 'exit': client.current_exit(),
+                    'seen': seen, 'restarted': restarted,
+                    'repaired': found, 'edges': client.edges(),
+                    'running': client.listening()}
+        except RuntimeError as e:
+            return {'ok': False, 'error': str(e)}
+        except Exception as e:
+            return {'ok': False, 'error': str(e)[:200]}
+
+    def rescanEdges(self):
+        """Look for a way in now, whatever state the tunnel is in.
+
+        The same repair testTunnel reaches for on its own, on a button, for
+        when somebody would rather force it than argue with a symptom. It
+        rewrites the configuration and restarts the client onto it, which is
+        the only thing that makes a running client read the new addresses -
+        the server's API rewrites the server's chains, not this end's.
+        """
+        try:
+            client = self._tunnel_client()
+            found, tally = client.rescan()
+            return {'ok': bool(found), 'edges': found,
+                    'answered': tally.get('ok', 0),
+                    'tried': sum(tally.values()),
+                    'running': client.listening(),
+                    'error': '' if found else
+                             'no address reached your server from this line'}
+        except RuntimeError as e:
+            return {'ok': False, 'error': str(e)}
+        except Exception as e:
+            return {'ok': False, 'error': str(e)[:200]}
+
     def status(self):
         return self._engine.status()
 
@@ -1362,11 +1575,20 @@ class Api:
                 and want not in self._engine.providers:
             want = None
 
+        # Which way out. Three of them now: straight to a provider's exit,
+        # through a tunnel of our own, or through the tunnel and out of an
+        # exit beyond it. The picker on the card sets this; the parse above
+        # says which country, and is the same question either way.
+        mode = self._settings.get('mode', 'surfshark')
+
         def work():
             try:
-                result = self._engine.connect(
-                    where, lambda p: self._emit('Progress', p),
-                    provider=want, only=only, city=city)
+                if mode == 'surfshark':
+                    result = self._engine.connect(
+                        where, lambda p: self._emit('Progress', p),
+                        provider=want, only=only, city=city)
+                else:
+                    result = self._through_tunnel(where, mode)
                 self._since = time.time()
                 self._retray('on')
                 self._emit('Connected', result)
@@ -1387,6 +1609,36 @@ class Api:
 
         threading.Thread(target=work, daemon=True).start()
         return {'ok': True}
+
+    def _through_tunnel(self, country, mode):
+        """Connect by way of the user's own server.
+
+        Multi-IP mode is the only one with a choice to make, and it makes it
+        on the server: the exit is set through the API before the worker
+        comes up, so the change is in place by the time anything is carried.
+        Picking here rather than probing from this machine is deliberate -
+        see Engine.address_for.
+        """
+        progress = lambda p: self._emit('Progress', p)
+        client = self._tunnel_client()
+        progress({'phase': 'starting', 'country': '', 'city': ''})
+        client.start()
+
+        label = 'your server'
+        if mode == 'multi':
+            user, password = self._engine.credentials()
+            if country in (None, '', 'auto'):
+                # No country asked for, so leave the server on whatever it
+                # was last set to rather than picking one on its behalf.
+                label = 'chosen exit'
+            else:
+                server, ip, _host = self._engine.address_for(country)
+                client.set_exit(ip, user, password, name=country)
+                label = country
+
+        return self._engine.connect_tunnel(
+            client.address('multi' if mode == 'multi' else 'single'),
+            label, progress)
 
     def _confirm(self):
         """Ask Cloudflare, through the proxy, what address it sees.
@@ -1669,10 +1921,45 @@ def ui_check(window):
     os.makedirs(out, exist_ok=True)
     said = {}
 
+    def our_window():
+        """This process's own top-level window, by process id.
+
+        The caption is not an identity: a built Relay open beside the one
+        being checked answers to the same name, and whichever Windows hands
+        back first is the one that gets photographed.
+        """
+        mine, found = os.getpid(), []
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND,
+                            ctypes.wintypes.LPARAM)
+        def each(handle, _):
+            length = ctypes.windll.user32.GetWindowTextLengthW(handle)
+            if length:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                ctypes.windll.user32.GetWindowTextW(handle, buf, length + 1)
+                if buf.value == APP_NAME:
+                    owner = ctypes.wintypes.DWORD()
+                    ctypes.windll.user32.GetWindowThreadProcessId(
+                        handle, ctypes.byref(owner))
+                    if owner.value == mine:
+                        found.append(handle)
+                        return False
+            return True
+
+        ctypes.windll.user32.EnumWindows(each, 0)
+        return found[0] if found else 0
+
     def shot(name):
         """Our own window, asked to draw itself. In uishot, so that the
-        layout audit takes the same photographs rather than its own."""
-        return uishot.shot(name, out, APP_NAME)
+        layout audit takes the same photographs rather than its own.
+
+        The process id goes with it. Finding the window by caption alone is
+        what main fixed: a built Relay open beside the one being checked
+        answers to the same name, and whichever Windows hands back first is
+        the one that gets photographed - every picture in one such run came
+        back 237x39 and said 600x1110.
+        """
+        return uishot.shot(name, out, APP_NAME, os.getpid())
 
     try:
         time.sleep(2.5)
@@ -1716,6 +2003,13 @@ def ui_check(window):
         # PowerShell to ask whether another VPN holds the default route, and
         # reading it sooner reads an empty line and calls that a result.
         time.sleep(4)
+        # Does the front of the app fit the window it is given? A card that
+        # has grown a control since the size was chosen scrolls, or clips the
+        # thing above it, and neither shows up in a screenshot of the part
+        # that did fit.
+        said['fits'] = window.evaluate_js(
+            "JSON.stringify({needs: document.querySelector('.app').scrollHeight,"
+            " has: window.innerHeight})")
         said['settingsOpen'] = window.evaluate_js(
             "document.getElementById('prefs').open")
         said['settings'] = shot('settings')
@@ -1972,6 +2266,25 @@ def ui_check(window):
             "document.getElementById('sweepSaid').textContent")
         said['sweepFolder'] = window.evaluate_js(
             "document.getElementById('sweepFolder').textContent")
+        # The tunnel pane is the one with a command in it, and a command that
+        # has been mangled is worth catching here rather than on the server.
+        window.evaluate_js(
+            "document.getElementById('prefTunnel').scrollIntoView({block:'start'})")
+        time.sleep(0.6)
+        said['tunnelShot'] = shot('settings-tunnel')
+        said['tunnelPill'] = window.evaluate_js(
+            "document.getElementById('tunnelPill').textContent")
+        said['tunnelCmd'] = window.evaluate_js(
+            "document.getElementById('tunnelCmd').textContent")
+        said['wayNote'] = window.evaluate_js(
+            "document.getElementById('wayNote').textContent")
+        # And the bottom of it, where the three buttons are. Three in a row
+        # is where a row stops fitting, and it fits or it does not at this
+        # width - which is a thing to see rather than to reason about.
+        window.evaluate_js(
+            "document.getElementById('prefTunnel').scrollIntoView({block:'end'})")
+        time.sleep(0.6)
+        said['tunnelRowShot'] = shot('settings-tunnel-row')
         window.evaluate_js(
             "document.getElementById('prefSweep').scrollIntoView({block:'start'})")
         time.sleep(0.6)
@@ -2626,14 +2939,26 @@ def main():
     undo = install_safety(api)
 
     settings = api._settings
+
+    # The way-out strip and its line cost the card about eighty pixels, and
+    # the orb is what paid: its height is what is left over, so it went from
+    # round to squeezed without the page ever overflowing. A window saved
+    # before that control existed is now too short for its own contents, so
+    # it is raised once here rather than left for somebody to find by
+    # dragging the edge. Only upwards, and only to the new floor - a window
+    # deliberately made taller than that keeps the size it was given.
+    if settings.get('h') and settings['h'] < WINDOW_H:
+        settings['h'] = WINDOW_H
+        save_settings(settings)
+
     window = webview.create_window(
         APP_NAME,
         os.path.join(paths.UI_DIR, 'index.html'),
         js_api=api,
-        width=settings.get('w', 400),
-        height=settings.get('h', 660),
+        width=settings.get('w', WINDOW_W),
+        height=settings.get('h', WINDOW_H),
         x=settings.get('x'), y=settings.get('y'),
-        min_size=(380, 560),
+        min_size=(380, 640),
         background_color='#111113',
         resizable=True,
         text_select=False,

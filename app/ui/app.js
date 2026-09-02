@@ -1389,9 +1389,11 @@ async function onAct() {
   if (!r.ok) { state.mode = 'off'; render(); }
 }
 
-async function copyIp(el) {
-  const text = (el.textContent || '').trim();
-  if (!text || text === '—' || text === '…' || text === 'unknown') return;
+/* The clipboard, and a brief mark on whatever was clicked to say so. Split
+   from copyIp because the thing that gets the mark is not always the thing
+   that holds the text - for the install command it is the button beside it. */
+async function copyText(el, text) {
+  if (!text) return;
   try {
     await navigator.clipboard.writeText(text);
   } catch (err) {
@@ -1399,6 +1401,181 @@ async function copyIp(el) {
   }
   el.classList.add('copied');
   setTimeout(() => el.classList.remove('copied'), 700);
+}
+
+async function copyIp(el) {
+  const text = (el.textContent || '').trim();
+  if (!text || text === '—' || text === '…' || text === 'unknown') return;
+  await copyText(el, text);
+}
+
+/* ------------------------------------------------------------ the way out */
+
+/* One sentence each, and each one says what it costs as well as what it
+   gives. A strip of three words with no explanation would make the middle
+   and the right look like settings; they are three different machines
+   carrying the traffic, and the difference is worth a line. */
+const WAY_SAID = {
+  surfshark: 'Surfshark’s own proxy. Nothing to set up, and every '
+    + 'country below is available. Uploads are the catch — on this line '
+    + 'they crawl or stall outright.',
+  single: 'Your own server, reached through a CDN. The quickest and steadiest '
+    + 'of the three. No country to choose: the server is where it is.',
+  multi: 'Your server, handing the last leg to a Surfshark exit. Sites see '
+    + 'that country’s address, and uploads keep your server’s speed.',
+};
+
+const WAY_NEEDS_TUNNEL = 'Set the domain and passwords under Settings → '
+  + 'Your own tunnel first.';
+
+function paintWay() {
+  const way = state.way || 'surfshark';
+  const ready = way === 'surfshark' || (state.tunnel && state.tunnel.domain);
+
+  $('way').dataset.way = way;
+  $('wayWrap').dataset.way = way;
+  for (const b of $('way').querySelectorAll('.seg__opt')) {
+    b.setAttribute('aria-pressed', String(b.dataset.way === way));
+  }
+  // The picker belongs to the two ways that have a country in them.
+  document.querySelector('.stack').dataset.way = way;
+
+  const note = $('wayNote');
+  said(note, ready ? WAY_SAID[way] : WAY_NEEDS_TUNNEL, ready ? '' : 'bad');
+  note.classList.remove('is-swapping');
+  void note.offsetWidth;                       // restart it, do not queue it
+  note.classList.add('is-swapping');
+}
+
+async function chooseWay(way) {
+  if (way === state.way) return;
+  // Moved before the round trip, so the strip answers the tap rather than
+  // the disk. Nothing is carried yet, so there is nothing to put back if
+  // the write fails - and it says so if it does.
+  state.way = way;
+  paintWay();
+  const r = await window.pywebview.api.setMode(way);
+  if (!r || !r.ok) said($('wayNote'), 'That could not be saved.', 'bad');
+}
+
+/* --------------------------------------------------------- your own tunnel */
+
+function paintTunnel(plan) {
+  if (plan) state.tunnel = plan;
+  const t = state.tunnel || {};
+  const pill = $('tunnelPill');
+  let label = 'not set';
+  let mark = 'off';
+  if (!t.hasClient) { label = 'no client'; mark = 'off'; }
+  else if (!t.domain) { label = 'not set'; mark = 'off'; }
+  else if (t.running) { label = 'running'; mark = 'on'; }
+  else { label = 'ready'; mark = 'on'; }
+  pill.textContent = label;
+  pill.dataset.state = mark;
+
+  if (document.activeElement !== $('tunnelDomain')) {
+    $('tunnelDomain').value = t.domain || '';
+  }
+  // Set, but never shown. The page is given whether there is one, not what
+  // it is, so the placeholder is the only thing that can say so.
+  $('tunnelPass').placeholder = t.hasPassword ? 'saved' : 'not set';
+  $('tunnelApi').placeholder = t.hasApiPassword ? 'saved' : 'not set';
+  $('tunnelCmd').textContent =
+    `install-server.sh ${t.domain || 'yourdomain.com'} `
+    + '<surfshark-user> <surfshark-pass>';
+  paintWayIn(t.edges);
+}
+
+/* Which address the client is dialling, which is normally nobody's business
+   and is the whole story on the day it stops working. Hidden until there is
+   one, so the pane does not grow a line saying nothing. */
+function paintWayIn(edges) {
+  const line = $('tunnelWayIn');
+  if (!edges || !edges.length) { line.hidden = true; return; }
+  const spare = edges.length - 1;
+  line.textContent = `Dialling ${edges[0]}`
+    + (spare ? `, with ${spare} more to fall back to.` : '.');
+  line.hidden = false;
+}
+
+async function saveTunnel() {
+  const btn = $('tunnelSave');
+  btn.disabled = true;
+  said($('tunnelSaid'), 'Saving…');
+  const plan = await window.pywebview.api.saveTunnel(
+    $('tunnelDomain').value.trim(), $('tunnelPass').value, $('tunnelApi').value);
+  btn.disabled = false;
+  // Out of the DOM as soon as they are on disk, for the same reason the
+  // sign-in fields are.
+  $('tunnelPass').value = '';
+  $('tunnelApi').value = '';
+  paintTunnel(plan);
+  paintWay();
+  said($('tunnelSaid'), plan.domain ? 'Saved.' : 'Cleared.', 'good');
+}
+
+async function testTunnel() {
+  const btn = $('tunnelTest');
+  btn.disabled = true;
+  said($('tunnelSaid'), 'Starting the client and asking the server…');
+  const r = await window.pywebview.api.testTunnel();
+  btn.disabled = false;
+  if (!r.ok) {
+    // Two failures worth telling apart: nothing to run, and nothing to
+    // reach. The first is a missing file, the second is a wrong answer.
+    const why = r.error === 'no-client'
+      ? 'No tunnel client found. gost belongs beside the app, or in tunnel/.'
+      : r.error === 'not-set-up' ? 'Fill the domain in first.' : r.error;
+    said($('tunnelSaid'), why, 'bad');
+    paintTunnel({ ...(state.tunnel || {}), running: false });
+    return;
+  }
+  // What came out the far end is the answer; the exit the server is set to
+  // is the detail. Said in that order, and the restart is mentioned rather
+  // than hidden - it explains why the button took a few seconds longer.
+  const woke = r.restarted ? 'Restarted a stale session. ' : '';
+  // A repair is worth a sentence of its own. It is the one outcome where
+  // the thing that was wrong is not the thing the user was told about.
+  const moved = r.repaired && r.repaired.length
+    ? `The way in had been filtered; moved to ${r.repaired[0]}. ` : '';
+  said($('tunnelSaid'),
+       `${woke}${moved}Carrying traffic — it comes out at ${r.seen || 'the far end'}`
+       + `${r.exit ? `, through ${r.exit}` : ''}.`, 'good');
+  paintTunnel({ ...(state.tunnel || {}), running: true, edges: r.edges });
+  paintWay();
+}
+
+async function rescanEdges() {
+  const btn = $('tunnelScan');
+  btn.disabled = true;
+  said($('tunnelSaid'), 'Asking every Cloudflare address that might carry it…');
+  const r = await window.pywebview.api.rescanEdges();
+  btn.disabled = false;
+  if (!r.ok) {
+    const why = r.error === 'no-client'
+      ? 'No tunnel client found. gost belongs beside the app, or in tunnel/.'
+      : r.error === 'not-set-up' ? 'Fill the domain in first.' : r.error;
+    said($('tunnelSaid'), why, 'bad');
+    return;
+  }
+  // The count is the part worth showing. One address answering out of fifty
+  // and forty answering out of fifty are both "it works", and they are not
+  // the same weather.
+  said($('tunnelSaid'),
+       `${r.answered} of ${r.tried} addresses answered. Dialling ${r.edges[0]}`
+       + `${r.running ? ', and the client is back up on it.' : '.'}`, 'good');
+  paintTunnel({ ...(state.tunnel || {}), running: r.running, edges: r.edges });
+}
+
+function peek(fieldId, buttonId) {
+  const field = $(fieldId);
+  const showing = field.type === 'text';
+  field.type = showing ? 'password' : 'text';
+  $(buttonId).querySelector('use')
+    .setAttribute('href', showing ? '#i-eye' : '#i-eye-off');
+  $(buttonId).setAttribute('aria-pressed', String(!showing));
+  $(buttonId).setAttribute('aria-label',
+    showing ? 'Show the password' : 'Hide the password');
 }
 
 /* ---------------------------------------------------------------- prefs */
@@ -1416,6 +1593,43 @@ function paintPrefs(info) {
   // roster's business now, and it paints itself - but the rest of the window
   // still needs to know whether there is a credential behind the button.
   state.hasCredentials = info.hasCredentials !== false;
+  paintAuthPill();
+
+  if (info.mode) state.way = info.mode;
+  paintWay();
+  // Asked for separately: it looks for the client on disk and pokes the
+  // port, which is more than info() should be doing on every repaint. The
+  // strip is painted again when it lands - until then nothing here knows
+  // whether there is a tunnel, and it would say there is not.
+  window.pywebview.api.tunnelPlan().then((plan) => {
+    paintTunnel(plan);
+    paintWay();
+  });
+  // The name is shown back; the password never is. A field that arrives
+  // pre-filled with a password is a password on screen, and all that buys is
+  // the ability to read it over somebody's shoulder.
+  const user = $('authUser');
+  if (document.activeElement !== user) user.value = info.username || '';
+  // The placeholder carries the state, so the field is not simultaneously
+  // empty and correct with nothing saying which.
+  $('authPass').placeholder = state.hasCredentials
+    ? 'on file — type to replace' : 'not set';
+  if (!state.hasCredentials) said($('authSaid'), 'Not set, so nothing can connect yet.', 'bad');
+}
+
+/* The one fact this pane is about, said in two words at the top of it - and
+   it reacts when it changes, because somebody has just typed a password and
+   wants to see that it landed. */
+function paintAuthPill() {
+  const pill = $('authPill');
+  const want = state.hasCredentials ? 'on' : 'off';
+  const words = state.hasCredentials ? 'on file' : 'not set';
+  if (pill.dataset.state === want && pill.textContent === words) return;
+  pill.dataset.state = want;
+  pill.textContent = words;
+  pill.classList.remove('turned');
+  void pill.offsetWidth;
+  pill.classList.add('turned');
 }
 
 function said(el, text, kind) {
@@ -1774,6 +1988,7 @@ function drawSweep(p) {
     $('sweepSites').disabled = true;
     $('sweepFirst').disabled = true;
     lockChoices(true);
+    $('sweepWhere').hidden = true;
     said($('sweepSaid'), 'Waiting for Windows to allow it…');
     return;
   }
@@ -1835,6 +2050,7 @@ function drawSweep(p) {
     lockChoices(false);
     meter.hidden = true;
     drawSiteFolders(p.siteFolders, $('folderPath').textContent);
+    drawWhere(p);
     if (p.error) {
       said($('sweepSaid'), p.error, 'bad');
     } else if (p.cancelled) {
@@ -1853,6 +2069,42 @@ function drawSweep(p) {
 }
 
 window.onSweep = drawSweep;
+
+/* Where the ones that came up have gone. Said only when something did come
+   up: after a run where nothing connected, naming a folder would be naming an
+   empty one, and a cancelled run has usually written nothing either. The path
+   is the whole point, so it is given in full rather than as a folder name you
+   would then have to go looking for. */
+function drawWhere(p) {
+  const el = $('sweepWhere');
+  el.replaceChildren();
+  if (p.error || !p.worked || !p.into) { el.hidden = true; return; }
+
+  const kept = document.createElement('span');
+  kept.textContent = `Kept in ${p.into}`;
+  el.append(kept);
+
+  // Only when this run named sites. The per-site folders hold one copy each
+  // of whichever servers served them, which is a different list from the one
+  // above and worth pointing at separately.
+  //
+  // Named against the folder on the line above when it sits beside it, which
+  // is the usual case: a second absolute path differing from the first in its
+  // last word is a line you have to read twice, and at this width it wrapped
+  // through the middle of the word that mattered.
+  if (p.siteTestDir) {
+    const parent = p.into.replace(/[\\/][^\\/]+[\\/]?$/, '');
+    const beside = parent && p.siteTestDir.slice(0, parent.length) === parent
+      ? p.siteTestDir.slice(parent.length).replace(/^[\\/]/, '')
+      : '';
+    const per = document.createElement('span');
+    per.textContent = beside
+      ? `Per site, in ${beside}\\ beside it`
+      : `Per site, in ${p.siteTestDir}`;
+    el.append(per);
+  }
+  el.hidden = false;
+}
 
 function drawSiteFolders(folders, current) {
   const list = $('siteFolders');
@@ -1884,9 +2136,60 @@ function drawSiteFolders(folders, current) {
 // live but changes nothing is worse than one that is plainly out of reach.
 function lockChoices(locked) {
   for (const el of document.querySelectorAll('#sweepScope .scope__row, '
+                                             + '#sweepRoute .scope__row, '
                                              + '#sweepLords .chip, #lookUpOwners')) {
     el.disabled = locked;
   }
+}
+
+/* The routes, and what each would cost in minutes. Minutes rather than a
+   count, because the count is the same for two of them and the minutes are
+   not - dialling five hundred exits is an afternoon and asking the server
+   about them is a quarter of an hour. */
+const ROUTE_WHY = {
+  'provider': 'Connects to each one for real, writes how long its handshake '
+    + 'took on the front of its name, and drops it again. That is the number '
+    + 'the list is ordered by, and the only way to know it. Your connection '
+    + 'goes down and up once per server, so reckon in minutes.',
+  'server+exit': 'Points your server at each exit in turn and measures from '
+    + 'the far side of the tunnel — which is the leg your traffic takes now, '
+    + 'and it does not agree with the other one. Nothing disconnects and '
+    + 'nothing is elevated, so this runs in the background.',
+  'server': 'Asks what your own server serves, with no exit in front of it. '
+    + 'One address and one row: the quickest way to tell a site refusing your '
+    + 'server from a site refusing the exits.',
+};
+
+const ROUTE_SAYS = {
+  'provider': 'Times the OpenVPN handshake from here. The honest number for '
+    + 'a connection you make yourself, and the wrong one for traffic that '
+    + 'leaves through your server.',
+  'server+exit': 'Sets each exit on your server in turn and measures from '
+    + 'the far side of the tunnel. One at a time, because the server holds a '
+    + 'single exit chain.',
+  'server': 'Asks what your own server serves, without any exit in front of '
+    + 'it. The quickest answer to whether a site is refusing the server '
+    + 'rather than the exits.',
+};
+
+function drawRoute(plan) {
+  const now = plan.route || 'provider';
+  for (const row of $('sweepRoute').querySelectorAll('.scope__row')) {
+    const route = row.dataset.route;
+    row.setAttribute('aria-pressed', String(route === now));
+    const cell = row.querySelector('.scope__count');
+    const mins = (plan.routeMinutes || {})[route];
+    const text = mins == null ? '—' : `${mins} min`;
+    if (cell.textContent !== text) {
+      cell.textContent = text;
+      cell.classList.remove('turned');
+      void cell.offsetWidth;
+      cell.classList.add('turned');
+    }
+    row.disabled = !!state.sweep;
+  }
+  $('routeSaid').textContent = ROUTE_SAYS[now] || '';
+  if (ROUTE_WHY[now]) $('sweepWhy').textContent = ROUTE_WHY[now];
 }
 
 function drawScope(plan) {
@@ -1973,6 +2276,7 @@ function paintSweepPlan(plan) {
   if (document.activeElement !== $('sweepFirst')) {
     $('sweepFirst').value = plan.first ? String(plan.first) : '';
   }
+  drawRoute(plan);
   drawScope(plan);
   drawLandlords(plan);
   drawSiteFolders(plan.siteFolders, plan.into);
@@ -2016,6 +2320,7 @@ async function boot() {
   const info = await window.pywebview.api.boot();
   state.countries = info.countries || [];
   state.picked = info.picked || 'auto';
+  state.way = info.mode || 'surfshark';
   state.systemProxy = info.systemProxy !== false;
   state.port = info.port || state.port;
   state.fuse = new Fuse(state.countries, {
@@ -2159,6 +2464,29 @@ $('settings').addEventListener('click', async () => {
 $('prefsClose').addEventListener('click', () => $('prefs').close());
 
 
+$('way').addEventListener('click', (e) => {
+  const opt = e.target.closest('.seg__opt');
+  if (opt && !opt.disabled) chooseWay(opt.dataset.way);
+});
+
+$('tunnelSave').addEventListener('click', saveTunnel);
+$('tunnelTest').addEventListener('click', testTunnel);
+$('tunnelScan').addEventListener('click', rescanEdges);
+$('tunnelPeek').addEventListener('click', () => peek('tunnelPass', 'tunnelPeek'));
+$('tunnelApiPeek').addEventListener('click', () => peek('tunnelApi', 'tunnelApiPeek'));
+$('tunnelApi').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') saveTunnel();
+});
+$('tunnelCopy').addEventListener('click', async (e) => {
+  // What is shown is the readable version; what goes to the clipboard is the
+  // whole installer in one line, because nothing hosts it and the script has
+  // to reach the server somehow.
+  const r = await window.pywebview.api.installCommand($('tunnelDomain').value.trim());
+  if (!r || !r.ok) { said($('tunnelSaid'), (r && r.error) || 'nothing to copy', 'bad'); return; }
+  await copyText(e.currentTarget, r.command);
+  said($('tunnelSaid'), 'Copied — paste it into SSH as root.', 'good');
+});
+
 $('pinPick').addEventListener('click', async () => {
   const r = await window.pywebview.api.choosePinFolder();
   if (r && r.ok) { paintPinPlan(r); checkPinProxy(); }
@@ -2265,6 +2593,17 @@ $('sweepScope').addEventListener('click', async (e) => {
   const row = e.target.closest('.scope__row');
   if (!row || state.sweep) return;
   paintSweepPlan(await window.pywebview.api.setSweepScope(row.dataset.scope));
+});
+
+$('sweepRoute').addEventListener('click', async (e) => {
+  const row = e.target.closest('.scope__row');
+  if (!row || state.sweep) return;
+  // Marked before the round trip so the click lands at once; the answer
+  // brings the minutes and the blockers, which are what actually changed.
+  for (const other of $('sweepRoute').querySelectorAll('.scope__row')) {
+    other.setAttribute('aria-pressed', String(other === row));
+  }
+  paintSweepPlan(await window.pywebview.api.setSweepRoute(row.dataset.route));
 });
 
 $('sweepLords').addEventListener('click', async (e) => {
