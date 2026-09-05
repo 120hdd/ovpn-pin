@@ -697,6 +697,14 @@ window.onFailed = (err) => {
       + 'file. Sign in to Windscribe in Settings.',
     'cancelled': 'Cancelled.',
     'did-not-start': 'The connection opened but did not come up. Try once more.',
+    // Not "try once more", because trying again is the one thing that cannot
+    // work: something else holds the port and will go on holding it. Almost
+    // always a second copy of this app - quitting it from its tray is what
+    // puts the port back and puts Windows back with it.
+    'port-taken': `Port ${err.port || 'the one in Settings'} is held by `
+      + 'something else, most likely another copy of this app that is still '
+      + 'running. Quit that one from its tray icon, or give this one a '
+      + 'different port in Settings, and connect again.',
     // Only from a port change: the old worker was stopped and the new one
     // never answered, so there is nothing up and the sheet has the detail.
     'moved-and-died': 'The port changed, but the connection did not come back up on it. Connect again.',
@@ -1593,7 +1601,6 @@ function paintPrefs(info) {
   // roster's business now, and it paints itself - but the rest of the window
   // still needs to know whether there is a credential behind the button.
   state.hasCredentials = info.hasCredentials !== false;
-  paintAuthPill();
 
   if (info.mode) state.way = info.mode;
   paintWay();
@@ -1605,32 +1612,32 @@ function paintPrefs(info) {
     paintTunnel(plan);
     paintWay();
   });
-  // The name is shown back; the password never is. A field that arrives
-  // pre-filled with a password is a password on screen, and all that buys is
-  // the ability to read it over somebody's shoulder.
-  const user = $('authUser');
-  if (document.activeElement !== user) user.value = info.username || '';
-  // The placeholder carries the state, so the field is not simultaneously
-  // empty and correct with nothing saying which.
-  $('authPass').placeholder = state.hasCredentials
-    ? 'on file — type to replace' : 'not set';
-  if (!state.hasCredentials) said($('authSaid'), 'Not set, so nothing can connect yet.', 'bad');
+  // #authUser, #authPass and #authSaid were the credentials pane, and they
+  // went the same way #authPill did when the accounts roster replaced it.
+  // Filling them in stayed behind, and $('authUser').value threw on every
+  // repaint of this sheet.
+  //
+  // It cost the whole Settings screen. paintPrefs is called first, so the
+  // throw took everything after it with it: paintSort, paintUse, the
+  // acctRefresh that fills the roster, and render() - which is what actually
+  // draws the sheet. The cog opened onto a pane that never painted.
+  //
+  // acctRefresh does this job now, and it reads the roster rather than a
+  // single username, which is the whole reason the pane was replaced.
 }
 
-/* The one fact this pane is about, said in two words at the top of it - and
-   it reacts when it changes, because somebody has just typed a password and
-   wants to see that it landed. */
-function paintAuthPill() {
-  const pill = $('authPill');
-  const want = state.hasCredentials ? 'on' : 'off';
-  const words = state.hasCredentials ? 'on file' : 'not set';
-  if (pill.dataset.state === want && pill.textContent === words) return;
-  pill.dataset.state = want;
-  pill.textContent = words;
-  pill.classList.remove('turned');
-  void pill.offsetWidth;
-  pill.classList.add('turned');
-}
+/* paintAuthPill lived here, and painted an #authPill that the accounts roster
+   replaced. The element went; the call did not - and $('authPill') is null, so
+   every boot threw on the line after `state.hasCredentials` was set.
+
+   Nothing above it was affected and everything below it was: paintWay() never
+   ran, so the Provider / Your server / Server + exit strip kept whatever it
+   was last left showing, and tunnelPlan() was never asked for, so the tunnel
+   pane stayed empty. Both looked like features that had not been written.
+
+   It was invisible on the desktop because pywebview has no console anybody
+   watches. It surfaced the first time the same page ran in a WebView, where
+   an unhandled rejection goes to logcat with a line number. */
 
 function said(el, text, kind) {
   el.textContent = text || '';

@@ -986,6 +986,19 @@ class Engine:
                 px.kill(child.pid)
             except Exception:
                 pass
+
+        # Told apart from every other way of not starting, because it is the
+        # only one where trying again cannot possibly help and the fix is a
+        # thing the person has to go and do. The usual cause is a second copy
+        # of this app still running - its worker holds the port, and the
+        # window here says the connection did not come up, which sends
+        # somebody to look at the servers when nothing is wrong with them.
+        # Kept from the front, unlike the others: this message opens with the
+        # host and port that could not be had and then names the process
+        # holding it, and the last 400 characters of it begin halfway through
+        # a word about socket addresses.
+        if 'cannot listen on' in said:
+            raise RuntimeError(f'port-taken: {said[:600]}')
         raise RuntimeError(f'did-not-start: {said[-400:]}')
 
     def connect(self, country, progress, provider=None, only=None,

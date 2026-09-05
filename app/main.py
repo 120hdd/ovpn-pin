@@ -1603,7 +1603,11 @@ class Api:
                 except Exception:
                     pass
                 self._retray('off')
-                self._emit('Failed', {'kind': kind, 'detail': str(e)})
+                # The port goes with it: the one failure the page has to name
+                # a number in is the port being held by somebody else, and
+                # the page has no other way to know which port was tried.
+                self._emit('Failed', {'kind': kind, 'detail': str(e),
+                                      'port': self._engine.port})
             finally:
                 self._busy = False
 

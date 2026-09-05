@@ -111,6 +111,18 @@ def _crowded(p):
          "document.getElementById('exitIp').textContent = '198.51.100.242'")
 
 
+def _failed(p):
+    """The window after a connection that could not be made.
+
+    The failure hint is the longest run of text the main window ever shows -
+    longer than any status line, and it arrives under a card that is already
+    full - and until this scene existed nothing had ever measured it. The
+    port-taken one is the longest of them, so it is the one asked.
+    """
+    p.do("window.onFailed({kind: 'port-taken', port: 8877,"
+         " detail: 'cannot listen on 127.0.0.1:8877'})")
+
+
 def _details(p):
     p.click('#more')
 
@@ -184,6 +196,7 @@ SCENES = [
      lambda p: (_details(p), _idle(p))),
     # Left dirty on purpose: the next scene reloads the page, and the long
     # names are worth having in the picture this one leaves behind.
+    ('main-failed', _failed, _idle),
     ('main-crowded', _crowded, None),
     ('picker', _picker, _shut_picker),
     ('picker-search', lambda p: (_picker(p), _search(p)),
