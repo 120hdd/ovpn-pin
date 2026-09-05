@@ -1,0 +1,16 @@
+# Built by build-android.sh. 26 MB of native code that any checkout can
+# rebuild in a minute, so it is not carried in the repo.
+relay.aar
+relay-sources.jar
+Relay.xcframework/
+android/app/libs/relay.aar
+app/android/app/libs/relay.aar
+
+# Written by sync-ui.sh out of app/ui, which is the original. Committing it
+# would put a second copy of the design in the repo and guarantee the drift
+# the script exists to prevent - and the first person to edit the wrong one
+# would have no way to tell which they were looking at.
+#
+# phone.css and phone.js beside it are not copies. They are the phone's own
+# two files, and they are carried.
+app/assets/ui/
