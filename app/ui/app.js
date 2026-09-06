@@ -27,7 +27,7 @@ const state = {
   pinning: null,        // the same two, for pinning
   pinPlan: null,
   providers: null,      // which providers the exit list is drawn from
-  testing: false,       // a reachability test is running
+  testing: null,        // which row is being tested, if any
   favourites: [],       // picker codes kept at the top of the list
   sortBy: 'ping',       // ping | name | load
   openCities: new Set(),  // countries showing their cities
@@ -236,6 +236,10 @@ function render() {
   const act = $('act');
   const visualState = state.mode === 'fail' ? 'fail' : state.mode;
   act.dataset.mode = state.mode === 'fail' ? 'off' : state.mode;
+  // Owned here rather than switched off once in boot(). Adding an account is
+  // a repaint and not a restart, so a button disabled at boot stayed disabled
+  // for the rest of the session no matter what was signed in afterwards.
+  act.disabled = !state.hasCredentials;
   $('card').dataset.busy = String(state.mode === 'busy');
   $('card').dataset.state = visualState;
   $('hero').dataset.state = visualState;
@@ -434,7 +438,7 @@ function drawList(query) {
     // reads as a state - and with a time, a load and a verdict now on the
     // same line, the line needs the room more than it needs the picture.
     const chip = document.createElement('span');
-    chip.className = via ? 'chip chip--dot' : 'chip';
+    chip.className = via ? 'flag flag--dot' : 'flag';
     if (!via) chip.style.setProperty('--flag', flagUrl(c.code));
     row.append(chip);
 
@@ -530,16 +534,12 @@ function drawList(query) {
       // into its hosts, because there is no middle to show. Either way it is
       // the same plus in the same place - what it reveals is the row's
       // business, not the reader's.
-      if (!heads) row.append(starFor(code));
-      if (many || c.count > 1) {
-        row.append(expander(many ? 'expand' : 'exits', c.code,
-                            many ? state.openCities.has(c.code)
-                                 : state.openExits === c.code));
-      } else {
-        row.append(slot());
-      }
+      const opens = many || c.count > 1;
+      row.append(railFor(code, opens ? (many ? 'expand' : 'exits') : null,
+                         many ? state.openCities.has(c.code)
+                              : state.openExits === c.code));
     } else if (!heads) {
-      row.append(starFor(code), slot());
+      row.append(railFor(code, null));
     }
     return row;
   };
@@ -593,7 +593,7 @@ function markCursor() {
 
 async function choose(code) {
   state.picked = code;
-  $('picker').close();
+  shut($('picker'));
   render();
   window.pywebview.api.remember(code);
 
@@ -687,6 +687,21 @@ window.onFailed = (err) => {
     'all-refused': state.picked === 'auto'
       ? 'No server accepted just now. That happens — wait a moment and try again.'
       : `No ${nameOf(state.picked)} server accepted just now. Try again, or use Fastest available.`,
+    // Not the same failure as the one above, and the wrong advice for it.
+    // A 407 is the account being turned away, and it is the same account at
+    // every address - so every exit saying it is one fact repeated, not a
+    // bad moment. "Wait and try again" was what this used to say, and
+    // waiting is the one thing that cannot help.
+    'credentials-refused':
+      // The count comes from the engine, which is the only thing that knows
+      // it, and it is the whole of the evidence - one exit refusing proves
+      // nothing, thirty of them proves this.
+      `${(err.detail || '').replace(/^credentials-refused:\s*/, '')
+        || 'Every server turned this account away'}. `
+      + 'So this is the account rather than the servers. Check the service '
+      + 'username and password on the provider\'s manual-setup page — they '
+      + 'are not the email you log in with, and they change when you reset '
+      + 'them there.',
     'no-servers': 'No servers in that folder for that country.',
     'no-credentials': 'The username and password file is missing, so there is nothing to sign in with.',
     // Its own message, because the fix is a different one: these exits were
@@ -1200,7 +1215,7 @@ const log = {
     this.open = false;
     clearInterval(this.poll);
     this.poll = null;
-    $('log').close();
+    shut($('log'));
   },
 
   async pull() {
@@ -1600,7 +1615,17 @@ function paintPrefs(info) {
   // Whether anything can connect at all. What is signed in as what is the
   // roster's business now, and it paints itself - but the rest of the window
   // still needs to know whether there is a credential behind the button.
+  const had = state.hasCredentials;
   state.hasCredentials = info.hasCredentials !== false;
+  // The front of the app is left saying NOT SET UP by boot(), which is the
+  // only place that can be said - and nothing said otherwise once an account
+  // arrived. So signing in through the very sheet boot() opened put a green
+  // "Saved and in use" behind a window still reading NOT SET UP and refusing
+  // to connect, and only a restart cleared it.
+  if (!had && state.hasCredentials && state.mode === 'off') {
+    setStatus('DISCONNECTED', 'off', '', '');
+    setHint(`${state.countries.length} countries ready.`);
+  }
 
   if (info.mode) state.way = info.mode;
   paintWay();
@@ -1638,6 +1663,41 @@ function paintPrefs(info) {
    It was invisible on the desktop because pywebview has no console anybody
    watches. It surfaced the first time the same page ran in a WebView, where
    an unhandled rejection goes to logcat with a line number. */
+
+/* Putting a sheet away, rather than dropping it.
+
+   They rose in over 167ms and vanished on the frame they were closed. The
+   arrival said where the page came from and the departure said nothing, so
+   going back felt like the app losing the page rather than closing it - and
+   it is the half of the motion that tells you the thing you were reading is
+   behind the thing you are looking at now.
+
+   The animation is hung on an attribute and never on the element. There is a
+   hard-won note above .sheet in the stylesheet about this: a rule that keeps
+   a closed dialog laid out is how this app once shipped completely unusable,
+   reporting open === false while eating every click. [open][data-closing]
+   only ever matches a dialog that is still open.
+
+   The timer is not a belt-and-braces flourish. animationend does not fire if
+   the animation never starts - reduced motion, a display change mid-flight,
+   a sheet closed twice - and a sheet left half-shut is exactly the failure
+   that note is about. */
+const SHUT_MS = 130;
+
+function shut(dlg) {
+  if (!dlg || !dlg.open) return;
+  if (dlg.dataset.closing === '1') return;
+  dlg.dataset.closing = '1';
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    delete dlg.dataset.closing;
+    dlg.close();
+  };
+  dlg.addEventListener('animationend', finish, { once: true });
+  setTimeout(finish, SHUT_MS + 80);
+}
 
 function said(el, text, kind) {
   el.textContent = text || '';
@@ -1742,6 +1802,19 @@ const PIN_MARK = {
   forged: { href: '#i-x', className: 'is-refused', title: 'thrown away' },
 };
 
+/* A tally is 150px tall and shows about ten rows. The runs behind them
+   produce four hundred, every one was kept, and every one arrived with its
+   own rise animation into a scroll container that kept getting deeper - which
+   is why the pane crawled by the end of a pin run and the whole screen felt
+   heavy afterwards. A screenful and a half is more than anyone scrolls back
+   through, and the files on disk are the actual record. */
+const TALLY_KEEP = 60;
+
+function tallyPrepend(list, li) {
+  if (li.parentNode !== list) list.prepend(li);
+  while (list.children.length > TALLY_KEEP) list.lastElementChild.remove();
+}
+
 function pinRow(outcome, name, note, title) {
   const li = document.createElement('li');
   li.dataset.outcome = outcome;
@@ -1761,7 +1834,7 @@ function pinRow(outcome, name, note, title) {
   const mark = PIN_MARK[outcome];
   if (mark) li.append(icon(mark.href, `ico tally__mark ${mark.className}`,
                            mark.title));
-  $('pinTally').prepend(li);
+  tallyPrepend($('pinTally'), li);
 }
 
 function drawPin(p) {
@@ -1856,6 +1929,11 @@ function drawPin(p) {
     // The folder it just wrote into is one the sweep could be pointed at, and
     // possibly the one the app already connects through.
     refreshSweep();
+    // And it is what a provider was waiting for. The engine has re-read its
+    // folders by now, so this is the repaint that turns "none pinned" into a
+    // count and lets the box be ticked - without it the pane went on
+    // reporting the state from before the run that fixed it.
+    refreshPrefs();
   }
 }
 
@@ -1868,6 +1946,20 @@ function drawPinUse(folder, count) {
   list.replaceChildren();
   list.hidden = !(folder && count);
   if (list.hidden) return;
+
+  // Nothing to offer when the run wrote into one of the folders the app
+  // reads anyway: those exits joined the list the moment it finished. The
+  // button that was here said "Connect through these" and went through
+  // useSiteFolder, which narrows - so pressing it after pinning Windscribe
+  // took servers/ out of the list and lost every Surfshark exit with it.
+  if (state.pinPlan && state.pinPlan.outIsStandard) {
+    const li = document.createElement('li');
+    li.className = 'pinuse__said';
+    li.textContent = `${count} in the list already — nothing else to do.`;
+    list.append(li);
+    return;
+  }
+
   const mine = folder === $('folderPath').textContent;
   const li = document.createElement('li');
   const b = document.createElement('button');
@@ -2044,7 +2136,7 @@ function drawSweep(p) {
            noroute: 'no route' })[p.outcome] || p.outcome;
 
     li.append(name, sites, took);
-    if (li.parentNode !== tally) tally.prepend(li);
+    tallyPrepend(tally, li);
     return;
   }
 
@@ -2287,6 +2379,8 @@ function paintSweepPlan(plan) {
   drawScope(plan);
   drawLandlords(plan);
   drawSiteFolders(plan.siteFolders, plan.into);
+  // Last, because it reads what the four above just wrote.
+  drawFolds(plan);
 
   const blocked = (plan.blockers || [])[0];
   $('sweepGo').disabled = !!blocked || !plan.count;
@@ -2338,8 +2432,15 @@ async function boot() {
   if (!info.hasCredentials) {
     setStatus('NOT SET UP', 'fail', 'No sign-in details yet', '');
     setHint('Put your Surfshark service username and password in Settings, and this can connect.', true);
-    $('act').disabled = true;
     render();
+    // The sheet is about to be opened without anyone pressing the cog, so
+    // the two things in it that only refreshPrefs ever painted have to be
+    // painted here as well. Left unpainted, "Connect through" showed its
+    // markup defaults - both boxes live and empty - and ticking Surfshark
+    // before there was an account to tick it for got a refusal that then sat
+    // under the roster in red for the rest of the session.
+    paintUse(info);
+    acctRefresh().catch(() => {});
     // Opened rather than pointed at. There is exactly one thing to do from
     // here and one place to do it, and making somebody find the cog first is
     // asking them to guess at a step the app already knows.
@@ -2376,9 +2477,26 @@ async function boot() {
 
 /* --------------------------------------------------------------- wiring */
 
+/* Whether anything can see the front of the app right now.
+
+   The sheets are full-screen opaque dialogs, and `document.hidden` does not
+   go true for one - so with Settings open the WebGL sphere went on drawing
+   at full rate behind it, and the blurred card it sits on went on being
+   recomposited with it. sphere.js reads this flag and stops.
+
+   Watched rather than set beside each showModal(): there are six dialogs in
+   here, and the seventh would have been the one nobody remembered. */
+const covered = new MutationObserver(() => {
+  document.body.dataset.covered =
+    document.querySelector('dialog.sheet[open]') ? '1' : '0';
+});
+for (const sheet of document.querySelectorAll('dialog.sheet')) {
+  covered.observe(sheet, { attributes: true, attributeFilter: ['open'] });
+}
+
 $('act').addEventListener('click', onAct);
 $('pick').addEventListener('click', openPicker);
-$('pickerClose').addEventListener('click', () => $('picker').close());
+$('pickerClose').addEventListener('click', () => shut($('picker')));
 $('search').addEventListener('input', (e) => {
   state.cursor = 0;
   // The wash over the placeholder is only there to soften a hint. Once there
@@ -2411,6 +2529,8 @@ $('more').addEventListener('click', () => {
 $('list').addEventListener('click', (e) => {
   // The star first, because it lives inside a row that would otherwise take
   // the click and connect somewhere.
+  const test = e.target.closest('[data-test]');
+  if (test) { e.stopPropagation(); startReach(test.dataset.test); return; }
   const star = e.target.closest('[data-star]');
   if (star) { e.stopPropagation(); toggleFavourite(star.dataset.star); return; }
   const hosts = e.target.closest('[data-exits]');
@@ -2468,7 +2588,7 @@ $('settings').addEventListener('click', async () => {
   refreshSweep();
   refreshPin(true);
 });
-$('prefsClose').addEventListener('click', () => $('prefs').close());
+$('prefsClose').addEventListener('click', () => shut($('prefs')));
 
 
 $('way').addEventListener('click', (e) => {
@@ -2746,6 +2866,7 @@ initConnectionCore();
 // Before boot, because it only rearranges markup that is already on the page
 // and a settings sheet opened in the first second should already have it.
 wireInfoButtons();
+wireFolds();
 window.addEventListener('pywebviewready', boot);
 if (window.pywebview && window.pywebview.api) boot();
 
@@ -2816,7 +2937,7 @@ const WS_TRAIL_MAX = 50;
 
 function wsHideCaptcha() {
   const dlg = $('wsCapDlg');
-  if (dlg.open) dlg.close();
+  shut(dlg);
   $('wsCapAnswerWrap').hidden = true;
   $('wsCapSend').hidden = true;
   $('wsCapAnswer').value = '';
@@ -3046,6 +3167,12 @@ async function wsSubmit() {
       + 'credential did not come back: ' + r.error, 'bad');
   }
   await acctRefresh();
+  // The roster is not the only thing this changed. Surfshark's half of the
+  // sheet has always done both - accountAdd calls acctRefresh and
+  // refreshPrefs - and this one only ever did the first, so "Connect
+  // through" went on saying "no Windscribe account" underneath a roster that
+  // had just signed in to Windscribe.
+  await refreshPrefs();
 }
 
 $('wsCapSend').addEventListener('click', wsSubmit);
@@ -3068,6 +3195,84 @@ $('wsCapDlg').addEventListener('close', () => {
 /* -- signing in ---------------------------------------------------------- */
 
 
+/* ----------------------------------------------------------- the folds */
+
+/* One open at a time, and shutting the open one is a click on its own cap.
+
+   Not <details>: the four of them have to answer to each other, and the
+   answer on a shut one is written by whatever last drew the list inside it -
+   both of which are this file's business rather than the element's. */
+function wireFolds() {
+  const all = document.querySelectorAll('.fold');
+  for (const fold of all) {
+    const cap = fold.querySelector('.fold__cap');
+    if (!cap) continue;
+    cap.addEventListener('click', () => {
+      const wasOpen = fold.hasAttribute('data-open');
+      for (const other of all) {
+        other.removeAttribute('data-open');
+        const c = other.querySelector('.fold__cap');
+        if (c) c.setAttribute('aria-expanded', 'false');
+      }
+      if (!wasOpen) {
+        fold.setAttribute('data-open', '');
+        cap.setAttribute('aria-expanded', 'true');
+        // The last of the four sits a finger above the bottom of the sheet,
+        // and everything it opens opens below itself. Without this, opening
+        // the sites fold puts the field you asked for off the screen.
+        fold.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+      }
+    });
+  }
+}
+
+/* What a shut fold says. `now` is the answer and `side` is the number that
+   answer costs - kept apart because they line up in different columns, and a
+   sentence with the number inside it would not. */
+function foldSays(id, now, side) {
+  const a = $(id + 'Now');
+  const b = $(id + 'Side');
+  if (a) a.textContent = now || '\u2014';
+  if (b) b.textContent = side == null ? '' : String(side);
+}
+
+/* Read off the list rather than off the plan: the row that is pressed is
+   what the person is looking at, and the click handlers mark it before the
+   round trip so it is never the one that is behind. */
+function foldFromList(id, listId) {
+  const row = $(listId).querySelector('.scope__row[aria-pressed="true"]');
+  if (!row) return foldSays(id, null, null);
+  const count = row.querySelector('.scope__count');
+  foldSays(id, row.querySelector('.scope__name').textContent,
+           count && count.textContent !== '\u2014' ? count.textContent : null);
+}
+
+function drawFolds(plan) {
+  foldFromList('route', 'sweepRoute');
+  foldFromList('scope', 'sweepScope');
+
+  const companies = plan.companies || [];
+  const chosen = plan.chosen || [];
+  // None picked is not "none" - it is every one of them, which is a
+  // different sentence and the opposite run.
+  if (!companies.length) {
+    foldSays('lords', 'nothing looked up yet', null);
+  } else if (!chosen.length) {
+    foldSays('lords', 'every company', companies.length);
+  } else if (chosen.length === 1) {
+    const one = companies.find((c) => c.name === chosen[0]);
+    foldSays('lords', (one && one.owner) || chosen[0], one ? one.count : null);
+  } else {
+    foldSays('lords', `${chosen.length} companies`,
+             companies.filter((c) => chosen.includes(c.name))
+               .reduce((n, c) => n + (c.count || 0), 0));
+  }
+
+  const sites = plan.sites || [];
+  foldSays('sites', sites.length ? sites.join(', ') : 'none, just the exits',
+           sites.length || null);
+}
+
 /* ------------------------------------------------------------ the whys */
 
 /* Every pane used to open with a paragraph explaining itself. Seven of them
@@ -3079,16 +3284,21 @@ $('wsCapDlg').addEventListener('close', () => {
    having, and losing them would be losing the argument. They move into the
    title, one hover away.
 
-   Only the pane's own description moves. The ones marked --after and --tight
-   are corrections about the control beside them ("this port answers both",
-   "being blocked is mostly a property of the address"), and those belong
-   where they are: read at the moment they apply, not looked up. */
+   Only descriptions move. The ones marked --tight are corrections about the
+   control beside them ("being blocked is mostly a property of the address"),
+   and those belong where they are: read at the moment they apply, not looked
+   up. So is a .tip - it is boxed rather than hidden precisely because nobody
+   hovers an (i) to find out something they do not know they need. */
 function wireInfoButtons() {
   const whys = document.querySelectorAll(
-    '.pane__why:not(.pane__why--after):not(.pane__why--tight)');
+    '.pane__why:not(.pane__why--tight)');
   for (const why of whys) {
-    const pane = why.closest('.pane');
-    const title = pane && pane.querySelector('.pane__title');
+    // A step inside a pane explains itself the same way a pane does, and the
+    // line it belongs on is the step's caption rather than the pane's title
+    // three inches above it. Nearest host wins.
+    const step = why.closest('.step');
+    const host = step || why.closest('.pane');
+    const title = host && host.querySelector(step ? '.step__cap' : '.pane__title');
     if (!title) continue;
 
     const btn = document.createElement('button');
@@ -3104,9 +3314,19 @@ function wireInfoButtons() {
     const bubble = document.createElement('span');
     bubble.className = 'info__bubble';
     bubble.setAttribute('role', 'tooltip');
-    // The paragraph's own markup, not its text - several of them bold the
-    // word that the whole sentence turns on.
-    bubble.innerHTML = why.innerHTML;
+    // The paragraph itself, moved - not its markup, copied.
+    //
+    // Copying left the original to be deleted, and one of these is written
+    // to after the page has booted: #sweepWhy says a different thing for
+    // each of the three routes, and drawRoute sets it every time the route
+    // changes. Against a deleted element that threw, and the throw was
+    // inside drawRoute, so paintSweepPlan gave up halfway down the Servers
+    // screen every time - the same shape of failure as the one written up
+    // above shut(), and just as invisible.
+    //
+    // Moving it keeps the id, the markup and anything holding a reference,
+    // and there is nothing left behind to go stale.
+    bubble.appendChild(why);
     btn.append(icon, bubble);
 
     /* Inside the title, not after it.
@@ -3117,7 +3337,6 @@ function wireInfoButtons() {
        laid out that way. Inside the heading it is part of the line in both,
        which is what "moved into the title" was supposed to mean. */
     title.append(btn);
-    why.remove();
 
     // A bubble centred on a button two pixels from the right edge hangs off
     // the window. Measured on first hover rather than guessed at, because
@@ -3147,8 +3366,8 @@ const acct = {
 
 function acctBusy(on) {
   for (const id of ['acctAdd', 'acctSave', 'acctCancel', 'acctUser',
-                    'acctPass', 'acctTwo', 'acctLabel', 'wsGet', 'wsRefresh',
-                    'ssGet']) {
+                    'acctPass', 'acctTwo', 'acctLabel', 'wsRefresh',
+                    'useSurfsharkDo', 'useWindscribeDo']) {
     const el = $(id);
     if (el) el.disabled = on;
   }
@@ -3222,16 +3441,12 @@ function acctPaint() {
   pill.dataset.state = usable ? 'on' : 'off';
   pill.textContent = usable ? `${usable} ready` : 'none';
 
-  // Windscribe's fleet is a download rather than a folder somebody already
-  // has, so its two buttons only mean anything while one is in use.
+  // The refresh icon lives in the Windscribe card now, and only means
+  // anything while there is a Windscribe account for it to be about.
+  // Surfshark has no counterpart: its credential never expires, so there was
+  // never anything to refresh.
   const ws = acct.rows.find((r) => r.provider === 'windscribe' && r.active);
-  $('acctWsTools').hidden = !ws;
-
-  // Surfshark's is a download rather than a fetch for the same reason, and
-  // it has one button rather than two: the credential never expires, so
-  // there is nothing to refresh.
-  const ss = acct.rows.find((r) => r.provider === 'surfshark' && r.active);
-  $('acctSsTools').hidden = !ss;
+  $('wsRefresh').hidden = !ws;
 }
 
 async function acctRefresh() {
@@ -3246,7 +3461,7 @@ async function acctRefresh() {
 function acctShowForm(on) {
   const dlg = $('acctDlg');
   if (!on) {
-    if (dlg.open) dlg.close();
+    shut(dlg);
     return;
   }
   $('acctUser').value = '';
@@ -3355,50 +3570,111 @@ async function acctRemove(id, label) {
    same eighty lines with one name changed - so the folder somebody downloads
    by hand is a list this can ask for. Additive: what is already in the
    folder is left alone, because it may be theirs. */
-$('ssGet').addEventListener('click', async () => {
+/* One line each, where there were two paragraphs. What to do next is not
+   said in words any more - the card says it, on the button, as the only
+   thing there is to press. */
+async function fetchSurfshark() {
   acctBusy(true);
-  said($('ssSaid'), 'Fetching the server list…');
+  said($('provSaid'), 'Asking Surfshark…');
   const r = await window.pywebview.api.surfsharkServers();
   acctBusy(false);
-  if (!r.ok) { said($('ssSaid'), r.error, 'bad'); return; }
-  const gone = (r.gone || []).length;
-  said($('ssSaid'),
-    (r.added
-      ? `${r.added} added, ${r.kept} already here`
-      : `Nothing missing — all ${r.kept} are already here`)
-    + `. ${r.total} servers across ${r.countries} countries in ${r.folder}.`
-    + (r.added ? ' They are hostnames, so pin them next — the Servers '
-      + 'group below does it.' : '')
-    + (gone ? ` ${gone} on disk ${gone === 1 ? 'is' : 'are'} no longer `
-      + 'published; nothing was deleted.' : ''),
-    'good');
-});
+  if (!r.ok) { said($('provSaid'), r.error, 'bad'); return; }
+  said($('provSaid'), r.added
+    ? `${r.added} new, ${r.total} in all.`
+    : `Nothing new — all ${r.kept} were already here.`, 'good');
+  await refreshPrefs();
+}
 
-/* -- the two Windscribe-only buttons ----------------------------------- */
-
-$('wsGet').addEventListener('click', async () => {
+async function fetchWindscribe() {
   acctBusy(true);
-  said($('wsSaid'), 'Fetching the server list…');
+  said($('provSaid'), 'Asking Windscribe…');
   const r = await window.pywebview.api.windscribeServers();
   acctBusy(false);
-  if (!r.ok) { said($('wsSaid'), r.error, 'bad'); return; }
-  said($('wsSaid'), `${r.written} servers across ${r.countries} countries `
-    + `written to ${r.folder}. They are hostnames, so pin them next — the `
-    + 'Servers group below does it.', 'good');
-});
+  if (!r.ok) { said($('provSaid'), r.error, 'bad'); return; }
+  said($('provSaid'), `${r.written} fetched.`, 'good');
+  // The card is what says what happens next, and it can only say it once it
+  // has been told there are three hundred configs waiting to be pinned.
+  await refreshPrefs();
+  refreshPin(false);
+}
 
-$('wsRefresh').addEventListener('click', async () => {
-  acctBusy(true);
-  said($('wsSaid'), 'Asking for a fresh credential…');
-  const r = await window.pywebview.api.windscribeRefresh();
-  acctBusy(false);
-  if (!r.ok) {
-    said($('wsSaid'), r.error + ' — the session may have expired; sign in '
-      + 'again to get a new one.', 'bad');
+/* -- what each card is for ---------------------------------------------- */
+
+/* A provider is in exactly one of four states, and each has exactly one
+   thing to do about it. That is the whole of this flow: the card says where
+   it is, the button says the next step, and pressing it either does the step
+   or puts you where the step is. Nothing else on the pane is required
+   reading, which is the point - the paragraphs that used to carry this were
+   read by nobody who needed them. */
+const PROV_DO = {
+  signin: { label: 'Sign in', lead: true },
+  fetch: { label: 'Get servers', lead: true },
+  pin: { label: 'Pin them', lead: true },
+  update: { label: 'Update servers', lead: false },
+};
+
+function provStep(has) {
+  if (!has.account) return 'signin';
+  if (has.servers) return 'update';
+  return has.waiting ? 'pin' : 'fetch';
+}
+
+function provSays(has) {
+  if (!has.account) return 'not signed in';
+  if (has.servers) return `${has.servers} exits`;
+  if (has.waiting) return `${has.waiting} to pin`;
+  return 'no servers yet';
+}
+
+async function provDo(key, step) {
+  if (step === 'signin') {
+    acctSetProvider(key);
+    acctShowForm(true);
     return;
   }
-  said($('wsSaid'), 'Still good — the session fetched a working credential '
-    + 'with no puzzle.', 'good');
+  if (step === 'fetch' || step === 'update') {
+    await (key === 'windscribe' ? fetchWindscribe() : fetchSurfshark());
+    return;
+  }
+  // Pinning is minutes of work and needs a route chosen, so this does not
+  // start it - it opens the screen that does, already pointed at the right
+  // pile. One press instead of a folder picker and a paragraph explaining
+  // which folder to walk it to.
+  const r = await window.pywebview.api.pinForProvider(key);
+  if (r && !r.ok) { said($('provSaid'), r.error, 'bad'); return; }
+  said($('provSaid'), '');
+  showScreen('servers');
+  refreshPin(false);
+}
+
+$('useOpts').addEventListener('click', (e) => {
+  const btn = e.target.closest('.prov__do');
+  if (!btn) return;
+  // Inside a <label>, so a click here would otherwise tick the box behind it
+  // as well - and pressing "Get servers" is not asking to connect through a
+  // provider that has none.
+  e.preventDefault();
+  e.stopPropagation();
+  provDo(btn.closest('.prov').dataset.provider, btn.dataset.step);
+});
+
+$('wsRefresh').addEventListener('click', async (e) => {
+  // Inside the card's <label>, same as the step button: without this, asking
+  // for a credential would also tick the box behind it.
+  e.preventDefault();
+  e.stopPropagation();
+  const btn = $('wsRefresh');
+  btn.dataset.busy = '1';
+  acctBusy(true);
+  said($('provSaid'), 'Asking for a fresh credential…');
+  const r = await window.pywebview.api.windscribeRefresh();
+  acctBusy(false);
+  btn.dataset.busy = '0';
+  if (!r.ok) {
+    said($('provSaid'), r.error + ' — sign in again to get a new one.', 'bad');
+    return;
+  }
+  said($('provSaid'), 'Still good.', 'good');
   await acctRefresh();
 });
 
@@ -3442,6 +3718,14 @@ function showScreen(slug) {
   if (found) found.scrollTop = 0;
   $('prefsBody').scrollTop = 0;
   state.screen = found ? slug : null;
+  // The one note in here that is about something you did rather than about
+  // something that is so - "pick at least one" - has no state to go stale
+  // against, so paintUse cannot take it away. Leaving a screen ends the
+  // visit it belonged to; it was still sitting there in red on the way back
+  // in, describing a click from ten minutes ago.
+  const note = $('useSaid');
+  note.dataset.needs = '';
+  said(note, '');
 }
 
 function showSettingsMenu() {
@@ -3464,6 +3748,23 @@ $('prefs').addEventListener('cancel', (e) => {
   }
 });
 
+/* Escape puts a sheet away the same way its close button does.
+
+   A <dialog> closes itself on Escape, on the frame, with none of the motion
+   the button gets - so the same sheet left two different ways two different
+   ways, and the quicker one felt like a mistake.
+
+   Registered after the handler above on purpose. That one takes Escape when
+   there is a screen open, to step back to the settings menu instead of
+   leaving; defaultPrevented is how this knows to keep its hands off. */
+for (const dlg of document.querySelectorAll('dialog.sheet')) {
+  dlg.addEventListener('cancel', (e) => {
+    if (e.defaultPrevented) return;
+    e.preventDefault();
+    shut(dlg);
+  });
+}
+
 /* ------------------------------------------- which providers to use */
 
 /* Separate from the roster on purpose. "Which accounts exist" and "which of
@@ -3472,6 +3773,24 @@ $('prefs').addEventListener('cancel', (e) => {
    out of it - which throws away the session that took a captcha to get. */
 
 const PROVIDER_NAMES = { surfshark: 'Surfshark', windscribe: 'Windscribe' };
+
+/* The mark that stands for each provider wherever one has to be named in the
+   space of a character. An initial was doing this job, and an initial is a
+   letter you have to have been told the meaning of: S and W beside a city
+   name read as a column of letters, not as two companies. The marks are the
+   ones already in the sprite, monochrome, so they take the colour the tag is
+   already given for how that provider is doing there. */
+const PROVIDER_MARK = { surfshark: '#i-ss', windscribe: '#i-ws' };
+
+function providerMark(key, className) {
+  const href = PROVIDER_MARK[key];
+  if (href) return icon(href, className || 'ico row__mark');
+  // Anything this app has not been taught yet keeps the old initial, which
+  // is better than a blank box in a column that is meant to line up.
+  const el = document.createElement('span');
+  el.textContent = (key || '?').slice(0, 1).toUpperCase();
+  return el;
+}
 
 function paintUse(info) {
   const per = (info && info.providerState) || {};
@@ -3483,20 +3802,51 @@ function paintUse(info) {
     const cap = key[0].toUpperCase() + key.slice(1);
     const box = $('use' + cap);
     const count = $('use' + cap + 'N');
-    const has = per[key] || { servers: 0, account: false, usable: false };
+    const has = per[key]
+      || { servers: 0, account: false, waiting: 0, usable: false };
     box.checked = has.usable && chosen.includes(key);
     // A tick that can be put in a box that then refuses is worse than a box
     // that says why it is empty.
     box.disabled = !has.usable;
-    box.closest('.use__opt').dataset.empty = has.usable ? '0' : '1';
-    // Which half is missing, because they want opposite things doing about
-    // them: one needs an account added, the other needs servers fetched.
-    // "Unavailable" would say neither, and leaving the exit count showing
-    // for a provider with no account is what made a removed account look
-    // like it was still there.
-    count.textContent = has.usable ? String(has.servers)
-      : !has.account ? 'no account'
-        : 'none pinned';
+    const card = box.closest('.prov');
+    card.dataset.empty = has.usable ? '0' : '1';
+    // The card draws itself off this rather than off the hidden input, so
+    // there is one attribute to look at when the two disagree.
+    card.dataset.on = box.checked ? '1' : '0';
+    // Where it is, in three words. "None pinned" was true of a provider with
+    // nothing fetched and of one with three hundred configs waiting to be
+    // pinned, which are not the same problem and do not have the same
+    // answer - so it said neither.
+    count.textContent = provSays(has);
+
+    // And the one thing to do about it. Update is the only step that is not
+    // required, so it is the only one drawn quietly; the rest are the reason
+    // the provider is not working yet.
+    const step = provStep(has);
+    const spec = PROV_DO[step];
+    const go = $('use' + cap + 'Do');
+    go.dataset.step = step;
+    go.dataset.lead = spec.lead ? '1' : '0';
+    go.textContent = step === 'pin' ? `Pin ${has.waiting}` : spec.label;
+    go.hidden = false;
+  }
+
+  // A refusal that has since been answered. The note under this chooser
+  // records which providers it was about, and once they have what they were
+  // missing it is describing a state that does not exist - it sat there in
+  // red saying "no Surfshark account" under a roster plainly showing the
+  // Surfshark account, because adding one repaints the boxes and nothing
+  // ever went back for the sentence under them.
+  //
+  // Only that kind. The refusal for a pick with nothing ticked in it is
+  // about what was just done rather than about what is missing, and it is
+  // still worth reading beside boxes that have snapped back - so commitUse
+  // leaves this empty for that one and it stays until the next answer.
+  const note = $('useSaid');
+  const about = note.dataset.needs || '';
+  if (about && about.split(' ').every((k) => (per[k] || {}).usable)) {
+    note.dataset.needs = '';
+    said(note, '');
   }
 }
 
@@ -3506,11 +3856,25 @@ async function commitUse() {
   said($('useSaid'), 'Applying…');
   const r = await window.pywebview.api.setProviders(want);
   if (!r.ok) {
+    // Which providers the complaint is about, so paintUse can take it away
+    // when they stop being the problem. Empty for a pick with none of them
+    // in it, which is not about a provider and does not go stale.
+    $('useSaid').dataset.needs = want.join(' ');
     said($('useSaid'), r.error, 'bad');
     // Put the boxes back to what is really in force, so the screen never
     // shows a choice that was refused.
     await refreshPrefs();
     return;
+  }
+  $('useSaid').dataset.needs = '';
+  // What was accepted, which is not always what was asked for - setProviders
+  // drops anything that turned out to be unusable between the click and the
+  // call, and a card left showing the ask would be showing a choice nobody
+  // is connecting through.
+  for (const key of ['surfshark', 'windscribe']) {
+    const b = $('use' + key[0].toUpperCase() + key.slice(1));
+    b.checked = r.providers.includes(key);
+    b.closest('.prov').dataset.on = b.checked ? '1' : '0';
   }
   const names = r.providers.map((p) => PROVIDER_NAMES[p] || p).join(' and ');
   said($('useSaid'), `${r.serverCount} exits from ${names}.`, 'good');
@@ -3529,7 +3893,16 @@ async function commitUse() {
   render();
 }
 
-$('useOpts').addEventListener('change', commitUse);
+$('useOpts').addEventListener('change', (e) => {
+  // Answered on the click rather than on the round trip. The card draws off
+  // data-on, and waiting for setProviders to come back before setting it
+  // left a card that had plainly been clicked showing nothing for as long as
+  // the engine took to re-count its folders. What comes back then corrects
+  // it, in commitUse, so a refusal still ends up showing the truth.
+  const box = e.target.closest('.prov__in');
+  if (box) box.closest('.prov').dataset.on = box.checked ? '1' : '0';
+  commitUse();
+});
 
 /* -------------------------------------------- which of them actually answer */
 
@@ -3573,17 +3946,34 @@ function reachState(c) {
 
 /* -- running one ------------------------------------------------------- */
 
-async function startReach() {
+/* One row at a time. Pressing the bolt on a row while another is running
+   stops that one rather than queueing behind it - two runs at once would
+   measure each other, which is the same reason the engine refuses a second. */
+async function startReach(code) {
   if (state.testing) {
     await window.pywebview.api.cancelReach();
     return;
   }
-  const r = await window.pywebview.api.testReach();
+  const r = await window.pywebview.api.testReach(code);
   if (!r.ok) { said($('reachSaid'), r.error, 'bad'); return; }
-  state.testing = true;
-  $('reachGo').dataset.busy = 'true';
-  $('reachGo').setAttribute('aria-label', 'Stop timing');
-  said($('reachSaid'), `Asking ${r.total}…`);
+  state.testing = code;
+  paintTesting();
+  said($('reachSaid'), `Asking ${r.total} in ${nameOf(code)}…`);
+}
+
+/* The bolt that is running, marked without rebuilding the list under the
+   reader. Every other bolt goes quiet with it: a second press would only
+   stop the first, and a row that looks pressable while it is not is worse
+   than one that plainly waits its turn. */
+function paintTesting() {
+  for (const el of document.querySelectorAll('[data-test]')) {
+    const busy = el.dataset.test === state.testing;
+    el.dataset.busy = String(busy);
+    el.dataset.idle = String(!!state.testing && !busy);
+    el.setAttribute('aria-label', busy ? 'Stop testing this one'
+      : 'Test the servers here');
+    el.title = busy ? 'Stop' : 'Test these';
+  }
 }
 
 /* Each result as it lands, written straight onto the row it belongs to.
@@ -3621,11 +4011,27 @@ function patchRow(file, rec) {
       row.dataset.best = String(rec.ms);
       const base = row.textContent.split(' · ')[0];
       row.textContent = `${base} · ${msSaid(rec.ms)}`;
+      lit(row);
     }
   } else if (rec.ok === false && !row.dataset.best) {
     const base = row.textContent.split(' · ')[0];
     row.textContent = `${base} · no answer`;
+    lit(row);
   }
+}
+
+/* A number that has just changed, marked for as long as it takes to notice.
+
+   Twenty results land on one row during a run and only the ones that beat
+   the best so far rewrite it - so the text changes three or four times, at
+   moments nothing else on screen marks. Without this the row is simply
+   different every time the eye comes back to it, and the reader is left to
+   work out whether it moved. Restarted rather than queued, because the next
+   improvement can land before the last mark has faded. */
+function lit(el) {
+  el.classList.remove('is-lit');
+  void el.offsetWidth;
+  el.classList.add('is-lit');
 }
 
 window.onReach = (p) => {
@@ -3634,23 +4040,41 @@ window.onReach = (p) => {
   // long the ones still in flight are going to take, and the slow ones are
   // exactly the ones that are about to time out.
   const what = p.phase === 'pinging' ? 'timed' : 'checked';
-  said($('reachSaid'), `${p.done} of ${p.total} ${what}…`);
+  // The second look at the ones that did not answer. Said, because it is
+  // seconds of a run that otherwise looks finished, and because an exit that
+  // was drawn as blocked a moment ago is about to turn back - which reads as
+  // the app changing its mind unless it says it is asking again.
+  said($('reachSaid'), p.again
+    ? `Asking ${p.again} that did not answer once more…`
+    : `${p.done} of ${p.total} ${what}…`);
   $('reachBar').style.setProperty('--at', `${(p.done / (p.total || 1)) * 100}%`);
   if (p.file && p.result) patchRow(p.file, p.result);
 };
 
 window.onReachDone = (r) => {
-  state.testing = false;
-  $('reachGo').dataset.busy = 'false';
-  $('reachGo').setAttribute('aria-label', 'Time every exit');
+  state.testing = null;
+  paintTesting();
   $('reachBar').style.setProperty('--at', '0%');
   if (!r.ok) { said($('reachSaid'), r.error || 'Could not test.', 'bad'); return; }
   state.countries = r.countries || state.countries;
   const wasOpen = state.openExits;
   state.exits = {};            // measured again, so the old detail is stale
+  // Named, because a run is now about one place and the line under the list
+  // is the only thing that says which. "30 of 37 answered" over a list of
+  // ninety countries is a sentence about nothing in particular.
+  const where = r.code ? ` in ${nameOf(r.code)}` : '';
+  // A run where the exits all turned the account away is not a run about the
+  // exits, and "0 of 37 answered" reads as thirty-seven broken servers. The
+  // same account is at every one of those addresses, so the count is one
+  // fact repeated - which is worth saying out loud, because the thing to fix
+  // is somewhere else entirely.
+  const allRefused = !r.ok && r.refused >= 3 && r.refused > r.tested / 2;
   said($('reachSaid'),
-    r.cancelled ? `Stopped after ${r.tested}. ${r.ok} answered.`
-      : `${r.ok} of ${r.tested} answered.`,
+    r.cancelled ? `Stopped after ${r.tested}${where}. ${r.ok} answered.`
+      : allRefused
+        ? `${r.refused} of ${r.tested}${where} turned these credentials away `
+          + '— that is the account, not the servers.'
+        : `${r.ok} of ${r.tested} answered${where}.`,
     r.ok ? 'good' : 'bad');
   // The list is rebuilt rather than patched: every row's order can change,
   // because answering ones sort above blocked ones.
@@ -3667,7 +4091,10 @@ window.onReachDone = (r) => {
   render();
 };
 
-$('reachGo').addEventListener('click', startReach);
+/* No listener here any more: the bolts are in the list, and the list already
+   has one listener for every control inside a row - see the [data-test]
+   branch there. A second handler bound per row would go stale on the next
+   redraw, and the list redraws on every result. */
 
 /* -- the exits behind one row ------------------------------------------ */
 
@@ -3681,9 +4108,10 @@ async function toggleExits(code, after) {
   state.openExits = open ? null : code;
   for (const el of document.querySelectorAll('.exits')) el.remove();
   for (const b of document.querySelectorAll('[data-exits]')) {
-    const on = b.dataset.exits === state.openExits;
-    b.dataset.on = String(on);
-    b.textContent = on ? '−' : '+';
+    // The attribute and nothing else. The sign is two paths now and CSS
+    // folds one of them away; writing a character in here emptied the svg
+    // and left a text glyph in a slot the rest of the list draws.
+    b.dataset.on = String(b.dataset.exits === state.openExits);
   }
   if (open) return;
 
@@ -3719,7 +4147,7 @@ async function toggleExits(code, after) {
     sign.dataset.provider = x.provider;
     sign.dataset.state = x.ok === true ? 'ok'
       : x.ok === false ? 'blocked' : 'untested';
-    sign.textContent = (PROVIDER_NAMES[x.provider] || x.provider).slice(0, 1);
+    sign.append(providerMark(x.provider));
     sign.title = PROVIDER_NAMES[x.provider] || x.provider;
 
     const name = document.createElement('span');
@@ -3773,6 +4201,31 @@ function loadSaid(pc) {
 
 /* A star that is not a button, because the row it sits in is one. Clicks on
    it are caught by the list's own listener before the row sees them. */
+/* The bolt on a row: ask these exits, and only these.
+
+   It was one button in the header that asked all four hundred. Two things
+   were wrong with that. Nobody wants to know about ninety countries - they
+   want to know about the one they are about to pick. And a run that long is
+   where this line starts dropping connections, so the tail of it measured
+   the moment rather than the exits.
+
+   Same weight as the star, and always drawn rather than revealed on hover:
+   a control that appears when the pointer arrives is a control somebody who
+   does not already know about it never finds. */
+function testMark(code) {
+  const busy = state.testing === code;
+  const el = document.createElement('span');
+  el.className = 'rowtest';
+  el.dataset.test = code;
+  el.dataset.busy = String(busy);
+  el.setAttribute('role', 'button');
+  el.setAttribute('aria-label', busy ? 'Stop testing this one'
+    : 'Test the servers here');
+  el.title = busy ? 'Stop' : 'Test these';
+  el.append(icon('#i-bolt', 'ico rowtest__ico'));
+  return el;
+}
+
 function starFor(code) {
   const star = document.createElement('span');
   star.className = 'star';
@@ -3780,7 +4233,12 @@ function starFor(code) {
   star.dataset.on = String(isFavourite(code));
   star.setAttribute('role', 'button');
   star.setAttribute('aria-label', 'Keep this one at the top');
-  star.textContent = isFavourite(code) ? '★' : '☆';
+  // One drawn star that fills, rather than ☆ swapped for ★. The two
+  // glyphs are different widths in most faces, so the control jumped a
+  // pixel sideways every time it was pressed - and beside three stroked
+  // icons a text glyph was the one thing on the row drawn in a different
+  // hand.
+  star.append(icon('#i-star', 'ico star__ico'));
   return star;
 }
 
@@ -3799,7 +4257,7 @@ function providerTag(key, count, tested, ok, ping) {
   t.dataset.state = !tested ? 'untested'
     : ok ? (ok < tested ? 'some' : 'ok')
       : (tested >= count ? 'blocked' : 'some');
-  t.textContent = (PROVIDER_NAMES[key] || key).slice(0, 1);
+  t.append(providerMark(key));
   const name = PROVIDER_NAMES[key] || key;
   const said_ = !tested ? 'not tested yet'
     : ok ? `${ok} of ${tested} answered`
@@ -3844,9 +4302,21 @@ function isFavourite(code) {
 async function toggleFavourite(code) {
   const r = await window.pywebview.api.toggleFavourite(code);
   if (!r.ok) return;
+  const added = r.codes.includes(code) && !state.favourites.includes(code);
   state.favourites = r.codes;
   $('list').dataset.key = '';
   drawList($('search').value.trim());
+  // Starring moves the row to the top of the list, which is a redraw - so
+  // the row you pressed is gone and a new one is somewhere else. The pop is
+  // what carries the eye to it; without it the list simply changes shape and
+  // it is not obvious that the thing you did is the reason.
+  if (!added) return;
+  const star = document.querySelector(`[data-star="${CSS.escape(code)}"]`);
+  if (!star) return;
+  star.classList.add('just-starred');
+  star.addEventListener('animationend',
+                        () => star.classList.remove('just-starred'),
+                        { once: true });
 }
 
 /* The order. Answering-first stays underneath all three, because a blocked
@@ -3891,7 +4361,16 @@ function slot() {
   return el;
 }
 
+/* The plus, drawn rather than typed, so it can fold into the minus instead
+   of being replaced by it.
+
+   As text it was `+` swapped for `−` - two glyphs of two widths, and the
+   swap happened between frames, so what the eye got was one sign vanishing
+   and another appearing in roughly the same place. Two lines with the
+   upright one collapsing is the same control turning, which is what it is:
+   one thing in one place doing one job in two directions. */
 function expander(kind, code, on) {
+  const NS = 'http://www.w3.org/2000/svg';
   const el = document.createElement('span');
   el.className = 'expand';
   el.dataset[kind === 'expand' ? 'expand' : 'exits'] = code;
@@ -3899,8 +4378,35 @@ function expander(kind, code, on) {
   el.setAttribute('role', 'button');
   el.setAttribute('aria-label', kind === 'expand'
     ? 'Show the cities in this country' : 'Show the servers here');
-  el.textContent = on ? '−' : '+';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('class', 'ico expand__ico');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  for (const [cls, d] of [['expand__h', 'M5 12h14'], ['expand__v', 'M12 5v14']]) {
+    const path = document.createElementNS(NS, 'path');
+    path.setAttribute('class', cls);
+    path.setAttribute('d', d);
+    svg.append(path);
+  }
+  el.append(svg);
   return el;
+}
+
+/* The three things you can do to a row without leaving the list, in one
+   recessed track rather than loose down the right-hand edge.
+
+   Four unrelated glyphs at four sizes, evenly spaced, is what the right of
+   every row was: no grouping, nothing saying which of them was the one that
+   opens the row, and every one of them under 24px in a window driven with a
+   mouse. The track groups them, the provider mark stays outside it because
+   it says who rather than offering to do anything, and each control gets a
+   real target with its own colour under it. */
+function railFor(code, kind, on) {
+  const rail = document.createElement('span');
+  rail.className = 'rail';
+  rail.append(testMark(code), starFor(code),
+              kind ? expander(kind, code, on) : slot());
+  return rail;
 }
 
 function buildCity(c, city, via) {
@@ -3916,7 +4422,7 @@ function buildCity(c, city, via) {
   // A dot where the country has its flag, so the names line up in one
   // column rather than stepping in and out under it.
   const dot = document.createElement('span');
-  dot.className = 'chip chip--dot';
+  dot.className = 'flag flag--dot';
   row.append(dot);
 
   const copy = document.createElement('span');
@@ -3990,8 +4496,8 @@ function buildCity(c, city, via) {
     }
     marks.append(tags);
   }
-  row.append(copy, marks, starFor(code),
-             expander('exits', code, state.openExits === code));
+  row.append(copy, marks,
+             railFor(code, 'exits', state.openExits === code));
   return row;
 }
 

@@ -5,67 +5,53 @@ taskbar and Alt-Tab, 32 for the title bar, 256 for large views, and anything
 drawn once at 256 and resampled turns to grey mush at 16 - which is exactly
 the size the user sees most often.
 
-The mark is a custom R with a jade exit node. It reads as Relay at desktop
-sizes, but its stem, bowl and forward leg also remain distinct at 16px.
+The mark is a custom, forward-leaning R. Its broad strokes and hard cuts keep
+the motorsport silhouette legible even in the 16px Windows title bar.
 """
 
 import os
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, 'assets', 'app.ico')
+UI_PNG = os.path.join(HERE, 'ui', 'app-logo.png')
 
 BG = (11, 12, 24, 255)
 INK = (248, 248, 253, 255)
 VIOLET = (116, 99, 255, 255)
 JADE = (74, 229, 195, 255)
+FONT = os.path.join(os.environ.get('WINDIR', r'C:\Windows'),
+                    'Fonts', 'ariblk.ttf')
 
 SIZES = (16, 24, 32, 48, 64, 128, 256)
 
 
-def cubic(a, b, c, d, steps=24):
-    """Sample a cubic curve for Pillow's antialiased line renderer."""
-    points = []
-    for i in range(steps + 1):
-        t = i / steps
-        u = 1 - t
-        points.append((
-            u ** 3 * a[0] + 3 * u ** 2 * t * b[0] +
-            3 * u * t ** 2 * c[0] + t ** 3 * d[0],
-            u ** 3 * a[1] + 3 * u ** 2 * t * b[1] +
-            3 * u * t ** 2 * c[1] + t ** 3 * d[1],
-        ))
-    return points
-
-
-def mark(drawable, s, colour, offset=(0, 0)):
-    """Draw the geometric R; explicit round caps keep the 16px frame crisp."""
+def mark(image, s, colour, offset=(0, 0), outline=None):
+    """Draw a heavy, forward-leaning display R with an optional keyline."""
     ox, oy = offset
-    point = lambda x, y: (s * x + ox, s * y + oy)
-    width = max(2, int(s * 0.082))
-    radius = width / 2
+    mask = Image.new('L', (s, s), 0)
+    font = ImageFont.truetype(FONT, int(s * 0.88))
+    left, top, right, bottom = font.getbbox('R')
+    x = (s - (right - left)) / 2 - left - s * 0.035 + ox
+    y = s * 0.18 - top + oy
+    ImageDraw.Draw(mask).text((x, y), 'R', font=font, fill=255)
 
-    stem_a = point(0.315, 0.255)
-    stem_b = point(0.315, 0.755)
-    bowl = cubic(
-        point(0.315, 0.275), point(0.57, 0.215),
-        point(0.705, 0.285), point(0.69, 0.39),
+    # Shear the top farther forward than the foot for the racing-wordmark
+    # posture without making the small icon look off-centre.
+    mask = mask.transform(
+        (s, s), Image.AFFINE,
+        (1, 0.12, -s * 0.12, 0, 1, 0),
+        resample=Image.Resampling.BICUBIC,
     )
-    bowl += cubic(
-        point(0.69, 0.39), point(0.69, 0.49),
-        point(0.55, 0.53), point(0.315, 0.50),
-    )[1:]
-    leg_a = point(0.49, 0.50)
-    leg_b = point(0.705, 0.755)
 
-    drawable.line([stem_a, stem_b], fill=colour, width=width)
-    drawable.line(bowl, fill=colour, width=width, joint='curve')
-    drawable.line([leg_a, leg_b], fill=colour, width=width)
+    if outline:
+        keyline = max(3, int(s * 0.031) | 1)
+        outer = mask.filter(ImageFilter.MaxFilter(keyline))
+        image.paste(Image.new('RGBA', (s, s), outline), (0, 0), outer)
 
-    for x, y in (stem_a, stem_b, bowl[0], bowl[-1], leg_b):
-        drawable.ellipse([x - radius, y - radius, x + radius, y + radius],
-                         fill=colour)
+    ink = Image.new('RGBA', (s, s), colour)
+    image.paste(ink, (0, 0), mask)
 
 
 def draw(size):
@@ -98,25 +84,11 @@ def draw(size):
                         width=max(1, int(s * 0.012)))
 
     shadow = Image.new('RGBA', (s, s), (0, 0, 0, 0))
-    mark(ImageDraw.Draw(shadow), s, (3, 5, 17, 165),
-         offset=(0, s * 0.018))
+    mark(shadow, s, (3, 5, 17, 165), offset=(0, s * 0.018))
     shadow = shadow.filter(ImageFilter.GaussianBlur(s * 0.018))
     img.alpha_composite(shadow)
 
-    mark(d, s, INK)
-
-    # The coloured terminal makes the forward leg feel like a relayed exit,
-    # and remains a useful recognition cue in the 16px Windows title bar.
-    node_x, node_y = s * 0.705, s * 0.755
-    node_r = s * 0.062
-    d.ellipse([node_x - node_r, node_y - node_r,
-               node_x + node_r, node_y + node_r], fill=JADE)
-    shine_r = node_r * 0.24
-    d.ellipse([node_x - node_r * 0.35 - shine_r,
-               node_y - node_r * 0.35 - shine_r,
-               node_x - node_r * 0.35 + shine_r,
-               node_y - node_r * 0.35 + shine_r],
-              fill=(220, 255, 247, 210))
+    mark(img, s, INK, outline=(7, 8, 17, 235))
 
     return img.resize((size, size), Image.LANCZOS)
 
@@ -132,9 +104,12 @@ def main():
                     sizes=[(n, n) for n in SIZES],
                     append_images=frames[:-1])
     png = os.path.join(HERE, 'assets', 'app.png')
-    draw(256).save(png)
+    preview = draw(256)
+    preview.save(png)
+    preview.save(UI_PNG)
     print(f'{OUT}  ({os.path.getsize(OUT)} bytes, sizes {SIZES})')
     print(f'{png}')
+    print(f'{UI_PNG}')
 
 
 if __name__ == '__main__':

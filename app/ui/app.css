@@ -318,10 +318,31 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   overflow: hidden;
   animation: rise var(--enter);
 }
+/* Going away, and only ever while it is still open - the attribute is put on
+   by shut() and the dialog is closed for real when the animation ends. Read
+   the note above .sheet before touching this: matching anything but [open]
+   here is how a closed dialog goes on eating clicks.
+
+   Shorter than the arrival on purpose. Coming in wants to be watched; going
+   out wants to be over. */
+.sheet[open][data-closing="1"] {
+  animation: sink 130ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+.sheet[open][data-closing="1"]::backdrop { animation: dim 130ms linear forwards; }
 .sheet::backdrop { background: rgba(0, 0, 0, 0.45); }
 @keyframes rise {
   from { transform: translateY(12px); opacity: 0; }
   to   { transform: none; opacity: 1; }
+}
+@keyframes sink {
+  to { transform: translateY(10px); opacity: 0; }
+}
+@keyframes dim {
+  to { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sheet[open][data-closing="1"],
+  .sheet[open][data-closing="1"]::backdrop { animation: none; }
 }
 
 .sheet__top {
@@ -454,7 +475,6 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .scope__row:hover { background: rgba(255, 255, 255, 0.035); }
 .scope__row:disabled { opacity: 0.4; cursor: default; }
 .scope__row:disabled:hover { background: transparent; }
-.chip:disabled { cursor: default; }
 /* Every position is stated. An item with a definite grid-row is placed before
    the ones without, so leaving the count's column to auto had it take the
    first one and push the name across - the row read "533 ....... Every
@@ -483,41 +503,6 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .scope__row[aria-pressed='true'] .scope__count { color: var(--ok); }
 
 
-/* One per site the sweep has answers for. A count and a way to use it: a
-   folder of servers that reach a site is only worth having if the app can be
-   pointed at it, and making somebody find it through the folder picker is
-   asking them to retype what is already on screen. */
-.chips { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.chips li { display: flex; }
-.chip {
-  display: flex; align-items: baseline; gap: 7px;
-  padding: 5px 10px;
-  border-radius: 999px;
-  font-size: 11px; line-height: 15px;
-  color: var(--text-muted);
-  background: var(--control);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
-  unicode-bidi: isolate;
-}
-.chip:hover { background: var(--control-hover); color: var(--text); }
-.chip__count { color: var(--text-off); font-size: 10px; }
-.chip.is-current {
-  color: var(--ok);
-  background: rgba(31, 216, 164, 0.09);
-  box-shadow: inset 0 0 0 1px rgba(31, 216, 164, 0.28);
-  cursor: default;
-}
-.chip.is-current .chip__count { color: var(--ok); opacity: 0.7; }
-
-/* Chosen, as opposed to in use. A different job from .is-current and so a
-   different mark: these are being picked out of a list, not reported. */
-.chip[aria-pressed='true'] {
-  color: var(--text);
-  background: var(--control-active);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
-}
-.chip[aria-pressed='true'] .chip__count { color: var(--text-muted); }
-.chip__asn { color: var(--text-off); font-size: 10px; }
 
 /* Which of the named sites this server actually served. Ticks and crosses
    rather than words: there is one line per server and the name has to keep
@@ -694,18 +679,11 @@ body::before {
 .bar__tools { gap: 8px; }
 
 .bar__logo {
-  width: 28px;
-  height: 28px;
-  display: grid;
-  place-items: center;
-  color: #f8f8fd;
-  border: 1px solid rgba(160, 148, 255, 0.34);
-  border-radius: 9px;
-  background:
-    radial-gradient(circle at 76% 78%, rgba(74, 229, 195, 0.28), transparent 38%),
-    linear-gradient(145deg, #3c326f, #111827 72%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.13),
-              0 5px 14px rgba(38, 27, 96, 0.24);
+  width: 32px;
+  height: 32px;
+  display: block;
+  flex: 0 0 32px;
+  object-fit: contain;
 }
 
 .bar__name {
@@ -2145,10 +2123,21 @@ canvas.blob__body {
 
 /* -------------------------------------------------------------- search */
 
-/* Four blurred conic gradients stacked behind one dark field, each a
-   different radius, blur and starting angle. Hovering turns them, and
-   focusing turns them further and more slowly - so the light rakes around the
-   border at four speeds instead of the whole thing sliding at once.
+/* Four blurred conic gradients stacked behind one field, each a different
+   radius, blur, period and direction, all of them turning all the time.
+
+   They used to be still, and to turn only as a transition between hover and
+   focus - so the light moved once when you arrived, once more when you
+   clicked in, and then stopped dead, and taking focus away wound it back to
+   where it started. A border lit by four gradients that hold perfectly still
+   until you touch them is a border that looks broken.
+
+   Now the turning is the resting state and nothing about it is a reaction.
+   Two go one way, two the other, on four periods that share no common
+   multiple, so the four bright points never line up twice the same way and
+   the thing never reads as a loop. Hovering and focusing change how hard it
+   burns, not whether it moves - so a click somewhere else in the sheet takes
+   the brightness away and leaves the motion alone.
 
    The layers sit at z-index -1 under a field that paints its own background,
    which is what keeps the blur outside the text rather than over it. */
@@ -2177,52 +2166,79 @@ canvas.blob__body {
   top: 50%; left: 50%;
   width: 400px; height: 400px;
   background-repeat: no-repeat;
-  transition: transform 2s var(--ease);
+  /* The starting angle is a negative delay rather than a rotate() in the
+     rule: a layer given both would spend its first cycle travelling from its
+     own angle to 360 and every cycle after that travelling the whole way,
+     which is a jump once per turn. This starts each one part-way through the
+     same full turn instead. */
+  transform: translate(-50%, -50%);
+  animation: rake var(--turn) linear infinite;
+  animation-delay: calc(var(--turn) * var(--phase));
+  will-change: transform;
 }
 
-.rig__glow  { inset: -16px -10px; filter: blur(17px); opacity: 0.46; }
+.rig__glow {
+  inset: -16px -10px; filter: blur(17px); opacity: 0.3;
+  transition: opacity 900ms var(--ease);
+}
 .rig__dark  { inset: -3px; filter: blur(3px); }
 .rig__pale  { inset: 1px; border-radius: 10px; filter: blur(2px); }
 .rig__edge  { inset: 2px; border-radius: 11px; filter: blur(0.5px); }
 
+/* Four periods with no common multiple, and two of them running backwards.
+   Round numbers would come back into step every few turns, and a border that
+   is visibly on a loop is worse than one that does not move. */
 .rig__glow::before {
-  transform: translate(-50%, -50%) rotate(60deg);
+  --turn: 26s; --phase: -0.04;
   background-image: conic-gradient(#000, var(--jade-deep) 5%, #000 38%,
                                    #000 50%, var(--ok) 60%, #000 87%);
 }
 .rig__dark::before {
-  transform: translate(-50%, -50%) rotate(82deg);
+  --turn: 17s; --phase: -0.23;
+  animation-direction: reverse;
   background-image: conic-gradient(transparent, #0E4C3B, transparent 10%,
                                    transparent 50%, #14624C, transparent 60%);
 }
 .rig__pale::before {
-  transform: translate(-50%, -50%) rotate(83deg);
+  --turn: 14.5s; --phase: -0.23;
   filter: brightness(1.4);
+  transition: filter 900ms var(--ease);
   background-image: conic-gradient(transparent 0%, #9FD9CB, transparent 8%,
                                    transparent 50%, #CFEDE4, transparent 58%);
 }
 .rig__edge::before {
-  transform: translate(-50%, -50%) rotate(70deg);
+  --turn: 21s; --phase: -0.19;
+  animation-direction: reverse;
   filter: brightness(1.3);
+  transition: filter 900ms var(--ease);
   background-image: conic-gradient(#1B1E1D, var(--jade-deep) 5%, #1B1E1D 14%,
                                    #1B1E1D 50%, var(--ok) 60%, #1B1E1D 64%);
 }
 
-.rig:hover .rig__glow::before { transform: translate(-50%, -50%) rotate(-120deg); }
-.rig:hover .rig__dark::before { transform: translate(-50%, -50%) rotate(-98deg); }
-.rig:hover .rig__pale::before { transform: translate(-50%, -50%) rotate(-97deg); }
-.rig:hover .rig__edge::before { transform: translate(-50%, -50%) rotate(-110deg); }
+/* Hovering and focusing change how hard it burns, never where it is. A
+   reaction that moved the light would have to hand it back afterwards, and
+   handing it back is the freeze this was written to get rid of. */
+.rig:hover .rig__glow { opacity: 0.58; }
+.rig:focus-within .rig__glow { opacity: 0.72; }
+.rig:focus-within .rig__pale::before { filter: brightness(1.85); }
+.rig:focus-within .rig__edge::before { filter: brightness(1.65); }
 
-/* Slower on focus, and further round. Hovering is a glance; typing is a stay,
-   and a two-second sweep that lands while you are still reading the list is
-   worth more than a fast one that is over before you looked. */
-.rig:focus-within .rig__glow::before { transform: translate(-50%, -50%) rotate(420deg); transition-duration: 4s; }
-.rig:focus-within .rig__dark::before { transform: translate(-50%, -50%) rotate(442deg); transition-duration: 4s; }
-.rig:focus-within .rig__pale::before { transform: translate(-50%, -50%) rotate(443deg); transition-duration: 4s; }
-.rig:focus-within .rig__edge::before { transform: translate(-50%, -50%) rotate(430deg); transition-duration: 4s; }
+/* Still, for anyone who has asked for still. The angles they stop at are the
+   four phases above, which is a border with four lights on it rather than a
+   border with all four in the same place. */
+@media (prefers-reduced-motion: reduce) {
+  .rig__glow::before, .rig__dark::before,
+  .rig__pale::before, .rig__edge::before {
+    animation-play-state: paused;
+    will-change: auto;
+  }
+}
 
 .rig__main { position: relative; width: 100%; }
 
+/* Dark enough that the light around it reads, and no darker. #08100D is
+   very nearly black, and against a sheet three shades lighter a 52px slab of
+   it read as a hole in the page rather than as a field on it. */
 .rig__in {
   width: 100%;
   height: 52px;
@@ -2230,13 +2246,12 @@ canvas.blob__body {
   font: inherit;
   font-size: 15px;
   color: var(--text);
-  background: #08100D;
+  background: linear-gradient(180deg, #10201B, #0C1714 62%, #0A1310);
   border: 0;
   border-radius: 10px;
   user-select: text;
   -webkit-user-select: text;
 }
-.rig__in::placeholder { color: #6E7A76; }
 .rig__in:focus { outline: none; }
 
 .rig__lens {
@@ -2249,29 +2264,45 @@ canvas.blob__body {
 }
 .rig:focus-within .rig__lens { color: var(--jade-2); }
 
-/* A short wash of the field's own background over the placeholder, so the
-   hint fades out rather than ending. Gone the moment there is something to
-   read. */
-.rig__fade {
+/* The hint, and nothing on top of it.
+
+   It began as the field's own placeholder under a band of the field's
+   background - 84px wide from a fixed offset, which is not where the words
+   end, so the band sat across the middle of "countries". Then it was the
+   same words under a mask that faded their tail. Both were something laid
+   over the text to make it prettier, and both made it harder to read, which
+   is the wrong trade for the one line in this sheet that tells you what the
+   box is for. The light around the border is the decoration; the words are
+   just words. */
+.rig__hint {
   position: absolute;
   left: 46px; top: 50%;
-  width: 84px; height: 20px;
   transform: translateY(-50%);
+  max-width: calc(100% - 100px);
+  font-size: 15px;
+  line-height: 1;
+  color: #6E7A76;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   pointer-events: none;
-  background: linear-gradient(90deg, transparent, #08100D);
+  transition: opacity 160ms var(--ease);
 }
-.rig__main.is-typed .rig__fade,
-.rig:focus-within .rig__fade { display: none; }
+.rig__main.is-typed .rig__hint { opacity: 0; }
 
-/* One point of light at the left edge that goes out when you reach for it. */
+/* A point of light at the left edge, there to say the field was live before
+   anybody touched it. The border says that on its own now, and a green blur
+   sitting perfectly still behind a moving one reads as a smudge on the glass
+   rather than as a second light. Dimmer, and gone the moment the border has
+   your attention anyway. */
 .rig__spark {
   position: absolute;
   left: 8px; top: 50%;
   width: 26px; height: 18px;
   transform: translateY(-50%);
   background: var(--ok);
-  filter: blur(18px);
-  opacity: 0.7;
+  filter: blur(20px);
+  opacity: 0.28;
   pointer-events: none;
   transition: opacity 1.4s var(--ease);
 }
@@ -2351,12 +2382,21 @@ canvas.blob__body {
 }
 .pane + .pane { margin-top: 10px; }
 
-/* Each pane arrives a beat after the one above it. Sixty milliseconds apart,
-   which is under the threshold where it reads as a queue and over the one
-   where it reads as nothing. */
+/* Each pane arrives a beat after the one above it - still a queue, but a
+   queue that ends.
+
+   Sixty milliseconds apart was measured against three panes. The Servers
+   screen has seven, so the last one began at 440ms and finished at 760, and
+   every trip into that screen spent three quarters of a second finishing
+   something nobody was waiting for any more. Twenty-eight apart and capped:
+   the beat is still there between the first few, which is where it does its
+   work, and nothing arrives after 400ms however many panes there are. */
 .sheet[open] .pane {
-  animation: rise 320ms var(--ease) backwards;
-  animation-delay: calc(var(--i, 0) * 60ms + 40ms);
+  animation: rise 240ms var(--ease) backwards;
+  animation-delay: min(calc(var(--i, 0) * 28ms + 20ms), 160ms);
+}
+@media (prefers-reduced-motion: reduce) {
+  .sheet[open] .pane { animation: none; }
 }
 @keyframes rise {
   from { opacity: 0; transform: translateY(9px); }
@@ -2372,14 +2412,10 @@ canvas.blob__body {
 .pane__why b { color: var(--text-muted); font-weight: 600; }
 .pane__why i { color: var(--text-muted); font-style: italic; }
 .pane__why--tight { margin-top: 5px; }
-/* Explanation that sits below the field rather than above it, separated by a
-   rule so it reads as a note about the port and not as a second label for
-   the input it follows. */
-.pane__why--after {
-  margin-top: 11px; padding-top: 10px;
-  border-top: 1px solid var(--divider);
-}
-.pane__why--after strong { color: var(--text); font-weight: 600; }
+/* --after was a paragraph under the field, separated from it by a rule. The
+   only one was the port pane's, and eight lines of it sitting open under a
+   five-character input was the reason that pane read as documentation. What
+   was worth keeping out of it is a .tip; the rest is in the (i). */
 .pane__body { margin-top: 12px; }
 .pane__row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
 /* The buttons keep their width and the sentence beside them takes what is
@@ -2487,6 +2523,102 @@ canvas.blob__body {
 }
 .lede .ico { color: var(--text-off); opacity: 0.75; }
 
+/* A step inside a pane: one half of a job, done somewhere else.
+
+   The tunnel pane is half an SSH session and half a form, and read as a
+   single column of paragraphs and fields there was nothing on screen saying
+   where the middle was - the passwords looked like part of the installer and
+   the installer looked like part of this window. A heading in the flow was
+   not enough, because everything under it is also in the flow. A wall around
+   each half says it without a word.
+
+   Recessed rather than raised: the pane is already a card, and a lighter box
+   inside a card reads as a card on top of it. */
+.step {
+  margin-top: 10px;
+  padding: 11px 12px 12px;
+  border-radius: 11px;
+  background: rgba(0, 0, 0, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.042);
+}
+.step:first-child { margin-top: 0; }
+
+/* Where this half happens, which is the thing the box is for. */
+.step__cap {
+  display: flex; align-items: center; gap: 7px;
+  margin-bottom: 2px;
+  font-size: 10px; line-height: 14px; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text);
+}
+.step__cap .ico { width: 13px; height: 13px; flex: none; color: var(--text-off); }
+.step__cap .info { margin-left: 1px; }
+
+/* Inside a step the rhythm is the step's, not each piece's own. */
+.step .pane__row--code { margin: 8px 0 0; }
+.step .field { margin-top: 9px; }
+.step .note { margin-top: 8px; }
+.step .pane__row--acts { margin-top: 11px; }
+.note--dim { color: var(--text-off); opacity: 0.75; }
+
+/* One line under a pane that most people have no business in, said before
+   they read three paragraphs to find that out. */
+.pane__skip {
+  margin-top: 7px;
+  font-size: 10.5px; line-height: 15px;
+  color: var(--text-off);
+  opacity: 0.8;
+}
+
+/* The one thing to know about the control above it, boxed so it reads as a
+   note about a program rather than as another paragraph of the pane. Every
+   other sentence of that kind is one hover away in the (i); this one stays
+   out because it changes what somebody picks in Telegram, and nobody hovers
+   an (i) to find out something they do not know they need. */
+.tip {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin-top: 12px;
+  padding: 9px 10px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.028);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  font-size: 11px; line-height: 16px;
+  color: var(--text-off);
+}
+.tip .ico {
+  width: 13px; height: 13px;
+  flex: none;
+  margin-top: 1px;
+  color: var(--ok);
+  opacity: 0.75;
+}
+.tip b { color: var(--text-muted); font-weight: 600; }
+
+/* A button shaped like the sentence that makes somebody press it.
+
+   It is for the failure that reads like a broken server and is not, which is
+   a thing that happens on perhaps one setup in five - beside Save and Test
+   it claimed a third of a row that is pressed every time, and "Find a way
+   in" named an operation rather than saying when to use it. Under them, on
+   its own line, with the question in front of the verb. */
+.btn--bare {
+  display: flex; align-items: center; gap: 7px;
+  width: 100%; height: auto;
+  margin-top: 11px;
+  padding: 9px 0 0;
+  border-radius: 0;
+  border-top: 1px solid var(--divider);
+  background: none;
+  font-size: 10.5px; line-height: 15px; font-weight: 400;
+  text-align: left;
+  color: var(--text-off);
+  justify-content: flex-start;
+}
+.btn--bare:hover { color: var(--text-muted); background: none; }
+.btn--bare:hover .ico { color: var(--ok); }
+.btn--bare:active { transform: none; }
+.btn--bare .ico { width: 12px; height: 12px; flex: none; color: var(--text-off); }
+
 /* ---------------------------------------------------------------- fields */
 
 .field { display: block; margin-top: 10px; }
@@ -2590,7 +2722,129 @@ canvas.blob__body {
 /* The number itself changed, so the number itself says so. */
 .scope__count.turned { animation: pop 220ms var(--ease); }
 
-/* --------------------------------------------------------------- chips */
+/* ---------------------------------------------------------------- folds
+
+   A decision, shut, saying what it decided.
+
+   The sweep asks four questions and used to ask all four out loud at once:
+   three routes with a line of prose each, four groupings, a row of
+   companies, a field of sites. Nine hundred pixels of choices in a window
+   six hundred tall, every one of them the same weight, so the one you came
+   to change was somewhere in the middle of the ones you did not.
+
+   Shut, each is a line: what it is asking, in the dim caption, and the
+   answer under it in the bright one. Four lines is the whole run - which is
+   the question a person is actually asking by the time they reach Start, and
+   the one this pane could not answer before.
+
+   A .step wraps half a job that happens somewhere else. This wraps a choice
+   already made, so it is lighter than a step: no inner wall until it opens,
+   because four walled boxes in a column is the crowding again in a
+   different costume. */
+
+.folds { display: flex; flex-direction: column; gap: 2px; margin-top: 14px; }
+
+.fold { border-radius: 10px; }
+.fold[data-open] {
+  background: rgba(0, 0, 0, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.045);
+}
+
+/* Two rows and four columns: the glyph and the chevron span both rows, the
+   caption sits above the answer, and the number keeps the right-hand column
+   so that four of these line up down the pane rather than each ending
+   wherever its own answer happens to stop. */
+.fold__cap {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr) auto 13px;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 1px 9px;
+  padding: 9px 11px;
+  text-align: left;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  transition: background var(--fade);
+}
+.fold__cap:hover { background: rgba(255, 255, 255, 0.035); }
+.fold[data-open] .fold__cap:hover { background: transparent; }
+
+.fold__ico {
+  grid-column: 1; grid-row: 1 / span 2;
+  width: 15px; height: 15px;
+  color: var(--text-off);
+}
+.fold__what {
+  grid-column: 2 / span 2; grid-row: 1;
+  font-size: 10px; line-height: 14px;
+  letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--text-off);
+}
+/* The answer, and the only bright thing on the line. Clipped rather than
+   wrapped: two of these can be long enough to take a second line, and a row
+   whose height depends on which route is chosen makes the column of four
+   jump every time one of them is answered. */
+.fold__now {
+  grid-column: 2; grid-row: 2;
+  min-width: 0;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: 12px; line-height: 17px;
+  color: var(--text);
+}
+.fold__side {
+  grid-column: 3; grid-row: 2;
+  font-size: 11px; line-height: 17px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-off);
+}
+.fold__chev {
+  grid-column: 4; grid-row: 1 / span 2;
+  width: 13px; height: 13px;
+  color: var(--text-off);
+  transition: transform var(--enter);
+}
+.fold[data-open] .fold__chev { transform: rotate(180deg); }
+
+/* Shut is display:none rather than a height of zero: a collapsed box still
+   holds its contents in the layout, and the picker learned once already what
+   that costs. */
+.fold__body { display: none; }
+.fold[data-open] .fold__body {
+  display: block;
+  padding: 0 11px 11px;
+  animation: foldIn var(--enter) both;
+}
+@keyframes foldIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Inside a fold the rhythm is the fold's. The lists arrive with their own
+   top margins from when they each sat under a heading of their own. */
+.fold__body > .scope { margin-top: 2px; }
+.fold__body > .field { margin-top: 0; }
+.fold__body > .pane__why--tight { margin-top: 8px; }
+.fold__body > .chips { margin-top: 9px; }
+.fold__body > .note { margin-top: 7px; }
+
+/* Open, the answer is in the list below rather than on the line, and saying
+   it twice makes the line read as a fifth choice. Gone rather than faded:
+   the row collapses and the space goes to the list, which is what was asked
+   for by opening it. */
+.fold[data-open] .fold__now,
+.fold[data-open] .fold__side { display: none; }
+
+/* --------------------------------------------------------------- chips
+
+   One per company the addresses are rented from, and one per site the sweep
+   has answers for. A count and a way to use it: a folder of servers that
+   reach a site is only worth having if the app can be pointed at it.
+
+   Defined once, here. There were two copies of this block for a while and
+   the second quietly won every declaration in the first. */
 
 .chips { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
 .chips li { display: flex; }
@@ -2893,8 +3147,25 @@ canvas.blob__body {
 
 /* The path and the verb that changes it, on one line. */
 .pane__source { display: flex; gap: 8px; align-items: stretch; margin-top: 11px; }
-.pane__source .path--flush { flex: 1; min-width: 0; margin: 0; }
 .pane__source .btn--quiet { flex: none; height: auto; }
+
+/* A path beside a button, on one line, ending where it means something.
+
+   .path breaks anywhere by default, which down a 200px column turned
+   C:\Users\ehsan\ovpn-pin\configs into two lines split mid-word after
+   "conf" - a second line spent on the half of the path that is the same for
+   every folder this app knows.
+
+   Ellipsised at the front rather than the back, because the front is the
+   part that distinguishes nothing: what tells `configs` from `pinned` is the
+   end of it. The isolate keeps the string one run, so a path is reordered by
+   the box it is in and by nothing else. */
+.pane__source .path--flush {
+  flex: 1; min-width: 0; margin: 0;
+  white-space: nowrap; word-break: normal;
+  overflow: hidden; text-overflow: ellipsis;
+  direction: rtl; text-align: left; unicode-bidi: isolate;
+}
 
 /* ------------------------------------------------ a folder in, a folder out
 
@@ -3007,7 +3278,9 @@ canvas.blob__body {
    answer changes length. */
 .way__note {
   min-height: 30px;
-  margin: 8px 2px 2px;
+  /* Flush with the strip above it, not 2px narrower. Two pixels is the one
+     misalignment that reads as a rendering fault rather than as a decision. */
+  margin: 8px 0 2px;
 }
 /* Changed, not merely different: the sentence lifts as it arrives, which is
    what makes it read as an answer to the tap rather than as text that was
@@ -3356,6 +3629,13 @@ canvas.blob__body {
 .info:hover .info__bubble,
 .info:focus-visible .info__bubble { opacity: 1; visibility: visible; }
 .info__bubble b { color: var(--text); font-weight: 600; }
+/* The paragraph inside the bubble is the pane's own element, moved rather
+   than copied, so it arrives still dressed as a paragraph in a pane. The
+   bubble sets the type here; the paragraph only carries the words. */
+.info__bubble .pane__why {
+  margin: 0;
+  font-size: inherit; line-height: inherit; color: inherit;
+}
 
 /* Near the right edge the bubble is pinned to the sheet instead of centred,
    which is the one case translateX(-50%) cannot solve on its own. */
@@ -3442,20 +3722,158 @@ canvas.blob__body {
   text-transform: uppercase;
   color: var(--text-off);
 }
-.use__opts { display: grid; gap: 5px; }
-.use__opt {
-  display: flex;
-  align-items: center;
+.use__opts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-  font-size: 12.5px;
-  color: var(--text);
-  cursor: pointer;
 }
-.use__opt input { accent-color: var(--ok); cursor: pointer; }
-/* Nothing pinned is said rather than shown as an empty tick that refuses. */
-.use__opt[data-empty="1"] { color: var(--text-off); cursor: default; }
-.use__opt[data-empty="1"] input { cursor: default; }
-.use__n { margin-left: auto; font-size: 10.5px; color: var(--text-off); }
+/* One card per provider, and the mark is the card rather than a bullet at
+   the front of it: 68px, hung off the left edge so a third of it is cut by
+   the card's own border. It reads as a mark on a thing rather than an icon
+   in a list, and it leaves the middle of the card for the only two lines
+   that matter - who it is, and what state it is in.
+
+   The tick box is still where the state lives. It is only moved out of
+   sight, so the label stays clickable and everything reading .checked or
+   setting .disabled goes on working. */
+.prov {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 104px;
+  padding: 13px 13px 12px 56px;
+  border-radius: calc(var(--r-ctl) + 3px);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  cursor: pointer;
+  transition: border-color 180ms var(--ease),
+              background-color 180ms var(--ease),
+              transform 110ms var(--ease);
+}
+.prov__in {
+  position: absolute;
+  width: 1px; height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.prov__mark {
+  position: absolute;
+  left: -23px; top: 50%;
+  width: 68px; height: 68px;
+  transform: translateY(-50%);
+  color: var(--text-off);
+  opacity: 0.32;
+  pointer-events: none;
+  transition: color 200ms var(--ease), opacity 200ms var(--ease);
+}
+.prov__name {
+  font-size: 13.5px;
+  line-height: 18px;
+  color: var(--text);
+}
+.prov__n {
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--text-off);
+}
+/* The one thing to do about this provider. Pushed to the bottom of the card
+   so the two cards agree on where their buttons are even when their states
+   do not, and hidden outright when the answer is nothing - an always-present
+   control that sometimes does nothing is how this pane got confusing. */
+.prov__do {
+  margin-top: auto;
+  align-self: flex-start;
+  padding: 5px 10px;
+  border-radius: var(--r-ctl);
+  border: 1px solid var(--border);
+  background: var(--control);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  line-height: 15px;
+  cursor: pointer;
+  transition: border-color 150ms var(--ease), color 150ms var(--ease),
+              transform 110ms var(--ease);
+}
+.prov__do:hover { border-color: var(--ok); color: var(--ok); }
+.prov__do[data-lead="1"] { border-color: var(--ok); color: var(--ok); }
+/* The card's second, rarer action. Bottom right, opposite the step you are
+   actually here for, and an icon because naming it would give it the same
+   weight as the step - which it is nowhere near having. */
+.prov__side {
+  position: absolute;
+  right: 9px; bottom: 9px;
+  display: grid;
+  place-items: center;
+  width: 26px; height: 26px;
+  padding: 0;
+  border-radius: var(--r-ctl);
+  border: 1px solid transparent;
+  background: none;
+  color: var(--text-off);
+  cursor: pointer;
+  transition: color 150ms var(--ease), border-color 150ms var(--ease),
+              transform 110ms var(--ease);
+}
+.prov__side:hover { color: var(--ok); border-color: var(--border); }
+.prov__side:disabled { opacity: 0.4; cursor: default; }
+/* It spins while it is asking, because the answer is a round trip to
+   Windscribe and a still icon says the press did not land. */
+@keyframes prov-spin { to { transform: rotate(1turn); } }
+.prov__side[data-busy="1"] .ico {
+  animation: prov-spin 900ms linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .prov__side[data-busy="1"] .ico { animation: none; opacity: 0.5; }
+}
+/* Off in the corner rather than in a row: the state line is what the eye
+   wants from two of these side by side, and a tick competing on the same
+   line made both harder to read. */
+.prov__tick {
+  position: absolute;
+  top: 10px; right: 11px;
+  width: 13px; height: 13px;
+  color: var(--ok);
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 130ms var(--ease), transform 220ms var(--ease);
+}
+.prov:hover:not([data-empty="1"]) { border-color: var(--text-off); }
+/* The card gives under the press. It is a switch the size of a poster, and
+   at that size a border change alone does not read as a thing being pushed. */
+.prov:not([data-empty="1"]):active { transform: scale(0.985); }
+.prov { transform-origin: center; }
+.prov__do:active, .prov__side:active { transform: scale(0.94); }
+@media (prefers-reduced-motion: reduce) {
+  .prov:not([data-empty="1"]):active,
+  .prov__do:active, .prov__side:active { transform: none; }
+}
+.prov[data-on="1"] {
+  border-color: var(--ok);
+  background: var(--control);
+}
+.prov[data-on="1"] .prov__mark { color: var(--ok); opacity: 0.9; }
+.prov[data-on="1"] .prov__tick { opacity: 1; transform: none; }
+/* Not usable is said rather than shown as an empty tick that refuses. The
+   card dims, but the line saying why and the button that answers it stay at
+   full strength - between them they are the only thing on the card worth
+   reading when it is in this state. */
+.prov[data-empty="1"] { cursor: default; }
+.prov[data-empty="1"] .prov__mark { opacity: 0.14; }
+.prov[data-empty="1"] .prov__name { color: var(--text-off); }
+
+/* Below this the two cards side by side leave about ninety pixels for a name
+   and a button, which is not enough for either. The default window is 400
+   wide, so this is the shape most people see. */
+@media (max-width: 560px) {
+  .use__opts { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* What a pin run left behind, when it wrote somewhere the app already reads
+   and there is therefore nothing to press. */
+.pinuse__said { font-size: 11px; color: var(--text-off); }
 
 /* The tag on a country row. An initial, because the country's own name is
    what the row is for and a word beside it competes with it. */
@@ -3464,18 +3882,14 @@ canvas.blob__body {
   display: grid;
   place-items: center;
   width: 15px; height: 15px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
+  border: 0;
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0;
   color: var(--text-off);
-  background: var(--control);
+  background: none;
 }
-.row__tag[data-provider="windscribe"] {
-  color: var(--jade-2, var(--ok));
-  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
-}
+.row__tag[data-provider="windscribe"] { color: var(--jade-2, var(--ok)); }
 
 /* ------------------------------------- one country, two ways into it */
 
@@ -3690,42 +4104,180 @@ canvas.blob__body {
 
 /* Starred rows go to the top of the list, so the star has to be reachable
    without picking the row it sits in - the list catches it first. */
-.star {
-  flex: none;
-  width: 22px;
-  text-align: center;
-  font-size: 13px;
-  line-height: 1;
-  color: var(--text-off);
-  cursor: pointer;
-  transition: color var(--fade), transform 90ms ease;
+.star__ico { width: 15px; height: 15px; fill: none; }
+.star[data-on="true"] .star__ico { fill: currentColor; }
+/* The moment it becomes a favourite, and only then - the class is put on by
+   the toggle and taken off when the animation ends, so a redraw of a list
+   that already has favourites in it does not set forty stars bouncing. */
+.star.just-starred .star__ico { animation: star-pop 320ms var(--ease); }
+@keyframes star-pop {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.45) rotate(-14deg); }
+  100% { transform: scale(1); }
 }
-.star:hover { color: var(--text); transform: scale(1.15); }
-.star[data-on="true"] { color: var(--work, #e5c454); }
+
+/* Ask these exits, and only these. */
+.rowtest__ico { width: 14px; height: 14px; }
+/* Running. The bolt keeps its place and pulses rather than being swapped for
+   a spinner: what is happening is this row being asked, and a different
+   glyph in the same slot reads as a different control. */
+.rowtest[data-busy="true"] { color: var(--ok); opacity: 1; }
+.rowtest[data-busy="true"] .rowtest__ico {
+  animation: bolt-pulse 900ms ease-in-out infinite;
+}
+@keyframes bolt-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.45; transform: scale(0.86); }
+}
+/* Every other row while one is running. One at a time is the engine's rule,
+   so the rest say so rather than answering a press with nothing. */
+.rowtest[data-idle="true"] {
+  opacity: 0.22;
+  cursor: default;
+}
+.rowtest[data-idle="true"]:hover::before { opacity: 0; }
+.rowtest[data-idle="true"]:hover { color: var(--text-off); }
+/* A figure that has just been rewritten. Warm for a moment and back, rather
+   than a flash: the row is being read while this happens, and something that
+   blinks in the corner of the eye is harder to read past than something that
+   simply arrives. */
+.is-lit { animation: lit 1100ms var(--ease); }
+@keyframes lit {
+  0%   { color: var(--ok); }
+  35%  { color: var(--ok); }
+  100% { color: inherit; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rowtest[data-busy="true"] .rowtest__ico { animation: none; }
+  .star.just-starred .star__ico { animation: none; }
+  .is-lit { animation: none; }
+}
 
 /* ------------------------------------------------- opening and closing */
 
-/* The plus that opens a country, and the star beside it. Both sit inside a
-   row that is itself a button, so both are spans the list catches before the
-   row sees the click - and both have to look pressable without being one. */
-.expand, .star {
+/* ------------------------------------------------------------- the rail */
+
+/* The three things you can do to a row without leaving it, in one recessed
+   track at the end of the row.
+
+   They were four unrelated glyphs at four sizes - a 17px provider mark, a
+   22px bolt, a 22px text star, a 24px text plus - evenly spaced down the
+   right of every row. Nothing grouped them, nothing said which of them was
+   the one that opens the row, two were drawn and two were typed, and every
+   one of them was under the 24px a pointer wants. The rail is one object
+   with three seats in it: it says these belong together and the mark beside
+   it does not, and each seat is big enough to hit.
+
+   Quiet at rest and lit under the pointer. Ninety of these down a list is a
+   lot of furniture, so at rest the track is barely a shape and the two
+   things you rarely press sit back; hovering the row brings all of it up. */
+.rail {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: 6px;
+  padding: 2px;
+  border-radius: 12px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px transparent;
+  transition: background 200ms var(--ease), box-shadow 200ms var(--ease);
+}
+/* Nothing at all until the row is under the pointer. Ninety pills down a
+   list is a pattern the eye reads before it reads any of the names, and the
+   names are what the list is for. At rest the grouping is done by the
+   spacing alone - three seats a pixel apart, eight from the mark beside
+   them - and the track itself arrives on the row you are actually on. */
+.row:hover .rail, .row:focus-visible .rail, .row.is-picked .rail {
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+/* Every seat the same size, and that size is a pointer target rather than a
+   glyph's bounding box. Each sits inside a row that is itself a button, so
+   each is a span the list catches before the row sees the click - which is
+   why they have to look pressable without being buttons. */
+.rowtest, .star, .expand {
+  position: relative;
   flex: none;
   display: grid;
   place-items: center;
-  width: 24px; height: 24px;
-  border-radius: 7px;
-  font-size: 14px;
-  line-height: 1;
+  width: 28px; height: 28px;
+  border-radius: 10px;
   color: var(--text-off);
   cursor: pointer;
+  transition: color 140ms var(--ease), opacity 200ms var(--ease),
+              transform 120ms var(--ease);
 }
-.expand { font-size: 17px; font-weight: 400; }
-.expand:hover, .star:hover {
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.07);
+/* The fill under a seat is its own element rather than a background, so it
+   can grow into place instead of switching on. Each takes the colour of what
+   it does - asking is jade, keeping is amber - which is the same colour the
+   glyph goes, so the press reads before the glyph is even recognised. */
+.rowtest::before, .star::before, .expand::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: currentColor;
+  opacity: 0;
+  transform: scale(0.72);
+  transition: opacity 160ms var(--ease), transform 200ms var(--ease);
 }
-.expand[data-on="true"] { color: var(--ok); }
+.rowtest:hover::before, .star:hover::before, .expand:hover::before {
+  opacity: 0.13;
+  transform: none;
+}
+.rowtest .ico, .star .ico, .expand .ico { position: relative; }
+.rowtest:active, .star:active, .expand:active { transform: scale(0.9); }
+
+/* Pressed rarely, so they sit back until the row is under the pointer. Not
+   hidden: a control that appears on hover is a control nobody knows is
+   there, and these two are how a row gets measured and kept. */
+.rowtest, .star { opacity: 0.62; }
+.row:hover .rowtest:not([data-idle="true"]), .row:hover .star,
+.row:focus-visible .rowtest:not([data-idle="true"]),
+.row:focus-visible .star,
+.star[data-on="true"], .rowtest[data-busy="true"] { opacity: 1; }
+
+.rowtest:hover { color: var(--ok); }
+.star:hover { color: var(--work, #e5c454); }
+/* A favourite is said by the glyph - filled, and amber - and by nothing
+   else. The seat under it used to stay lit as well, which left a painted
+   box sitting on the row long after the press that made it, reading as a
+   control stuck down rather than a city kept. The fill is a press now: it
+   comes up under the finger and goes again with it. */
 .star[data-on="true"] { color: var(--work, #e5c454); }
+.star:active::before { opacity: 0.18; transform: none; transition: none; }
+.expand:hover { color: var(--jade-2, var(--ok)); }
+.expand[data-on="true"] { color: var(--ok); }
+
+/* The + folds into the − rather than being replaced by it: the upright bar
+   collapses into the crossbar and the whole sign turns a quarter with it.
+   One control in one place doing one job in two directions - swapping the
+   glyph made it read as two controls sharing a slot. */
+.expand__ico {
+  width: 17px; height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  transition: transform 260ms var(--ease);
+}
+.expand__h {
+  transform-origin: 12px 12px;
+  transition: transform 260ms var(--ease);
+}
+/* The crossbar is the one that goes, and the upright is the one that turns
+   into it. Collapsing the upright instead leaves the crossbar to be rotated
+   a quarter turn by the line above - which is a vertical bar, not a minus. */
+.expand[data-on="true"] .expand__ico { transform: rotate(90deg); }
+.expand[data-on="true"] .expand__h { transform: scaleX(0); }
+
+@media (prefers-reduced-motion: reduce) {
+  .expand__ico, .expand__h { transition: none; }
+  .rowtest::before, .star::before, .expand::before { transition: opacity 83ms linear; }
+}
 
 .row__via {
   font-style: normal;
@@ -3765,7 +4317,12 @@ canvas.blob__body {
    is modelled on, and every row now carries its flag as an object instead. */
 .sheet__list .row::before { display: none; }
 
-.chip {
+/* The country's flag on a picker row. Named for what it is: it was `.chip`
+   until the day it collided with the pill of the same name in the settings
+   sheet - same specificity, defined later, so every company and every site
+   chip down there was crushed into a 26px circle with its own text spilling
+   out across its neighbours. Two unrelated things cannot share a class. */
+.flag {
   flex: none;
   width: 26px; height: 26px;
   border-radius: 50%;
@@ -3776,13 +4333,13 @@ canvas.blob__body {
 }
 /* A city has no flag of its own - it is in the country above it - so it gets
    a mark that holds the same column. */
-.chip--dot {
+.flag--dot {
   width: 26px; height: 26px;
   background: none;
   box-shadow: none;
   position: relative;
 }
-.chip--dot::after {
+.flag--dot::after {
   content: '';
   position: absolute;
   left: 11px; top: 11px;
@@ -3794,7 +4351,7 @@ canvas.blob__body {
 /* Indented by the chip's width, so a city's name starts under its country's
    name rather than under its flag. */
 .row--city { margin-left: 0; width: 100%; padding-left: 30px; }
-.row--city .chip--dot { width: 22px; }
+.row--city .flag--dot { width: 22px; }
 
 /* One column, the full width of the copy.
 
@@ -3843,14 +4400,19 @@ canvas.blob__body {
    cities rather than repeating the flag above it. */
 .row--via { padding-left: 30px; }
 
-/* An empty control keeping its column. */
+/* A seat with nothing in it - a country with one city and one exit has
+   nothing to open. It keeps its width so the bolt and the star sit in the
+   same column as every other row's. */
 .expand--empty { pointer-events: none; }
-.expand--empty:hover { background: none; }
+.expand--empty::before { content: none; }
 
 /* Everything down the right-hand edge in one column, whatever a row happens
-   to carry: the star, then the plus, both the same width, both last. */
+   to carry: the provider mark, then the rail, always last and always the
+   same width. */
 .row__marks, .row__tags { margin-left: auto; }
-.star, .expand { margin-left: 0; }
+/* A little more air between the mark that says who and the track that offers
+   to do something, so the two do not read as one strip of four icons. */
+.row__tags + .rail, .row__marks + .rail { margin-left: 8px; }
 
 /* The auto row is one line like the rest of them. Three lines of prose about
    racing every location was the tallest thing in a list whose whole job is
@@ -3864,38 +4426,45 @@ canvas.blob__body {
 
 /* The provider sign, beside the name, in the state that provider is in here.
    It replaced a row each, which said less and cost a line apiece. */
+/* The box around it is gone. Down a list of ninety rows, every one of which
+   carries the same one or two marks in the same column, the boxes were the
+   loudest thing on the row - ninety outlined chips beside ninety flags, and
+   the flag is what the row is for. The mark alone still says who, and the
+   column it keeps still holds the star and the plus in line.
+
+   It stays 17px wide either way: the width is what stops a country only one
+   provider reaches from dragging everything after it left. */
 .row__tag {
   display: grid;
   place-items: center;
   width: 17px; height: 17px;
   padding: 0;
-  border-radius: 5px;
-  border: 1px solid var(--border);
+  border: 0;
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0;
   color: var(--text-off);
-  background: rgba(255, 255, 255, 0.03);
+  background: none;
 }
-.row__tag[data-state="ok"] {
-  color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
-  background: color-mix(in srgb, var(--ok) 12%, transparent);
+/* The provider's own mark inside that box, in place of its initial. It takes
+   the colour the box is already given for how that provider is doing in that
+   country, so the sign says who and how at once - which is what the letter
+   was doing, only now without having to be told what S and W mean. */
+.row__mark {
+  width: 14px; height: 14px;
+  color: inherit;
 }
-.row__tag[data-state="some"] {
-  color: var(--work, #e5c454);
-  border-color: color-mix(in srgb, var(--work, #e5c454) 40%, transparent);
-}
-.row__tag[data-state="blocked"] {
-  color: var(--fail);
-  border-color: color-mix(in srgb, var(--fail) 40%, transparent);
-}
+/* The state is now carried by the mark's own colour alone, which is what
+   the colour was always doing - the box only repeated it. */
+.row__tag[data-state="ok"] { color: var(--ok); }
+.row__tag[data-state="some"] { color: var(--work, #e5c454); }
+.row__tag[data-state="blocked"] { color: var(--fail); }
 /* Untested keeps the default: dim, and plainly not a verdict. */
 
 /* A provider's column on a row that provider does not reach. Nothing to
    see, and 17px wide, so the sign beside it stays in its own column and the
    star and the plus after it do not move row to row. */
-.row__tag--none { border-color: transparent; background: none; }
+.row__tag--none { background: none; }
 
 /* The provider sign on an individual exit, at the head of the row where the
    eye lands first - "es-006" and "es-mad" are the same kind of nothing until
@@ -3907,10 +4476,14 @@ canvas.blob__body {
    that all read as buttons doing the same kind of job; the shapes separate
    the choice from the action beside it. */
 .pair--sort { flex: none; }
+/* Square, and a pointer target rather than a glyph's bounding box. With
+   padding: 0 these were 34 wide and 15 tall - the height of the icon and
+   nothing else - which is a 15px thing to hit with a mouse, on the one
+   control in this sheet that gets pressed three times in a row. */
 .pair--sort .pair__opt {
   display: grid;
   place-items: center;
-  width: 34px;
+  width: 34px; height: 28px;
   padding: 0;
 }
 .pair--sort .ico { width: 15px; height: 15px; }

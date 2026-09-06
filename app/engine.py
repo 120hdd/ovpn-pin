@@ -71,6 +71,13 @@ DEFAULT_PORT = 8877
 # making somebody find out again.
 REACH_PATH = os.path.join(paths.STATE_DIR, 'reach.json')
 
+# What a 407 comes back as. ovpn-proxy.py raises it in two places and this
+# file has to recognise it, so it is written down once rather than matched on
+# a sentence somebody could reasonably reword. It is the difference between
+# "this exit is busy" and "this account is being turned away", which are the
+# two things the page most needs told apart.
+REFUSED = 'no proxy for this account'
+
 
 def clean_port(value):
     """A port or a sentence saying why not.
@@ -780,6 +787,7 @@ class Engine:
             return self.tcp_ping(ip, timeout=timeout), ip
 
         answered = []
+        missed = []
         ex = cf.ThreadPoolExecutor(max_workers=max(width, 24))
         try:
             futures = {ex.submit(ping_one, s): s for s in pool}
@@ -799,6 +807,8 @@ class Engine:
                     rec = {'ok': False, 'ms': None,
                            'why': str(e).strip()[:60] or 'no answer',
                            'at': int(time.time())}
+                    if not self.cancelled.is_set():
+                        missed.append(s)
                 found[s.file] = rec
                 progress({'phase': 'pinging', 'done': done, 'total': total,
                           'file': s.file, 'result': rec})
@@ -809,6 +819,8 @@ class Engine:
                 f.cancel()
             ex.shutdown(wait=False, cancel_futures=True)
             self._save_reach(found)
+
+        answered += self._second_look(missed, found, timeout, progress, total)
 
         # -- and then whether they take the credentials -------------------
 
@@ -850,8 +862,67 @@ class Engine:
             self._save_reach(found)
 
         ok = sum(1 for s in pool if found.get(s.file, {}).get('ok'))
-        return {'tested': done, 'total': total, 'ok': ok,
+        # Counted rather than left in the per-exit rows. "0 of 37 answered"
+        # is true of a line that is filtering every address and of an account
+        # every address is turning away, and only one of those is about the
+        # exits - so the run says which it found.
+        refused = sum(1 for s in pool
+                      if REFUSED in (found.get(s.file, {}).get('why') or ''))
+        return {'tested': done, 'total': total, 'ok': ok, 'refused': refused,
                 'cancelled': self.cancelled.is_set()}
+
+    def _second_look(self, missed, found, timeout, progress, total):
+        """Ask the ones that did not answer again, quietly and narrowly.
+
+        Measured, and the reason this exists. A run over 389 addresses left
+        94 of them recorded as "timed out" - and every one of those, probed
+        on its own a minute later, answered in about 90ms. The same 389 at
+        the same width, run again, lost two. So what the first run wrote down
+        was not a property of those addresses: it was a moment on the line,
+        and the line here is one where a few hundred new connections in a
+        burst get some of them dropped.
+
+        That mattered because the answer is kept. A verdict of "no answer"
+        takes an exit out of the ordering and shows it as blocked until
+        somebody thinks to test again, so one bad thirty seconds cost a
+        provider its whole fleet - which is exactly how Surfshark came back
+        from a test with two of thirty-seven and looked broken.
+
+        Six at a time rather than twenty-four, because volume is what this
+        is about: the same addresses at the same width pass when there are
+        fewer of them in the air. Once only - an address that will not answer
+        twice is being kept from us, and a third ask is a slower run rather
+        than a truer one.
+        """
+        if not missed or self.cancelled.is_set():
+            return []
+        progress({'phase': 'pinging', 'done': total, 'total': total,
+                  'again': len(missed)})
+        back = []
+        ex = cf.ThreadPoolExecutor(max_workers=6)
+        try:
+            futures = {ex.submit(self.tcp_ping, px.read_config(s.path)[0],
+                                 timeout=timeout): s for s in missed}
+            for fut in cf.as_completed(list(futures)):
+                s = futures[fut]
+                try:
+                    ms = fut.result()
+                except Exception:
+                    continue          # it stands as the first pass left it
+                found[s.file] = {'ok': None, 'ms': int(ms * 1000),
+                                 'ip': px.read_config(s.path)[0],
+                                 'at': int(time.time())}
+                back.append(s)
+                progress({'phase': 'pinging', 'done': total, 'total': total,
+                          'file': s.file, 'result': found[s.file]})
+                if self.cancelled.is_set():
+                    break
+        finally:
+            for f in futures:
+                f.cancel()
+            ex.shutdown(wait=False, cancel_futures=True)
+            self._save_reach(found)
+        return back
 
     @staticmethod
     def _save_reach(found):
@@ -909,6 +980,13 @@ class Engine:
 
         self.cancelled.clear()
         winners, asked, done = [], len(ordered), 0
+        # Why the ones that failed failed. Thrown away until now, and the
+        # cost of that was the worst message this app has ever shown: with
+        # every exit answering 407, the page said "no server accepted just
+        # now, that happens - wait a moment and try again", and waiting was
+        # the one thing that could never work. The reason was in hand and
+        # discarded one line later.
+        refused = 0
         progress({'phase': 'probing', 'asked': 0, 'total': asked})
 
         def probe(s):
@@ -927,8 +1005,9 @@ class Engine:
                               'total': asked})
                 try:
                     winners.append(fut.result())
-                except Exception:
-                    pass
+                except Exception as e:
+                    if REFUSED in str(e):
+                        refused += 1
                 if winners or self.cancelled.is_set():
                     break
         finally:
@@ -943,6 +1022,25 @@ class Engine:
         if self.cancelled.is_set():
             raise RuntimeError('cancelled')
         if not winners:
+            # Two failures wearing one name until now, and they want opposite
+            # things doing about them.
+            #
+            # A few exits refusing is ordinary - a good many refuse at any
+            # one time and the same one takes you an hour later, which is
+            # what "wait and try again" is the right answer to.
+            #
+            # Every exit refusing is not that. A 407 is the account being
+            # turned away, and it is the same account at every address, so
+            # thirty of them saying it is thirty pieces of evidence about one
+            # thing. Trying again is the one thing that cannot help.
+            #
+            # More than half rather than all of them, because a run also
+            # collects timeouts from the line, and a handful of those should
+            # not turn a clear answer back into a vague one.
+            if refused >= 3 and refused > done / 2:
+                raise RuntimeError(
+                    f'credentials-refused: {refused} of {done} exits turned '
+                    'this account away')
             raise RuntimeError('all-refused')
         return winners[0]
 

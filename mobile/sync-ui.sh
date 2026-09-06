@@ -20,9 +20,27 @@ mkdir -p "$DEST"
 # here by hand. Guessing that list is how the phone came to draw a different
 # orb from the desktop: the page loads sphere.js, the guess said orb.js, and
 # the result looked close enough to be believed for a whole build.
-for f in $(grep -oE 'src="[^"]+\.js"|href="[^"]+\.css"' "$SRC/index.html" |
+#
+# Images are in the list for the same reason, and were missing from it for a
+# while: <img src="app-logo.png"> is neither src="*.js" nor href="*.css", so
+# the phone shipped without the mark and drew a broken-image box where the
+# desktop draws a logo. Same failure as orb.js, one attribute over.
+#
+# .svg is deliberately not in the list. The icons are one inline sprite, so
+# nothing here loads an svg file - and the only .svg in index.html is
+# `other.svg#id`, an example inside the comment explaining why the sprite is
+# inline. A pattern that matched it would send this script after a file that
+# was never meant to exist. The `#` exclusion keeps fragments out generally,
+# which is what makes the completeness check below safe to fail on.
+#
+# The copy keeps each reference's own directory, so a src="flags/x.png" lands
+# under flags/ rather than flattened into the top of the bundle, where the
+# page would ask for a path that is not there.
+ASSETS='(src|href)="[^"#]+\.(js|css|png|jpe?g|webp|gif|ico|avif)"'
+for f in $(grep -oE "$ASSETS" "$SRC/index.html" |
            sed 's/.*="//;s/"$//' | sort -u); do
-    cp "$SRC/$f" "$DEST/"
+    mkdir -p "$DEST/$(dirname "$f")"
+    cp "$SRC/$f" "$DEST/$f"
 done
 cp "$SRC"/index.html "$DEST/"
 cp -r "$SRC"/fonts "$SRC"/flags "$DEST/"
@@ -51,6 +69,18 @@ grep -q 'phone\.js' "$DEST/index.html" || {
     echo "phone.js was not linked - index.html no longer loads app.js the same way" >&2
     exit 1
 }
+
+# And the check that the extension list has not fallen behind the page. Every
+# src= and href= naming a file rather than an in-document fragment has to have
+# arrived; anything the list does not know about is reported here rather than
+# discovered on a phone, which is how app-logo.png went missing for a build.
+for f in $(grep -oE '(src|href)="[^"#]+\.[A-Za-z0-9]+"' "$SRC/index.html" |
+           sed 's/.*="//;s/"$//' | sort -u); do
+    [ -e "$DEST/$f" ] || {
+        echo "$f is loaded by index.html and was not copied - add its extension to ASSETS" >&2
+        exit 1
+    }
+done
 
 echo "  ui       $(du -sh "$DEST" | cut -f1) copied from app/ui"
 echo "  scripts  $(ls "$DEST"/*.js "$DEST"/*.css 2>/dev/null | xargs -n1 basename | tr '\n' ' ')"

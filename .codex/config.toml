@@ -1,0 +1,6 @@
+[mcp_servers.universal-icons]
+command = "npx"
+args = [
+    "-y",
+    "mcp-universal-icons",
+]

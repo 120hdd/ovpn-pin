@@ -12,8 +12,13 @@
   window.__errs = [];
   window.addEventListener('error', (e) => window.__errs.push(
     (e.message || 'error') + ' @ ' + (e.filename || '?') + ':' + (e.lineno || 0)));
+  // With the top of the stack. "Cannot set properties of null" names
+  // neither the property nor the line, and finding one of those by reading
+  // the file took longer than the bug was worth; two frames names it.
   window.addEventListener('unhandledrejection', (e) => window.__errs.push(
-    'unhandled rejection: ' + (e.reason && e.reason.message || e.reason)));
+    'unhandled rejection: ' + (e.reason && e.reason.message || e.reason)
+    + ((e.reason && e.reason.stack || '').split(/\n/).slice(1, 3)
+       .map((l) => ' | ' + l.trim()).join(''))));
 </script>
 </head>
 <body>
@@ -42,6 +47,23 @@
   <symbol id="i-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5" /> <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" /></symbol>
   <symbol id="i-socket" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 8v1" /> <path d="M14 8v1" /> <path d="M18 8v1" /> <path d="M6 8v1" /> <path d="M19 17a2 2 0 0 0-1.765 1.059l-.47.882A2 2 0 0 1 15 20H9a2 2 0 0 1-1.765-1.059l-.47-.882A2 2 0 0 0 5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2z" /></symbol>
   <symbol id="i-activity" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" /></symbol>
+  <!-- The two marks, drawn at a size you can recognise them at rather than
+       spelled out beside a tick box. Surfshark's is the CC0 outline from
+       simple-icons; Windscribe's is the badge off their own site, with its
+       three fills turned into currentColor at the opacities they were drawn
+       with - so the mark keeps its two tones and still takes the colour of
+       the card it is in. -->
+  <symbol id="i-ss" viewBox="0 0 24 24"><path fill="currentColor" d="M11.47 0C7.815.2 6.3 2.293 5.872 3.43c-1.615 4.866-3.127 14.325-3.33 15.662-.201 1.31-.228 2.119-.228 2.119 0 .328.026.705.102 1.059.454 1.286 1.792 2.37 4.768 1.287a192.353 192.353 0 0 0 9.533-4.44c1.387-.807 3.227-2.32 4.236-4.312.404-.807.682-1.716.733-2.65v-.452c-.026-2.295-.052-4.692-.204-7.013 0 0-.125-1.488-.2-2.017-.076-.53-.177-.733-.177-.733C20.626.906 19.693.38 18.71.126 18.23.026 17.7.024 17.095 0Zm4.692 4.44h.252c.277 0 .48.2.48.452V6.53c0 .252-.203.455-.48.455h-.252c-1.589 0-2.875 1.26-2.875 2.8v2.498c0 2.976-2.472 5.37-5.498 5.37h-.254c-.277 0-.478-.2-.478-.452v-1.64c0-.253.226-.454.478-.454h.254c1.589 0 2.875-1.262 2.875-2.8V9.81c0-2.977 2.472-5.373 5.498-5.373z"/></symbol>
+  <symbol id="i-ws" viewBox="0 0 40 40"><path fill="currentColor" fill-opacity="0.4" fill-rule="evenodd" clip-rule="evenodd" d="M5 20L9.58333 9.58333L20 5L30.4167 9.58333L35 20H30V11.6667H25.8333L23.3333 14.1667V20H16.6667V14.1667L14.1667 11.6667H10V20H5Z"/><path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M10 11.6666V29.1666H14.5833L20 23.3333L25.4167 29.1666H30V11.6666H25.8333V24.1666L20 17.9166L14.1667 24.1666V11.6666H10Z"/><path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M32.0833 7.91677L20 2.91677L7.91666 7.91677L2.91666 20.0001L7.91666 32.0834L20 37.0834L32.0833 32.0834L37.0833 20.0001L32.0833 7.91677ZM34.1667 34.1667L20 40L5.83333 34.1667L0 20L5.83333 5.83333L20 0L34.1667 5.83333L40 20L34.1667 34.1667Z"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /> <path d="M21 3v5h-5" /> <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /> <path d="M8 16H3v5" /></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z" /></symbol>
+  <!-- Filled by CSS rather than by a second symbol: a favourite is the same
+       star with paint in it, and two glyphs of two widths in one slot moved
+       the control sideways every time it was pressed. No fill="none"
+       here, deliberately - a presentation attribute on the symbol wins over
+       anything the page inherits into it, so the star could never be filled
+       from outside. The default lives in .star__ico instead. -->
+  <symbol id="i-star" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z" /></symbol>
   <symbol id="i-arrow" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 1.8v8.4" /> <path d="M2.6 6.8 6 10.2l3.4-3.4" /></symbol>
   <symbol id="i-az" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 16 4 4 4-4" /> <path d="M7 4v16" /> <path d="M15 4h5l-5 6h5" /> <path d="M15 20v-3.5a2.5 2.5 0 0 1 5 0V20" /> <path d="M20 18h-5" /></symbol>
   <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" /> <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" /> <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" /></symbol>
@@ -51,14 +73,7 @@
 
   <header class="bar">
     <span class="bar__mark">
-      <span class="bar__logo" aria-hidden="true">
-        <svg viewBox="0 0 22 22" width="18" height="18">
-          <path d="M6.4 17.2V4.8h4.7c3 0 4.8 1.5 4.8 3.8s-1.8 3.8-4.8 3.8H6.4m4.5 0 5.2 5"
-                fill="none" stroke="currentColor" stroke-width="2"
-                stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="16.1" cy="17.4" r="1.55" fill="#4ae5c3"/>
-        </svg>
-      </span>
+      <img class="bar__logo" src="app-logo.png" alt="" aria-hidden="true">
       <span class="bar__name">RELAY</span>
     </span>
     <span class="bar__tools">
@@ -259,9 +274,12 @@
     <div class="rig__pale"></div>
     <div class="rig__edge"></div>
     <div class="rig__main" id="searchMain">
-      <input class="rig__in" id="search" type="text" placeholder="Search countries"
+      <input class="rig__in" id="search" type="text"
              autocomplete="off" spellcheck="false" aria-label="Search countries">
-      <span class="rig__fade" id="inputMask"></span>
+      <!-- The hint is ours rather than the field's, so the fade can be taken
+           off the end of the words instead of out of a fixed-width band that
+           landed across the middle of them. -->
+      <span class="rig__hint" id="inputMask" aria-hidden="true">Search countries</span>
       <span class="rig__spark" id="inputSpark"></span>
       <span class="rig__lens" aria-hidden="true">
         <svg class="ico" aria-hidden="true"><use href="#i-search"/></svg>
@@ -277,13 +295,12 @@
        asks every time and throws the answer away; this asks once and keeps
        it, so the list can be ordered by what works instead of by name. -->
   <div class="reach" id="reach">
-    <!-- An icon, because it sits beside the sort control and a word there
-         reads as a fourth way to sort. The gauge is the one in the sprite
-         that means "measure something". -->
-    <button class="icon icon--go" id="reachGo" type="button"
-            aria-label="Time every exit" title="Time every exit">
-      <svg class="ico" aria-hidden="true"><use href="#i-activity"/></svg>
-    </button>
+    <!-- The bolt that was here asked every exit in the list at once. It has
+         moved onto the rows: one per country, so the question is asked about
+         the place somebody is already looking at rather than about ninety
+         they are not. Four hundred addresses in one run is also where this
+         line starts dropping connections, which made the answers about the
+         moment rather than about the exits. -->
     <!-- Answering-first sits underneath all three: a blocked exit is not a
          good answer to "sort by name" either. -->
     <div class="pair pair--sort" id="sortBy" role="tablist">
@@ -423,37 +440,55 @@
              exits from today. -->
         <div class="use" id="acctUse">
           <span class="use__cap">Connect through</span>
+        <!-- A card each, not two lines with tick boxes in a footnote. Which
+             company carries your traffic is the largest choice in this pane
+             and it was drawn as the smallest thing in it. The tick box is
+             still what holds the state - the change event, the disabled
+             state and everything reading .checked are unchanged - it is
+             just no longer the whole of what you see. -->
           <div class="use__opts" id="useOpts">
-            <label class="use__opt">
-              <input type="checkbox" id="useSurfshark" value="surfshark">
-              <span>Surfshark</span>
-              <span class="use__n" id="useSurfsharkN">—</span>
+            <label class="prov" data-provider="surfshark">
+              <input class="prov__in" type="checkbox" id="useSurfshark" value="surfshark">
+              <svg class="prov__mark" aria-hidden="true"><use href="#i-ss"/></svg>
+              <span class="prov__name">Surfshark</span>
+              <span class="prov__n" id="useSurfsharkN">—</span>
+              <!-- The one thing to do about this provider, whatever that is
+                   this minute. Written by paintUse, hidden when the answer
+                   is "nothing". -->
+              <button class="prov__do" id="useSurfsharkDo" type="button" hidden></button>
+              <svg class="prov__tick" aria-hidden="true"><use href="#i-check"/></svg>
             </label>
-            <label class="use__opt">
-              <input type="checkbox" id="useWindscribe" value="windscribe">
-              <span>Windscribe</span>
-              <span class="use__n" id="useWindscribeN">—</span>
+            <label class="prov" data-provider="windscribe">
+              <input class="prov__in" type="checkbox" id="useWindscribe" value="windscribe">
+              <svg class="prov__mark" aria-hidden="true"><use href="#i-ws"/></svg>
+              <span class="prov__name">Windscribe</span>
+              <span class="prov__n" id="useWindscribeN">—</span>
+              <button class="prov__do" id="useWindscribeDo" type="button" hidden></button>
+              <!-- Windscribe only, and an icon rather than a row of its own:
+                   the credential behind a session goes stale and this is what
+                   fetches another without a puzzle. It belongs to this card
+                   and nowhere else, and it is rare enough that a word for it
+                   would outweigh the step you are actually here for. -->
+              <button class="prov__side" id="wsRefresh" type="button"
+                      aria-label="Refresh the Windscribe credential"
+                      title="Refresh the credential" hidden>
+                <svg class="ico ico--sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+              </button>
+              <svg class="prov__tick" aria-hidden="true"><use href="#i-check"/></svg>
             </label>
           </div>
           <p class="note" id="useSaid"></p>
         </div>
 
-        <!-- Windscribe only: the fleet is a download, not a folder of files
-             somebody already has. -->
-        <div class="pane__row" id="acctWsTools" hidden>
-          <button class="btn btn--quiet btn--auto" id="wsGet" type="button">Get Windscribe servers</button>
-          <button class="btn btn--quiet btn--auto" id="wsRefresh" type="button">Refresh credential</button>
-          <p class="note" id="wsSaid"></p>
-        </div>
-
-        <!-- Surfshark only: every config it hands out is the same eighty
-             lines with a different name in the remote line, and it
-             publishes the names. So the folder of downloads is a list this
-             app can ask for instead of one somebody fetches by hand. -->
-        <div class="pane__row" id="acctSsTools" hidden>
-          <button class="btn btn--quiet btn--auto" id="ssGet" type="button">Get Surfshark servers</button>
-          <p class="note" id="ssSaid"></p>
-        </div>
+        <!-- Both providers publish their fleet, so the folder of configs
+             somebody downloads by hand is a list this app can ask for. Those
+             two buttons used to live down here, one row each, always on
+             screen and each with a paragraph beside it. They are the cards'
+             own next step now - one per card, and only the one that is
+             actually next. Refresh credential went into the Windscribe card
+             with them, as the icon it is. Nothing is left down here but the
+             line saying how any of it went. -->
+        <p class="note" id="provSaid"></p>
       </div>
     </section>
 
@@ -461,34 +496,39 @@
 
     <section class="screen" data-screen="connection" hidden>
 
-    <!-- 2 · one line, no card. A switch is not a form. -->
+    <!-- 2 - one line, no card. A switch is not a form. -->
     <section class="pane pane--line" style="--i:1">
       <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-route"/></svg></span>
       <span class="pane__copy">
         <h3 class="pane__title">Route all of Windows</h3>
-        <p class="pane__why">Sets the Windows proxy so every program uses the
-          connection. Off, it serves on <span class="mono" id="routeAddr">127.0.0.1:8877</span>
-          and leaves the machine alone.</p>
+        <p class="pane__why">Sets the Windows proxy so every program goes
+          through the connection. Off, nothing on the machine changes and the
+          proxy simply waits on <span class="mono" id="routeAddr">127.0.0.1:8877</span>
+          for whatever is pointed at it by hand.</p>
       </span>
       <button class="toggle" id="sysProxy" type="button"
               role="switch" aria-checked="true"><span></span></button>
     </section>
 
-    <!-- 3 · the number the rest of it hangs off, sitting under the switch
+    <!-- 3 - the number the rest of it hangs off, sitting under the switch
          that decides who uses it. Editable in place rather than buried in an
          advanced pane: on a machine that already runs a proxy, 8877 is taken,
          and until this moves the app cannot connect at all.
 
-         The second paragraph is here rather than in a help page because it
-         is the difference between Telegram working and Telegram limping, and
-         nobody goes looking for a help page about a port number. -->
+         Everything true about the port and not needed in order to change it
+         is in the (i). What stays below the field is the one line that
+         changes what somebody does next, in a box of its own so it reads as
+         advice about a program rather than as a third paragraph. -->
     <section class="pane pane--line pane--stacked" id="prefPort" style="--i:2">
       <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-socket"/></svg></span>
       <span class="pane__copy">
         <h3 class="pane__title">The port it listens on</h3>
         <p class="pane__why">The proxy serves here whether Windows is routed
           or not. Move it if something else on this machine already holds
-          <span class="mono">8877</span>.</p>
+          <span class="mono">8877</span>. One port answers both
+          <span class="mono">HTTP</span> and <span class="mono">SOCKS5</span>,
+          so there is no second port and nothing to set up, and no username or
+          password either, because it only listens on this machine.</p>
         <label class="port">
           <span class="port__cap mono">127.0.0.1</span>
           <input class="field__in mono" id="listenPort" type="text"
@@ -498,22 +538,25 @@
         </label>
         <p class="note" id="portSaid"></p>
 
-        <p class="pane__why pane__why--after">This one port answers both
-          <span class="mono">HTTP</span> and <span class="mono">SOCKS5</span>
-          — whichever a program asks for, no second port and nothing to set
-          up. Browsers can use either.
-          <strong>In Telegram, choose SOCKS5.</strong> On HTTP it stops
-          tunnelling and sends a separate request per message, in the clear on
-          port 80; on SOCKS5 it keeps one connection and is measurably
-          quicker. No username or password — it only listens on this machine.</p>
+        <p class="tip">
+          <svg class="ico" aria-hidden="true"><use href="#i-info"/></svg>
+          <span>Setting this up in <b>Telegram</b>? Pick <b>SOCKS5</b> rather
+            than HTTP. Same port, and it holds one connection open instead of
+            sending every message separately in the clear.</span>
+        </p>
       </span>
     </section>
 
-    <!-- 4 · a path and two verbs -->
-    <!-- 4 · the server of your own. Its own pane rather than a line, because
+    <!-- 4 - the server of your own. Its own pane rather than a line, because
          unlike everything above it this one cannot be answered by choosing:
          there is a machine to set up first, and a pane that says so is
-         cheaper than a switch that silently does nothing. -->
+         cheaper than a switch that silently does nothing.
+
+         It is two jobs done in two places - one on a server over SSH, one in
+         this window - and as a single column of prose and fields there was
+         nothing to say which half you were looking at. So each half is boxed,
+         captioned with where it happens, and keeps its own (i) for the part
+         that only matters the first time. -->
     <section class="pane pane--gate" id="prefTunnel" style="--i:3">
       <div class="pane__head">
         <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg></span>
@@ -522,72 +565,90 @@
       </div>
       <p class="pane__why">A server you rent, reached through a CDN, carrying
         the traffic instead of the provider's proxy. It is here because the
-        provider's stopped carrying <b>uploads</b> — measured on this line, the
-        same file went up at 1&#8209;10&nbsp;Mbit with half the attempts dying,
-        and 40&#8209;80&nbsp;Mbit through a tunnel.</p>
+        provider's stopped carrying <b>uploads</b> &mdash; measured on this
+        line, the same file went up at 1&#8209;10&nbsp;Mbit with half the
+        attempts dying, and 40&#8209;80&nbsp;Mbit through a tunnel.</p>
+      <p class="pane__skip">Nothing to do here unless you rent a server and
+        own a domain.</p>
 
       <div class="pane__body">
-        <p class="lede"><svg class="ico" aria-hidden="true"><use href="#i-tower"/></svg>Once, on the server</p>
-        <p class="pane__why pane__why--tight">Point a domain at it on Cloudflare
-          with the cloud <b>on</b>, then paste this into an SSH session as
-          <b>root</b>. Safe to run twice, leaves other sites on the box alone,
-          and prints the two passwords below when it finishes.</p>
-        <div class="pane__row pane__row--code">
-          <code class="path path--flush mono" id="tunnelCmd">install-server.sh yourdomain.com &lt;surfshark-user&gt; &lt;surfshark-pass&gt;</code>
-          <button class="btn btn--quiet btn--auto" id="tunnelCopy" type="button">Copy</button>
+        <div class="step">
+          <p class="step__cap">
+            <svg class="ico" aria-hidden="true"><use href="#i-tower"/></svg>
+            <span>On the server, once</span>
+          </p>
+          <p class="pane__why">Point a domain at the server on Cloudflare with
+            the cloud <b>on</b>, then paste this into an SSH session as
+            <b>root</b>. Copy takes the whole installer rather than just this
+            line, so it is one paste with nothing to upload first. Safe to run
+            twice, it leaves other sites on the box alone, and it prints the
+            two passwords when it finishes.</p>
+          <div class="pane__row pane__row--code">
+            <code class="path path--flush mono" id="tunnelCmd">install-server.sh yourdomain.com &lt;surfshark-user&gt; &lt;surfshark-pass&gt;</code>
+            <button class="btn btn--quiet btn--auto" id="tunnelCopy" type="button">Copy</button>
+          </div>
+          <p class="note" id="tunnelCmdNote">Put your Surfshark username and
+            password where the brackets are.</p>
         </div>
-        <p class="note" id="tunnelCmdNote">Copy takes the whole installer, not
-          just this line — one paste, nothing to upload first. Fill your
-          Surfshark username and password in where the brackets are.</p>
 
-        <p class="lede"><svg class="ico" aria-hidden="true"><use href="#i-socket"/></svg>Then, here</p>
-        <p class="pane__why pane__why--tight">Both are made by the installer and
-          printed at the end. The <b>tunnel</b> one keeps strangers who find the
-          domain from using it as an open proxy; the <b>API</b> one is what lets
-          this window change the exit country. Lost them? They are on the server
-          in <span class="mono">/etc/gost/tunnel.pw</span> and
-          <span class="mono">/etc/gost/api.pw</span>.</p>
-        <label class="field">
-          <span class="field__cap">Domain</span>
-          <input class="field__in mono" id="tunnelDomain" type="text"
-                 placeholder="yourdomain.com" autocomplete="off"
-                 autocapitalize="off" spellcheck="false">
-        </label>
-        <label class="field">
-          <span class="field__cap">Tunnel password</span>
-          <span class="field__pair">
-            <input class="field__in mono" id="tunnelPass" type="password" placeholder="not set"
-                   autocomplete="off" spellcheck="false">
-            <button class="field__peek" id="tunnelPeek" type="button"
-                    aria-pressed="false" aria-label="Show the password">
-              <svg class="ico" aria-hidden="true"><use href="#i-eye"/></svg>
-            </button>
-          </span>
-        </label>
-        <label class="field">
-          <span class="field__cap">API password</span>
-          <span class="field__pair">
-            <input class="field__in mono" id="tunnelApi" type="password" placeholder="not set"
-                   autocomplete="off" spellcheck="false">
-            <button class="field__peek" id="tunnelApiPeek" type="button"
-                    aria-pressed="false" aria-label="Show the password">
-              <svg class="ico" aria-hidden="true"><use href="#i-eye"/></svg>
-            </button>
-          </span>
-        </label>
-        <!-- The third button is for the failure that reads like a broken
-             server and is not. The domain is reached through a CDN, and the
-             addresses it hands out get filtered here; any other address of
-             theirs that carries the domain does the job instead. Test looks
-             for one on its own when that is what went wrong - this is for
-             forcing it. -->
-        <div class="pane__row">
-          <button class="btn btn--quiet btn--auto" id="tunnelSave" type="button">Save</button>
-          <button class="btn btn--quiet btn--auto" id="tunnelTest" type="button">Test</button>
-          <button class="btn btn--quiet btn--auto" id="tunnelScan" type="button">Find a way in</button>
+        <div class="step">
+          <p class="step__cap">
+            <svg class="ico" aria-hidden="true"><use href="#i-socket"/></svg>
+            <span>Back in this window</span>
+          </p>
+          <p class="pane__why">Both passwords are made by the installer and
+            printed when it finishes. The <b>tunnel</b> one stops strangers who
+            find the domain using it as an open proxy; the <b>API</b> one is
+            what lets this window change the exit country. Lost them? They are
+            on the server in <span class="mono">/etc/gost/tunnel.pw</span> and
+            <span class="mono">/etc/gost/api.pw</span>.</p>
+          <label class="field">
+            <span class="field__cap">Domain</span>
+            <input class="field__in mono" id="tunnelDomain" type="text"
+                   placeholder="yourdomain.com" autocomplete="off"
+                   autocapitalize="off" spellcheck="false">
+          </label>
+          <label class="field">
+            <span class="field__cap">Tunnel password</span>
+            <span class="field__pair">
+              <input class="field__in mono" id="tunnelPass" type="password" placeholder="not set"
+                     autocomplete="off" spellcheck="false">
+              <button class="field__peek" id="tunnelPeek" type="button"
+                      aria-pressed="false" aria-label="Show the password">
+                <svg class="ico" aria-hidden="true"><use href="#i-eye"/></svg>
+              </button>
+            </span>
+          </label>
+          <label class="field">
+            <span class="field__cap">API password</span>
+            <span class="field__pair">
+              <input class="field__in mono" id="tunnelApi" type="password" placeholder="not set"
+                     autocomplete="off" spellcheck="false">
+              <button class="field__peek" id="tunnelApiPeek" type="button"
+                      aria-pressed="false" aria-label="Show the password">
+                <svg class="ico" aria-hidden="true"><use href="#i-eye"/></svg>
+              </button>
+            </span>
+          </label>
+          <div class="pane__row pane__row--acts">
+            <button class="btn btn--quiet btn--auto" id="tunnelSave" type="button">Save</button>
+            <button class="btn btn--quiet btn--auto" id="tunnelTest" type="button">Test</button>
+          </div>
           <p class="note" id="tunnelSaid"></p>
+          <p class="note note--dim" id="tunnelWayIn" hidden></p>
+          <!-- The third button is for the failure that reads like a broken
+               server and is not. The domain is reached through a CDN, and the
+               addresses it hands out get filtered here; any other address of
+               theirs that carries the domain does the job instead. Test looks
+               for one on its own when that is what went wrong - this is for
+               forcing it, which is why it now sits under the two that are
+               pressed every time rather than beside them, saying when to
+               press it instead of naming an operation. -->
+          <button class="btn btn--bare" id="tunnelScan" type="button">
+            <svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>
+            <span>Test says it cannot be reached? Find another way in</span>
+          </button>
         </div>
-        <p class="pane__why pane__why--tight" id="tunnelWayIn" hidden></p>
       </div>
     </section>
 
@@ -597,9 +658,9 @@
         <h3 class="pane__title">Server folder</h3>
         <span class="pill pill--quiet" id="folderCount"></span>
       </div>
-      <p class="path mono" id="folderPath">—</p>
+      <p class="path mono" id="folderPath">&mdash;</p>
       <div class="pane__row">
-        <button class="btn btn--quiet btn--auto" id="chooseFolder" type="button">Choose folder…</button>
+        <button class="btn btn--quiet btn--auto" id="chooseFolder" type="button">Choose folder&hellip;</button>
         <button class="btn btn--quiet btn--auto" id="resetFolder" type="button">Use default</button>
       </div>
     </section>
@@ -736,73 +797,127 @@
         <button class="btn btn--quiet btn--auto" id="sweepPick" type="button">Another folder…</button>
       </div>
 
-      <!-- The route is the first choice because it changes what the rest of
-           the pane means. A time taken by dialling an exit from this line is
-           a time for a leg nothing uses once the tunnel is in - and the two
-           disagree in practice, not in theory. -->
-      <p class="lede"><svg class="ico ico--sm" aria-hidden="true"><use href="#i-route"/></svg>Which leg to measure</p>
-      <ul class="scope" id="sweepRoute">
-        <li><button class="scope__row" type="button" data-route="provider" aria-pressed="true">
-          <span class="scope__name">Straight at the exit</span>
-          <span class="scope__why">dialled from this line. Takes your connection down and up once per server, and needs administrator</span>
-          <span class="scope__count">—</span></button></li>
-        <li><button class="scope__row" type="button" data-route="server+exit" aria-pressed="false">
-          <span class="scope__name">Through your server, out at the exit</span>
-          <span class="scope__why">the leg your traffic actually takes now. Nothing disconnects, one at a time</span>
-          <span class="scope__count">—</span></button></li>
-        <li><button class="scope__row" type="button" data-route="server" aria-pressed="false">
-          <span class="scope__name">Your server itself</span>
-          <span class="scope__why">one address, so one row rather than a folder</span>
-          <span class="scope__count">—</span></button></li>
-      </ul>
-      <p class="pane__why pane__why--tight" id="routeSaid"></p>
+      <!-- Four decisions, and until now four open lists stacked on top of
+           each other: three routes, four groupings, a row of companies and a
+           field of sites, each with its own paragraph. All of it was on
+           screen and none of it was legible - somebody who came to change one
+           of the four had to read all four to find which.
 
-      <!-- The counts are the decision, so they sit on the choices rather than
-           in a sentence underneath them. -->
-      <p class="lede"><svg class="ico ico--sm" aria-hidden="true"><use href="#i-layers"/></svg>How many of them</p>
-      <ul class="scope" id="sweepScope">
-        <li><button class="scope__row" type="button" data-scope="all" aria-pressed="true">
-          <span class="scope__name">Every address</span>
-          <span class="scope__why">the whole folder</span>
-          <span class="scope__count">—</span></button></li>
-        <li><button class="scope__row" type="button" data-scope="location" aria-pressed="false">
-          <span class="scope__name">One per location</span>
-          <span class="scope__why">a hostname resolves to several, and you got a file for each</span>
-          <span class="scope__count">—</span></button></li>
-        <li><button class="scope__row" type="button" data-scope="company-location" aria-pressed="false">
-          <span class="scope__name">One per company, per location</span>
-          <span class="scope__why">HostRoyale in Paris says nothing about HostRoyale in Lisbon</span>
-          <span class="scope__count">—</span></button></li>
-        <li><button class="scope__row" type="button" data-scope="company" aria-pressed="false">
-          <span class="scope__name">One per company</span>
-          <span class="scope__why">the quickest answer to whose addresses still work</span>
-          <span class="scope__count">—</span></button></li>
-      </ul>
+           So each one is shut, and each says its own answer. Reading the four
+           lines is reading what the run is about to do, which is the question
+           actually being asked at the moment you reach for Start. Open one
+           and the choice is exactly where it was. -->
+      <div class="folds" id="sweepFolds">
 
-      <p class="lede"><svg class="ico ico--sm" aria-hidden="true"><use href="#i-building"/></svg>Who they are rented from</p>
-      <p class="pane__why pane__why--tight">Being blocked is mostly a property
-        of the company rather than of the address — a site that refuses the
-        first M247 address usually refuses the rest. Pick none and all of them
-        are swept.</p>
-      <ul class="chips" id="sweepLords"></ul>
-      <p class="note" id="lordsSaid"></p>
-      <div class="pane__row" id="lookUpRow" hidden>
-        <button class="btn btn--quiet btn--auto" id="lookUpOwners" type="button">
-          <svg class="ico ico--sm" aria-hidden="true"><use href="#i-tower"/></svg>Look the rest up</button>
+      <section class="fold" data-fold="route">
+        <button class="fold__cap" type="button" aria-expanded="false">
+          <svg class="ico fold__ico" aria-hidden="true"><use href="#i-route"/></svg>
+          <span class="fold__what">Which leg to measure</span>
+          <span class="fold__now" id="routeNow">&mdash;</span>
+          <span class="fold__side" id="routeSide"></span>
+          <svg class="ico fold__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
+        </button>
+        <div class="fold__body">
+          <!-- The route is the first choice because it changes what the rest
+               of the pane means. A time taken by dialling an exit from this
+               line is a time for a leg nothing uses once the tunnel is in -
+               and the two disagree in practice, not in theory. -->
+          <ul class="scope" id="sweepRoute">
+            <li><button class="scope__row" type="button" data-route="provider" aria-pressed="true">
+              <span class="scope__name">Straight at the exit</span>
+              <span class="scope__why">dialled from this line. Takes your connection down and up once per server, and needs administrator</span>
+              <span class="scope__count">&mdash;</span></button></li>
+            <li><button class="scope__row" type="button" data-route="server+exit" aria-pressed="false">
+              <span class="scope__name">Through your server, out at the exit</span>
+              <span class="scope__why">the leg your traffic actually takes now. Nothing disconnects, one at a time</span>
+              <span class="scope__count">&mdash;</span></button></li>
+            <li><button class="scope__row" type="button" data-route="server" aria-pressed="false">
+              <span class="scope__name">Your server itself</span>
+              <span class="scope__why">one address, so one row rather than a folder</span>
+              <span class="scope__count">&mdash;</span></button></li>
+          </ul>
+          <p class="pane__why pane__why--tight" id="routeSaid"></p>
+        </div>
+      </section>
+
+      <section class="fold" data-fold="scope">
+        <button class="fold__cap" type="button" aria-expanded="false">
+          <svg class="ico fold__ico" aria-hidden="true"><use href="#i-layers"/></svg>
+          <span class="fold__what">How many of them</span>
+          <span class="fold__now" id="scopeNow">&mdash;</span>
+          <span class="fold__side" id="scopeSide"></span>
+          <svg class="ico fold__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
+        </button>
+        <div class="fold__body">
+          <!-- The counts are the decision, so they sit on the choices rather
+               than in a sentence underneath them. -->
+          <ul class="scope" id="sweepScope">
+            <li><button class="scope__row" type="button" data-scope="all" aria-pressed="true">
+              <span class="scope__name">Every address</span>
+              <span class="scope__why">the whole folder</span>
+              <span class="scope__count">&mdash;</span></button></li>
+            <li><button class="scope__row" type="button" data-scope="location" aria-pressed="false">
+              <span class="scope__name">One per location</span>
+              <span class="scope__why">a hostname resolves to several, and you got a file for each</span>
+              <span class="scope__count">&mdash;</span></button></li>
+            <li><button class="scope__row" type="button" data-scope="company-location" aria-pressed="false">
+              <span class="scope__name">One per company, per location</span>
+              <span class="scope__why">HostRoyale in Paris says nothing about HostRoyale in Lisbon</span>
+              <span class="scope__count">&mdash;</span></button></li>
+            <li><button class="scope__row" type="button" data-scope="company" aria-pressed="false">
+              <span class="scope__name">One per company</span>
+              <span class="scope__why">the quickest answer to whose addresses still work</span>
+              <span class="scope__count">&mdash;</span></button></li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="fold" data-fold="lords">
+        <button class="fold__cap" type="button" aria-expanded="false">
+          <svg class="ico fold__ico" aria-hidden="true"><use href="#i-building"/></svg>
+          <span class="fold__what">Who they are rented from</span>
+          <span class="fold__now" id="lordsNow">&mdash;</span>
+          <span class="fold__side" id="lordsSide"></span>
+          <svg class="ico fold__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
+        </button>
+        <div class="fold__body">
+          <p class="pane__why pane__why--tight">Being blocked is mostly a
+            property of the company rather than of the address &mdash; a site that
+            refuses the first M247 address usually refuses the rest. Pick none
+            and all of them are swept.</p>
+          <ul class="chips" id="sweepLords"></ul>
+          <p class="note" id="lordsSaid"></p>
+          <div class="pane__row" id="lookUpRow" hidden>
+            <button class="btn btn--quiet btn--auto" id="lookUpOwners" type="button">
+              <svg class="ico ico--sm" aria-hidden="true"><use href="#i-tower"/></svg>Look the rest up</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="fold" data-fold="sites">
+        <button class="fold__cap" type="button" aria-expanded="false">
+          <svg class="ico fold__ico" aria-hidden="true"><use href="#i-globe"/></svg>
+          <span class="fold__what">Sites to check from each exit</span>
+          <span class="fold__now" id="sitesNow">&mdash;</span>
+          <span class="fold__side" id="sitesSide"></span>
+          <svg class="ico fold__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
+        </button>
+        <div class="fold__body">
+          <label class="field">
+            <input class="field__in mono" id="sweepSites" type="text"
+                   placeholder="chatgpt.com, youtube.com"
+                   autocomplete="off" autocapitalize="off" spellcheck="false">
+          </label>
+          <p class="pane__why pane__why--tight">Cloudflare's rules are set per
+            customer, so <i>clean</i> is a statement about Cloudflare and not
+            about the web &mdash; an exit that serves it happily can still hand
+            you a challenge page on the one site you opened this for. Each name
+            here gets a folder of the servers that really served it.</p>
+          <ul class="chips" id="siteFolders" hidden></ul>
+        </div>
+      </section>
+
       </div>
-
-      <p class="lede"><svg class="ico ico--sm" aria-hidden="true"><use href="#i-globe"/></svg>Sites to check from each exit</p>
-      <label class="field">
-        <input class="field__in mono" id="sweepSites" type="text"
-               placeholder="chatgpt.com, youtube.com"
-               autocomplete="off" autocapitalize="off" spellcheck="false">
-      </label>
-      <p class="pane__why pane__why--tight">Cloudflare's rules are set per
-        customer, so <i>clean</i> is a statement about Cloudflare and not about
-        the web — an exit that serves it happily can still hand you a challenge
-        page on the one site you opened this for. Each name here gets a folder
-        of the servers that really served it.</p>
-      <ul class="chips" id="siteFolders" hidden></ul>
 
       <div class="pane__go">
         <div class="btn-shell">

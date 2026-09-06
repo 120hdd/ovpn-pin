@@ -142,12 +142,75 @@ def _url(path, extra=None):
     return f'{API}/{path}?{urllib.parse.urlencode(query)}'
 
 
+class _NotJson(Exception):
+    """A body Windscribe did not write, so nothing of theirs is in it."""
+
+    def __init__(self, status, ctype):
+        super().__init__(f'{status} {ctype}')
+        self.status = status
+        self.ctype = ctype
+
+
 def _read(response):
     raw = response.read().decode('utf-8', 'replace')
     try:
         return json.loads(raw)
     except ValueError:
-        raise ApiError('Windscribe answered with something that is not JSON.')
+        raise _NotJson(getattr(response, 'status', None)
+                       or getattr(response, 'code', None),
+                       response.headers.get('Content-Type', ''))
+
+
+def _blocked(e):
+    """What to say about a page that came back instead of an answer.
+
+    Always the same shape, and the thing to do about it is not guessable: a
+    403 carrying HTML is Cloudflare refusing the line this app is running on,
+    which is what an address in Iran gets. The API itself is fine - the same
+    request, sent from an exit, answers with JSON - so the order is connect
+    first and sign in second.
+
+    "Windscribe answered with something that is not JSON" was true and sent
+    people to look at their password, which is the one thing that was right.
+    """
+    if e.status == 403 and 'html' in (e.ctype or ''):
+        return ApiError(
+            'Windscribe never saw this - a block page came back instead of '
+            'an answer. Their API refuses this line. Connect through '
+            'Surfshark or your own tunnel first, then sign in.')
+    return ApiError(
+        f'Windscribe answered {e.status or "?"} with {e.ctype or "no type"} '
+        'rather than an answer, so the request did not reach them.')
+
+
+# Around whatever proxy this machine is set to, for the attempt that does not
+# go through it. An opener with an empty ProxyHandler is how urllib is told
+# "not through that".
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _routes():
+    """The ways out of this machine, best first.
+
+    Through the proxy first when there is one, because when this app is
+    connected that proxy is this app - so the request leaves through the
+    tunnel and the censored line never sees api.windscribe.com. Then around
+    it, because a proxy in the Windows settings is not a promise that
+    anything is listening on it, and this app's own is down whenever it is
+    not connected, which is most of the time.
+
+    Same shape as surfshark._routes, and needed more here. That list is
+    public and merely blocked; this is a login, and the line most likely to
+    be running this app is the one Cloudflare turns away - measured: the
+    login POST answers 403 with a Cloudflare page direct from here, and
+    proper JSON through an exit.
+
+    Neither route is the good one and the order is not a ranking. The server
+    list measures the other way round on the same machine - 403 through the
+    proxy, 200 direct - so what matters is that both are tried and the one
+    that answers wins.
+    """
+    return [True, False] if urllib.request.getproxies() else [False]
 
 
 def _call(url, payload=None):
@@ -172,16 +235,35 @@ def _call(url, payload=None):
         data = json.dumps(payload).encode()
         headers['Content-Type'] = 'text/plain;charset=UTF-8'
 
-    request = urllib.request.Request(url, data=data, headers=headers)
-    try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-            body = _read(response)
-    except urllib.error.HTTPError as e:
-        body = _read(e)
-    except urllib.error.URLError as e:
-        raise ApiError(f'Could not reach Windscribe: {e.reason}')
-    except (OSError, ssl.SSLError) as e:
-        raise ApiError(f'Could not reach Windscribe: {e}')
+    body = None
+    trouble = None
+    for proxied in _routes():
+        opener = urllib.request.urlopen if proxied else _DIRECT.open
+        request = urllib.request.Request(url, data=data, headers=headers)
+        try:
+            try:
+                with opener(request, timeout=TIMEOUT) as response:
+                    body = _read(response)
+            except urllib.error.HTTPError as e:
+                body = _read(e)
+        except _NotJson as e:
+            # Not a retry of the login, which this file does not do. A body
+            # Windscribe did not write is proof the request never reached
+            # them, so there is no attempt on the account to repeat - and a
+            # real refusal, wrong password included, arrives as JSON and
+            # stops here on the first route.
+            trouble = _blocked(e)
+            continue
+        except urllib.error.URLError as e:
+            trouble = ApiError(f'Could not reach Windscribe: {e.reason}')
+            continue
+        except (OSError, ssl.SSLError) as e:
+            trouble = ApiError(f'Could not reach Windscribe: {e}')
+            continue
+        break
+
+    if body is None:
+        raise trouble or ApiError('Could not reach Windscribe.')
 
     if isinstance(body, dict) and body.get('errorCode') is not None:
         code = body.get('errorCode')
@@ -538,13 +620,31 @@ def servers(timeout=TIMEOUT):
     this repo is built for: resolving them honestly and pinning the result is
     machinery that already exists.
     """
-    request = urllib.request.Request(
-        SERVER_LIST, headers={'Accept': 'application/json'})
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            body = json.loads(response.read().decode('utf-8', 'replace'))
-    except (OSError, ValueError, ssl.SSLError) as e:
-        raise ApiError(f'Could not fetch the Windscribe server list: {e}')
+    # Both ways out, for the reason in _routes, and measured here rather than
+    # assumed: on the line this was written on the proxied request answers
+    # 403 and the direct one answers 200 - the reverse of the login, which is
+    # refused direct and answered through an exit. Neither route is the good
+    # one; the one that answers is. Going through the system proxy alone,
+    # which is all this did, is how signing in successfully was still
+    # followed by "could not fetch the server list".
+    #
+    # A 403 arrives as HTTPError, which is an OSError, so it falls into the
+    # same handler and moves on to the next route rather than ending here.
+    trouble = None
+    for proxied in _routes():
+        opener = urllib.request.urlopen if proxied else _DIRECT.open
+        request = urllib.request.Request(
+            SERVER_LIST, headers={'Accept': 'application/json'})
+        try:
+            with opener(request, timeout=timeout) as response:
+                body = json.loads(response.read().decode('utf-8', 'replace'))
+            break
+        except (OSError, ValueError, ssl.SSLError) as e:
+            trouble = e
+    else:
+        raise ApiError('Could not fetch the Windscribe server list: '
+                       f'{trouble}. If that is a 403, their API is refusing '
+                       'this line - connect first, then fetch.')
 
     entries = []
     for country in body.get('data') or []:

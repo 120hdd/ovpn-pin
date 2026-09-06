@@ -456,6 +456,21 @@ window.__audit = (function () {
       }
       var dir = col > row ? 'col' : row > col ? 'row' : null;
 
+      /* A wrapped run is neither. Six chips flowing onto four lines have
+       * both kinds of neighbour - one beside, three below - and read as a
+       * column by majority, at which point every question a column gets
+       * asked is the wrong one: the right edges of two chips with different
+       * names in them are meant to differ, the "gap" between two on the same
+       * line is a negative number, and the count inside each is not a column
+       * at all. Left in, this reported eight faults against a row of
+       * companies that was laid out exactly as intended.
+       *
+       * Only overlap is asked of these, and it is asked above this line,
+       * where it belongs: two chips on the same pixels is still wrong. */
+      var wrapped = /flex|grid/.test(pcs.display)
+        && /wrap/.test(pcs.flexWrap) && col > 0 && row > 0;
+      if (wrapped) return;
+
       /* Overlap. Two siblings in flow on the same pixels is a layout that
        * has collapsed - something is taller than its parent believes, or a
        * negative margin went the wrong way. */

@@ -529,7 +529,16 @@ void main() {
 
       function frame(now) {
         requestAnimationFrame(frame);
-        if (document.hidden) { last = 0; return; }
+        // A hidden document is not the only thing this cannot be seen
+        // through. The sheets are full-screen opaque dialogs, so with one
+        // open there is a sphere being redrawn every frame behind something
+        // nobody can see it through - and the blur on the card underneath
+        // gets recomposited with it. That was most of why the settings
+        // screens did not scroll smoothly. app.js keeps the flag.
+        if (document.hidden || document.body.dataset.covered === '1') {
+          last = 0;
+          return;
+        }
         if (!last) { last = now; return; }
         const dt = Math.min(now - last, 100) / 1000;
         last = now;

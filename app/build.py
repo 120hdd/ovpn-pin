@@ -39,6 +39,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -46,8 +47,149 @@ DIST = os.path.join(ROOT, 'dist')
 WORK = os.path.join(ROOT, 'build')
 NAME = 'Relay'
 
+# The stash the run in progress is holding, so the failure path at the
+# bottom of this file can hand it back. Module scope because main() is
+# where it is taken and __main__ is where a crash is caught.
+_KEPT = None
+
 # Where the .ovpn files come from, in the order the app itself looks.
 SERVER_SOURCES = ('servers', 'success', 'pinned')
+
+# What belongs to whoever has been using the app rather than to the build.
+# dist/ is deleted whole on every run - PyInstaller wants that folder to
+# itself - and every one of these lives inside it, so a rebuild used to take
+# the tunnel domain, the accounts roster and the Windscribe session with it.
+# Surfshark looked like it survived, but only because .ovpn-auth happens to
+# be copied back out of the repo below; nothing else had a copy anywhere.
+#
+# Deliberately a list rather than "everything in .state". A copy that was
+# killed leaves proxy.state, proxy.log and system-proxy-before.json behind,
+# and those describe a process and a set of registry values from a copy that
+# no longer exists - carried forward, a fresh build inherits the last one's
+# wreckage and offers to "restore" Windows proxy settings nobody set.
+#
+# The folders are on the list for the same reason as the files, and it is the
+# more expensive half: pinned/ is minutes of resolving and knocking on
+# addresses, success/ is an hour of sweeping, and neither is written by
+# anything but the person using the app. A build deleted them and the app
+# came back up saying "none pinned" beside a provider that had been pinned an
+# hour earlier - which is exactly the report this list exists to answer.
+KEEP = (
+    '.state/settings.json',        # the port, the pick, and the tunnel domain
+    '.state/accounts.json',        # the roster, sealed to this Windows account
+    '.state/windscribe.json',      # a session that cost a captcha to get
+    '.state/windscribe-meta.json',
+    '.state/surfshark-meta.json',
+    '.state/reach.json',           # what the last timing run measured
+    '.state/owners.tsv',           # fallback only, as with .ovpn-auth below
+    '.state/tunnel',               # which CDN addresses answered, and when
+    '.windscribe-auth',            # what opens Windscribe's exits
+    '.ovpn-auth',                  # fallback only - see restore_user_data
+    'pinned',                      # what a pin run resolved - minutes of it
+    'success',                     # and what a sweep measured
+    'windscribe',                  # the fetched fleet, waiting to be pinned
+    'configs',                     # whatever was dropped in the inbox by hand
+    'servers',                     # the shipped set, plus anything added to it
+)
+
+
+def _count(path):
+    """Files at or under this path, so a merge can report what it added."""
+    if os.path.isfile(path):
+        return 1
+    return sum(len(files) for _, _, files in os.walk(path)) \
+        if os.path.isdir(path) else 0
+
+
+def _lift(src, dst):
+    """Copy one entry across, merging rather than replacing a folder.
+
+    All-or-nothing per path was wrong for the folders the build fills as
+    well: it creates configs/ and servers/ out of the repo, so a whole
+    carried folder was skipped as "already there" and everything the person
+    had added to it went anyway. File by file, and whatever the build wrote
+    wins, so both halves survive.
+    """
+    if os.path.isdir(src):
+        for root, _, files in os.walk(src):
+            here = os.path.join(dst, os.path.relpath(root, src)) \
+                if root != src else dst
+            os.makedirs(here, exist_ok=True)
+            for f in files:
+                target = os.path.join(here, f)
+                if not os.path.exists(target):
+                    shutil.copy2(os.path.join(root, f), target)
+        return
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    if not os.path.exists(dst):
+        shutil.copy2(src, dst)
+
+
+def app_is_running():
+    """Whether the built app is up, which decides whether this can start.
+
+    Windows will not let a running executable be opened for writing, and that
+    is a sharper test than a name in the process list: it answers about this
+    exact file rather than about anything called Relay.exe. Renaming is not
+    the test - Windows allows a running exe to be renamed, so that answered
+    "free" every time and was worse than no check at all.
+
+    It matters because the failure is silent and expensive. rmtree is passed
+    ignore_errors, so a build started with the app open deletes everything it
+    can, leaves the one file it cannot, and carries on into PyInstaller - and
+    what it deleted is the servers, the credentials and the pinned exits.
+    """
+    exe = os.path.join(DIST, NAME, f'{NAME}.exe')
+    if not os.path.isfile(exe):
+        return False
+    try:
+        open(exe, 'r+b').close()
+        return False
+    except OSError:
+        return True
+
+
+def stash_user_data():
+    """Take the last build's own files somewhere the delete cannot reach."""
+    out = os.path.join(DIST, NAME)
+    if not os.path.isdir(out):
+        return None
+    keep = tempfile.mkdtemp(prefix='relay-keep-')
+    saved = 0
+    for rel in KEEP:
+        src = os.path.join(out, rel.replace('/', os.sep))
+        if os.path.exists(src):
+            _lift(src, os.path.join(keep, rel.replace('/', os.sep)))
+            saved += 1
+    if not saved:
+        shutil.rmtree(keep, ignore_errors=True)
+        return None
+    return keep
+
+
+def restore_user_data(keep, out):
+    """Put them back, without overwriting what this build has just written.
+
+    The build copies a fresh .ovpn-auth and owners.tsv out of the repo, and
+    those are the newer answer. So anything already in place wins and this is
+    only the fallback - which is what makes it safe to keep .ovpn-auth on the
+    list at all.
+    """
+    if not keep:
+        return
+    put = []
+    for rel in KEEP:
+        src = os.path.join(keep, rel.replace('/', os.sep))
+        dst = os.path.join(out, rel.replace('/', os.sep))
+        if not os.path.exists(src):
+            continue
+        before = _count(dst)
+        _lift(src, dst)
+        gained = _count(dst) - before
+        if gained:
+            put.append(f'{rel} ({gained})' if gained > 1 else rel)
+    shutil.rmtree(keep, ignore_errors=True)
+    print('carried over: ' + (', '.join(put) if put else 'nothing to carry'))
 
 
 def find_servers():
@@ -126,7 +268,23 @@ def main():
     # its log sits inside dist/. PyInstaller cleans that folder itself and
     # fails on the open handle with a permission error naming a file nobody
     # would connect to a build - so it is said here, where it can be acted on.
+    # Before anything is touched. A build started while the app is open takes
+    # dist/ apart, cannot remove the one file it is really after, and fails
+    # somewhere later with a message about PyInstaller - by which point the
+    # servers, the credentials and every pinned exit are gone.
+    if app_is_running():
+        raise SystemExit(
+            'Relay is running, and a build deletes the folder it is running\n'
+            'from. Quit it from its tray icon first, then build.')
+
     stop_tunnel_client()
+
+    # Out of the way before the delete, back in after it. Everything the last
+    # build's app was told - the account, the tunnel domain, the session -
+    # lives in the folder that is about to go.
+    kept = stash_user_data()
+    global _KEPT
+    _KEPT = kept
 
     for path in (DIST, WORK):
         shutil.rmtree(path, ignore_errors=True)
@@ -276,6 +434,11 @@ def main():
     else:
         print('credentials: .ovpn-auth NOT FOUND - the app cannot connect')
 
+    # Last, so that everything the repo had to give is already in place and
+    # this only fills the gaps it left.
+    restore_user_data(kept, out)
+    _KEPT = None                 # handed back; the failure path is done
+
     # -- remove the decoy --------------------------------------------------
 
     # PyInstaller leaves its own Relay.exe in the working folder. It looks
@@ -296,4 +459,19 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except BaseException:
+        # A build that falls over after the delete has already taken dist/
+        # apart, and the only copy of what was in it is a temp folder nobody
+        # has been told about. That is not hypothetical: a build started with
+        # the app still running deleted 352 pinned exits, the credentials and
+        # the accounts roster, failed on the one file it could not remove,
+        # and left all of it under %TEMP% where the person who lost it had no
+        # reason to look. app_is_running() stops that particular way in; this
+        # is for every other way, including Ctrl-C.
+        if _KEPT:
+            print()
+            print('build failed - putting your files back.')
+            restore_user_data(_KEPT, os.path.join(DIST, NAME))
+        raise

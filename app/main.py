@@ -420,13 +420,40 @@ class Api:
         which is a chooser nobody can act on.
         """
         counts = self._engine.counts_by_provider()
+        waiting = self._unpinned_by_provider()
         roster = accounts.listing()
         out = {}
         for name in accounts.PROVIDERS:
             servers = counts.get(name, 0)
             signed = any(a['provider'] == name and a['signedIn'] for a in roster)
             out[name] = {'servers': servers, 'account': signed,
+                         'waiting': waiting.get(name, 0),
                          'usable': bool(servers) and signed}
+        return out
+
+    @staticmethod
+    def _unpinned_by_provider():
+        """Configs fetched but not pinned yet, per provider.
+
+        The one thing the pane could not tell apart. "Nothing to connect
+        through" and "three hundred of them, one run away" both came out as
+        "none pinned", so the card that had a next step and the card that had
+        a problem read identically - and the next step was a folder picker in
+        another screen either way.
+
+        Counted off the filename, which is where every other part of this app
+        reads a provider from, rather than by asking each provider what it
+        thinks it wrote.
+        """
+        out = {}
+        for name, folder, mark in (
+                (accounts.WINDSCRIBE, windscribe.CONFIG_DIR, '.ws.'),
+                (accounts.SURFSHARK, pin.source_dir(), '.prod.')):
+            try:
+                out[name] = sum(1 for f in os.listdir(folder)
+                                if f.endswith('.ovpn') and mark in f)
+            except OSError:
+                out[name] = 0
         return out
 
     def _usable_providers(self):
@@ -935,7 +962,21 @@ class Api:
         except OSError as e:
             return {'ok': False,
                     'error': f'Could not write into {windscribe.CONFIG_DIR}: {e}'}
+
+        # And point the pinning inbox at what was just written.
+        #
+        # The page says "pin them next - the Servers group below does it",
+        # and until this line that group was still pointed at configs/, which
+        # is Surfshark's inbox. Pressing Start there re-pinned Surfshark and
+        # left Windscribe with nothing pinned - so its box stayed grey saying
+        # "none pinned" directly under a roster showing it signed in, and the
+        # only way through was to know the folder existed and walk the picker
+        # to it. The instruction and the control now agree.
+        self._settings['pinFolder'] = windscribe.CONFIG_DIR
+        save_settings(self._settings)
+
         out['ok'] = True
+        out['pinFolder'] = windscribe.CONFIG_DIR
         return out
 
     def surfsharkServers(self):
@@ -1078,13 +1119,46 @@ class Api:
         widens - see useSiteFolder, which is the whole point of that feature.
         """
         folders = [self._engine.folder]
-        if not self._settings.get('folderIsSite'):
+        if not self._narrowed():
             for name in paths.SERVER_DIRS:
                 path = os.path.join(paths.DATA_DIR, name)
                 if os.path.isdir(path) and path not in folders:
                     folders.append(path)
         self._engine.folders = folders
         return folders
+
+    @staticmethod
+    def _standard_source(folder):
+        """Whether this is one of the folders the app reads anyway."""
+        if not folder:
+            return False
+        here = os.path.normcase(os.path.abspath(folder))
+        return any(
+            here == os.path.normcase(os.path.abspath(
+                os.path.join(paths.DATA_DIR, name)))
+            for name in paths.SERVER_DIRS)
+
+    def _narrowed(self):
+        """Whether to read one folder instead of all of them.
+
+        Only ever for a site folder - a pile somebody swept against one site,
+        where the whole point is that nothing else is offered.
+
+        Never for a folder the app reads anyway, and that guard is the whole
+        reason this is a method. `pinned/` is in SERVER_DIRS, and "Connect
+        through these" after a pin run goes through useSiteFolder, so pinning
+        Windscribe narrowed the app onto pinned/ - which cannot add anything,
+        because it was already being read, and could only take servers/ away
+        with the 37 Surfshark exits in it. Surfshark then reported "none
+        pinned" minutes after being the only provider that worked.
+
+        Written as a test rather than only fixed where it is set, so that a
+        settings file already carrying folderIsSite over pinned/ - which is
+        what that button leaves behind - comes right on the next start
+        instead of staying wrong until somebody presses Reset.
+        """
+        return (bool(self._settings.get('folderIsSite'))
+                and not self._standard_source(self._engine.folder))
 
     def setProviders(self, providers=None):
         """Which providers to offer exits from.
@@ -1137,10 +1211,15 @@ class Api:
         # Narrowed on purpose. The point of a site folder is "only the exits
         # that were measured getting into this site", and quietly reading the
         # other folders beside it would give back exactly what was excluded.
-        self._settings['folderIsSite'] = True
+        #
+        # Except for the three folders the app reads anyway - see _narrowed.
+        # Narrowing onto one of those excludes the other two and includes
+        # nothing, which is not a filter, it is a way to lose a provider.
+        self._settings['folderIsSite'] = not self._standard_source(folder)
         save_settings(self._settings)
         self._apply_sources()
         return {'ok': True, 'folder': folder,
+                'narrowed': self._narrowed(),
                 'count': len(sweep.configs_in(folder))}
 
     def startSweep(self, folder=None):
@@ -1186,6 +1265,12 @@ class Api:
         # Not the resolver's business - it is either passed -NoTest or it is
         # not - but the page has a switch for it and has to draw it.
         plan['test'] = test
+        # Whether what comes out of a run is somewhere the app reads already.
+        # It decides whether there is anything to offer afterwards: for the
+        # default pinned/ the answer is no, the exits are in the list the
+        # moment the run ends, and the button that used to be drawn there
+        # took two other folders out of the list instead.
+        plan['outIsStandard'] = self._standard_source(plan.get('out'))
         return plan
 
     def setPinRoute(self, route=None, port=None, maxIps=None, test=None):
@@ -1203,6 +1288,23 @@ class Api:
             self._settings['pinTest'] = bool(test)
         save_settings(self._settings)
         return self.pinPlan(quick=True)
+
+    def pinForProvider(self, provider):
+        """Point the pinning inbox at one provider's pile.
+
+        What the card's Pin button presses before it moves you to the screen
+        that runs it. The alternative was the folder picker, and knowing
+        which of two folders to walk it to is exactly the knowledge somebody
+        pressing a button called Pin does not have.
+        """
+        folder = (windscribe.CONFIG_DIR if provider == accounts.WINDSCRIBE
+                  else pin.source_dir())
+        if not sweep.configs_in(folder):
+            return {'ok': False,
+                    'error': f'Nothing waiting in {folder}.'}
+        self._settings['pinFolder'] = folder
+        save_settings(self._settings)
+        return {'ok': True, **self.pinPlan()}
 
     def choosePinFolder(self):
         """Where the files you downloaded are."""
@@ -1247,8 +1349,22 @@ class Api:
 
     def startPin(self):
         was, into = self._pin_folders()
-        return self._pin.start(was, into, lambda p: self._emit('Pin', p),
-                               **self._pin_choices())
+
+        def progress(p):
+            # A finished run may have created a folder that was not there
+            # when the sources were worked out. pinned/ is in SERVER_DIRS but
+            # _apply_sources only lists it when it exists, and the first pin
+            # run is what makes it exist - so without this the engine goes on
+            # reading the same folders it read at startup, and everything
+            # just written is invisible until the app is restarted. That is
+            # what left Windscribe greyed out saying "none pinned" straight
+            # after pinning it.
+            if isinstance(p, dict) and p.get('phase') == 'finished':
+                self._apply_sources()
+                self._sync_providers()
+            self._emit('Pin', p)
+
+        return self._pin.start(was, into, progress, **self._pin_choices())
 
     def cancelPin(self):
         return self._pin.cancel()
@@ -1261,20 +1377,54 @@ class Api:
 
     # -- which of them answer, and how fast --------------------------------
 
-    def testReach(self, country=None, provider=None):
-        """Ask every exit on offer whether it takes the credentials.
+    def _pool_for(self, code):
+        """The exits behind one row of the list.
+
+        Same shapes exitsIn takes and the same parsing, because the row that
+        opens a list of exits and the row that tests them are the same row: a
+        country, a city inside one, either of those narrowed to a provider,
+        or a single file.
+        """
+        code = code or ''
+        if code.startswith('file:'):
+            name = code[5:]
+            return [s for s in self._engine.servers() if s.file == name]
+        where, _, via = code.partition(':')
+        city = None
+        if '/' in where:
+            where, city = where.split('/', 1)
+        notes = windscribe.meta() if city else {}
+        out = []
+        for s in self._engine.servers():
+            if where and s.country != where:
+                continue
+            if via and s.provider != via:
+                continue
+            if city and self._engine.city_of(s, notes)[0] != city:
+                continue
+            out.append(s)
+        return out
+
+    def testReach(self, code=None):
+        """Ask the exits behind one row whether they take the credentials.
 
         The one thing the app could never say. An exit filtered on this line
         looks exactly like one that is merely slow, and the only way to tell
         them apart is to ask - which the connect race does every time and
         then throws away. This asks once and keeps the answer.
+
+        One row at a time, and that is the whole of the change. Asking all
+        four hundred was a single button in the header, and it was the wrong
+        shape twice over: nobody wants to know about ninety countries, and a
+        run that long is where the line starts dropping connections and the
+        answers stop being about the exits - see _second_look. A country is
+        twenty addresses and four seconds, and it is the country somebody was
+        already looking at.
         """
         if self._testing:
             return {'ok': False, 'error': 'busy'}
 
-        pool = [s for s in self._engine.servers()
-                if (not country or s.country == country)
-                and (not provider or s.provider == provider)]
+        pool = self._pool_for(code)
         if not pool:
             return {'ok': False, 'error': 'Nothing to test.'}
         only = {s.file for s in pool}
@@ -1285,10 +1435,12 @@ class Api:
                 out = self._engine.test_reach(
                     lambda p: self._emit('Reach', p), only=only)
                 out['ok'] = True
+                out['code'] = code
                 out['countries'] = self._engine.catalogue()
                 self._emit('ReachDone', out)
             except Exception as e:
-                self._emit('ReachDone', {'ok': False, 'error': str(e)})
+                self._emit('ReachDone',
+                           {'ok': False, 'code': code, 'error': str(e)})
             finally:
                 self._testing = False
 
@@ -2251,8 +2403,11 @@ def ui_check(window):
         # leaving a spent token on screen.
         said['wsClosedOnFail'] = window.evaluate_js(
             "!document.getElementById('wsCapDlg').open && ws.token === null")
+        # Where the reason lands moved with the pane: the Windscribe section
+        # became one row of the account roster, and a rejected puzzle now
+        # reports on the add-account form it was opened from.
         said['wsToldWhy'] = window.evaluate_js(
-            "document.getElementById('wsSaid').textContent")
+            "document.getElementById('acctNewSaid').textContent")
 
         window.evaluate_js(
             'window.pywebview.api.windscribeFinish = window.__wsReal')
@@ -2721,8 +2876,10 @@ def ui_check(window):
         # Read off the real list rather than a synthetic one, because the
         # point of the feature is what it says about exits that have been
         # asked - and by now some of these have been.
+        # Testing is per row now, so what proves the feature is on the page
+        # is a row carrying its own control, not one button in the header.
         said['reachBar'] = window.evaluate_js(
-            "!!document.getElementById('reachGo')")
+            "!!document.querySelector('.row [data-test]')")
         said['rowStates'] = window.evaluate_js(
             "(() => { const n = {};"
             " for (const r of document.querySelectorAll('.row[data-state]'))"
@@ -2999,6 +3156,15 @@ def main():
             only = sys.argv[i] if len(sys.argv) > i                 and not sys.argv[i].startswith('-') else None
             threading.Thread(target=uilayout.run,
                              args=(window, only, '--notes' in sys.argv),
+                             daemon=True).start()
+        if '--ui-perf' in sys.argv:
+            # The other question about the same window: not whether anything
+            # is in the wrong place, but whether it moves without stuttering.
+            import uiperf
+            i = sys.argv.index('--ui-perf') + 1
+            only = sys.argv[i] if len(sys.argv) > i \
+                and not sys.argv[i].startswith('-') else None
+            threading.Thread(target=uiperf.run, args=(window, only),
                              daemon=True).start()
 
     def closing():
