@@ -158,6 +158,20 @@ def _tray_importable():
         return False
 
 
+def px_live_elsewhere(port):
+    """Whether another copy of this app has a proxy up on a different port.
+
+    Two of these share a data folder, so they share the record of what is
+    running and the stash of what Windows looked like beforehand. Neither
+    file is wrong; the mistake would be reading either as ours.
+    """
+    try:
+        return any(str(r.get('port')) != str(port)
+                   for r in engine.px.read_states())
+    except Exception:
+        return False
+
+
 def run_selftest():
     """Say what this copy can see, without opening a window.
 
@@ -165,9 +179,11 @@ def run_selftest():
     only says something went wrong. This answers what support would otherwise
     have to ask over the phone, and it is how the build is checked.
     """
+    import accounts
     import engine
     import pin
     import sweep
+    import windscribe
     import winproxy
     out = {'frozen': paths.FROZEN, 'app': paths.APP_DIR,
            'resources': paths.RES_DIR, 'data': paths.DATA_DIR,
@@ -200,10 +216,40 @@ def run_selftest():
                           folder=saved.get('folder') or None,
                           port=saved.get('port'),
                           set_system_proxy=saved.get('systemProxy', True))
+        # Set up the way the window sets it up, or this reports a different
+        # app from the one that is running: it would read one folder and no
+        # provider filter, and answer "533 servers" for a copy that is
+        # actually offering 125 from the other provider. A diagnostic whose
+        # numbers are not the app's numbers sends whoever reads it the wrong
+        # way, which is worse than not printing them.
+        if not saved.get('folderIsSite'):
+            for name in paths.SERVER_DIRS:
+                path = os.path.join(paths.DATA_DIR, name)
+                if os.path.isdir(path) and path not in e.folders:
+                    e.folders.append(path)
+        chosen = saved.get('providers')
+        e.providers = set(chosen) if chosen else None
         out['port'] = e.port
+        out['folders'] = e.sources()
+        out['providers'] = sorted(e.providers) if e.providers else None
+        out['byProvider'] = e.counts_by_provider()
         out['serverCount'] = len(e.servers())
         out['countryCount'] = len(e.catalogue())
-        out['credentialsReadable'] = bool(e.credentials())
+        # One line per provider, and none of them fatal. This was a single
+        # call to e.credentials() back when there was one credential to have;
+        # with that file gone it raised, and took the whole rest of the
+        # diagnostic - the status, which is the part anyone actually wants -
+        # down with it. A self-test that stops at the first missing thing
+        # reports the first missing thing and nothing else.
+        out['credentials'] = {}
+        for name, path in ((accounts.SURFSHARK, paths.AUTH_FILE),
+                           (accounts.WINDSCRIBE, windscribe.AUTH_FILE)):
+            try:
+                with open(path, encoding='utf-8') as f:
+                    lines = [line.strip() for line in f if line.strip()]
+                out['credentials'][name] = len(lines) >= 2
+            except OSError:
+                out['credentials'][name] = False
         out['status'] = e.status()
     except Exception as exc:
         out['engineError'] = repr(exc)
@@ -303,7 +349,12 @@ import sweep                                                 # noqa: E402
 import tunnel                                                # noqa: E402
 import webview                                               # noqa: E402
 import winproxy                                              # noqa: E402
+import accounts                                              # noqa: E402
+import uishot                                                # noqa: E402
+import surfshark                                             # noqa: E402
+import windscribe                                            # noqa: E402
 from engine import Engine                                    # noqa: E402
+
 
 class Api:
     def __init__(self):
@@ -327,6 +378,14 @@ class Api:
         self._stop = threading.Event()
         self._sweep = sweep.Sweep()
         self._pin = pin.Pin()
+        self._apply_sources()
+        self._sync_providers()
+        # Spans the two halves of a Windscribe sign-in - the name and password
+        # that fetched a puzzle, waiting for the puzzle to be let go of.
+        self._ws_pending = None
+        # One reachability test at a time. It is eight connections wide
+        # already; two of them racing would measure each other.
+        self._testing = False
         self._tunnel = None
         self._tunnel_key = None
 
@@ -347,14 +406,90 @@ class Api:
 
     # -- what the page asks for -------------------------------------------
 
+    def _provider_state(self):
+        """What each provider has, and therefore whether it can be offered.
+
+        Two halves, and both are needed. Servers without an account is a list
+        of exits nothing can open - which is what removing an account used to
+        leave behind, since the configs are files and stay where they are.
+        An account without servers is the opposite and just as useless.
+
+        Kept apart in the answer rather than collapsed into one flag, because
+        "none pinned" and "no account" want completely different things doing
+        about them, and a chooser that greys a provider out without saying
+        which is a chooser nobody can act on.
+        """
+        counts = self._engine.counts_by_provider()
+        roster = accounts.listing()
+        out = {}
+        for name in accounts.PROVIDERS:
+            servers = counts.get(name, 0)
+            signed = any(a['provider'] == name and a['signedIn'] for a in roster)
+            out[name] = {'servers': servers, 'account': signed,
+                         'usable': bool(servers) and signed}
+        return out
+
+    def _usable_providers(self):
+        return sorted(k for k, v in self._provider_state().items()
+                      if v['usable'])
+
+    def _sync_providers(self):
+        """Keep the selection inside what is actually usable.
+
+        Called after anything that changes the roster. A provider whose
+        account has just been removed has to leave the selection by itself -
+        left in, its exits stay in the list and the app offers to connect
+        through a credential that is not there any more.
+        """
+        usable = self._usable_providers()
+        chosen = [p for p in (self._settings.get('providers') or usable)
+                  if p in usable]
+        if not chosen:
+            chosen = usable
+        # Nothing usable is not the same as "offer nothing". With no accounts
+        # at all, an empty filter empties the country list too - and a person
+        # looking at 533 pinned servers and a blank picker has been told
+        # nothing. Connecting is already refused, with a message that says
+        # why, so the list is left showing what is there.
+        self._engine.providers = set(chosen) if chosen else None
+        if self._settings.get('providers') != chosen:
+            self._settings['providers'] = chosen
+            save_settings(self._settings)
+        return chosen
+
+    def _forget_provider(self, provider):
+        """Take away what the app was using to sign in as that provider.
+
+        Removing the last account of a provider has to remove its credential
+        too. Leaving it is what "I removed Surfshark and it is still there"
+        was: the roster said no account, the file on disk said otherwise, and
+        the file is what actually connects.
+        """
+        if provider == accounts.WINDSCRIBE:
+            return windscribe.forget()
+        gone = []
+        try:
+            os.remove(paths.AUTH_FILE)
+            gone.append(paths.AUTH_FILE)
+        except OSError:
+            pass
+        return gone
+
     def _describe(self):
         return {'countries': self._engine.catalogue(),
                 'serverCount': len(self._engine.servers()),
                 'folder': self._engine.folder,
+                'folders': self._engine.sources(),
+                'providers': sorted(self._engine.providers)
+                if self._engine.providers is not None else None,
+                'providerState': self._provider_state(),
                 'systemProxy': self._engine.set_system_proxy,
                 'port': self._engine.port,
                 'defaultPort': engine.DEFAULT_PORT,
                 'picked': self._settings.get('picked', 'auto'),
+                'favourites': self._settings.get('favourites') or [],
+                'sortBy': self._settings.get('sortBy', 'ping'),
+                'keepOnClose': bool(self._settings.get('keepOnClose')),
                 'mode': self._settings.get('mode', 'surfshark'),
                 'hasCredentials': self._has_credentials(),
                 'username': self._engine.username(),
@@ -368,7 +503,11 @@ class Api:
 
     def boot(self):
         recovered = False
-        if self._sysproxy.stashed() and not self._engine.running():
+        # A stash with no proxy of ours running is the wreckage of a copy
+        # that was killed - unless another copy is up and using it right now,
+        # in which case it is not wreckage, it is theirs.
+        if (self._sysproxy.stashed() and not self._engine.running()
+                and not px_live_elsewhere(self._engine.port)):
             recovered = self._sysproxy.restore()
         status = self._engine.status()
         self._retray('on' if status.get('state') == 'on' else 'off')
@@ -548,8 +687,13 @@ class Api:
     def resetFolder(self):
         self._engine.folder = paths.servers_dir()
         self._settings.pop('folder', None)
+        # And back to reading every folder, which is what "the servers that
+        # came with the app" means once there is more than one provider.
+        self._settings.pop('folderIsSite', None)
         save_settings(self._settings)
-        return {'ok': True, 'folder': self._engine.folder}
+        self._apply_sources()
+        return {'ok': True, 'folder': self._engine.folder,
+                'folders': self._engine.sources()}
 
     def copy(self, text):
         """A fallback for the clipboard API, which needs a secure context and
@@ -562,51 +706,260 @@ class Api:
         return {'ok': True}
 
     def _has_credentials(self):
-        try:
-            self._engine.credentials()
-            return True
-        except Exception:
-            return False
+        """Whether anything at all can be connected through.
 
-    def saveCredentials(self, user, password):
-        """The service username and password, set from the window.
+        Not "is there a .ovpn-auth". That was the same question back when
+        there was one provider, and it stopped being so the moment there were
+        two: an app signed in to Windscribe, with a hundred and twenty-five
+        of its exits pinned, answered no - and the button that asks this is
+        the Connect button, so it said NOT SET UP and refused to do the thing
+        it was perfectly able to do.
 
-        Until now the only way to give this app credentials was to put a file
-        beside it by hand, which is a reasonable thing to ask of the person
-        who wrote it and not of anyone else - and the app's answer to not
-        having one was to disable its only button and say so.
+        A provider counts when it has both an account and exits, which is the
+        same test the chooser uses. One of them is enough.
         """
-        # An empty password field with credentials already on file means "the
-        # one I have", not "wipe it" - the field says as much, and a person
-        # correcting a typo in the username should not have to fetch their
-        # password again to do it.
-        if not (password or '').strip():
-            try:
-                password = self._engine.credentials()[1]
-            except Exception:
-                pass
-        try:
-            note = self._engine.save_credentials(user, password)
-        except RuntimeError as e:
-            return {'ok': False, 'error': str(e)}
-        except OSError as e:
-            return {'ok': False,
-                    'error': f'Could not write {paths.AUTH_FILE}: {e}'}
-        if not self._has_credentials():
-            return {'ok': False,
-                    'error': 'Saved, but it cannot be read back. Check whether '
-                             f'something else owns {paths.AUTH_FILE}.'}
-        return {'ok': True, 'username': self._engine.username(),
-                'path': paths.AUTH_FILE, 'env': note.get('env', False)}
+        return bool(self._usable_providers())
 
-    def forgetCredentials(self):
+    # saveCredentials and forgetCredentials used to live here, writing
+    # .ovpn-auth straight from the old Surfshark pane. Nothing calls them any
+    # more - accounts do that now, through _write_active - and leaving them
+    # would have left two ways to set a credential, one of which produces the
+    # state this app has already been caught by once: a credential file on
+    # disk with no account behind it, so the roster says the provider is gone
+    # and the file says it is not.
+
+    # -- accounts ----------------------------------------------------------
+    #
+    # One roster over both providers. What differs between them is only how
+    # an account is proved: Surfshark's is a service credential that can be
+    # pasted, Windscribe's needs a login and a puzzle. Everything after that
+    # - which one is in use, what it is called, how it is dropped - is the
+    # same question, so it is the same code.
+    #
+    # The captcha is drawn in the page from the two images the API sends;
+    # what comes back here is where the person let go of the piece and the
+    # path their pointer took getting there. Neither is generated anywhere in
+    # this app - a solved captcha that nobody solved is the one thing this
+    # flow must not be able to produce.
+
+    def _write_active(self, account):
+        """Put an account's credential where the rest of the app reads it.
+
+        This is the whole of what "in use" means. Nothing downstream knows
+        about accounts: the engine reads .ovpn-auth and .windscribe-auth, the
+        sweep scripts read .env, and all of them keep working because
+        activating an account rewrites those and changes nothing else.
+        """
+        secrets = accounts.secrets(account['id'])
+        if not secrets:
+            return 'That account could not be read back.'
+
+        if account['provider'] == accounts.SURFSHARK:
+            if not (secrets['username'] and secrets['password']):
+                return ('That Surfshark account has no password stored - '
+                        'remove it and add it again.')
+            try:
+                # The engine's own writer, so that .env stays in step. The
+                # PowerShell half reads that one first.
+                self._engine.save_credentials(secrets['username'],
+                                              secrets['password'])
+            except (RuntimeError, OSError) as e:
+                return str(e)
+            return None
+
+        user, password = secrets['proxy']
+        if not (user and password):
+            return ('That Windscribe account has no proxy credential stored '
+                    '- press Refresh credential, or sign in again.')
         try:
-            os.remove(paths.AUTH_FILE)
-        except FileNotFoundError:
-            pass
+            windscribe.save_proxy_credentials(user, password)
+            if secrets['session']:
+                windscribe.save_token(secrets['session'], secrets['username'])
         except OSError as e:
+            return str(e)
+        return None
+
+    def accountsList(self):
+        # Whatever was already signed in becomes the first entries, once.
+        # Someone who has been using this app should not open the new pane
+        # and be told they have no accounts while both providers are plainly
+        # connected.
+        accounts.adopt(self._engine)
+        return {'ok': True, 'accounts': accounts.listing()}
+
+    def accountAdd(self, provider, label, username, password):
+        username = (username or '').strip()
+        if provider not in accounts.PROVIDERS:
+            return {'ok': False, 'error': 'Unknown provider.'}
+        if not username:
+            return {'ok': False, 'error': 'Enter the username.'}
+        if not password:
+            return {'ok': False, 'error': 'Enter the password.'}
+
+        if provider == accounts.SURFSHARK:
+            account = accounts.put(provider, label, username, password=password)
+            problem = self._write_active(account)
+            if problem:
+                return {'ok': False, 'error': problem}
+            self._sync_providers()
+            return {'ok': True, 'id': account['id'], 'label': account['label']}
+
+        # Windscribe: the puzzle stands between here and an account, so this
+        # only fetches it. The account is written when the login lands.
+        try:
+            out = windscribe.begin_login(username, password)
+        except windscribe.ApiError as e:
+            return {'ok': False, 'error': str(e), 'code': e.code}
+        self._ws_pending = {'username': username, 'password': password,
+                            'label': (label or '').strip()}
+        return {'ok': True, 'token': out['token'], 'captcha': out['captcha']}
+
+    def accountUse(self, account_id):
+        account = accounts.activate(account_id)
+        if not account:
+            return {'ok': False, 'error': 'No such account.'}
+        problem = self._write_active(account)
+        if problem:
+            return {'ok': False, 'error': problem}
+        return {'ok': True, 'label': account['label'],
+                'provider': account['provider']}
+
+    def accountRemove(self, account_id):
+        gone = accounts.remove(account_id)
+        if not gone:
+            return {'ok': False, 'error': 'No such account.'}
+        # Whatever took over as active for that provider has to be written
+        # out, or the file on disk still holds the account just removed.
+        left = accounts.active(gone['provider'])
+        if left:
+            self._write_active(left)
+        else:
+            # None left, so the credential goes too. The configs stay - they
+            # are files, they cost nothing, and they are worth having if the
+            # account comes back - but the provider stops being offered,
+            # which is what _sync_providers does next.
+            self._forget_provider(gone['provider'])
+        self._sync_providers()
+        return {'ok': True, 'label': gone.get('label') or '',
+                'providers': sorted(self._engine.providers or [])}
+
+    def windscribeFinish(self, token, solution,
+                         trailX=None, trailY=None, code2fa=''):
+        """Half two of a Windscribe sign-in, run the moment the puzzle is let
+        go of.
+
+        The name and password come from the call that fetched the puzzle
+        rather than from the page, so they cross the bridge once. One
+        attempt: note.md records an account blocked after about seventy
+        security alerts, so a failure here is reported and left alone.
+        """
+        pending = getattr(self, '_ws_pending', None)
+        if not pending:
+            return {'ok': False,
+                    'error': 'That sign-in expired. Start it again.'}
+        try:
+            who = windscribe.finish_login(
+                pending['username'], pending['password'], token, solution,
+                trailX or [], trailY or [], (code2fa or '').strip())
+        except windscribe.ApiError as e:
+            # Spent either way - the token is single-use and so is the
+            # puzzle - so it is dropped rather than left for a retry that
+            # would be refused for a reason nobody could see.
+            self._ws_pending = None
+            return {'ok': False, 'error': str(e), 'code': e.code,
+                    'why': e.description}
+
+        # The credential the whole login was for. Fetched here rather than
+        # left for later, because this is the one moment the session is
+        # certainly good - and an account saved without one is an account
+        # that looks signed in and cannot connect.
+        proxy, trouble = None, None
+        try:
+            proxy = windscribe.proxy_credentials(who['session_auth_hash'])
+        except windscribe.ApiError as e:
+            trouble = str(e)
+
+        account = accounts.put(
+            accounts.WINDSCRIBE, pending.get('label'), who['username'],
+            # Only now, and only because it has just been proved right.
+            # Saving a password before it has worked is how a wrong one gets
+            # remembered and quietly reused until the account locks.
+            password=pending['password'],
+            session=who['session_auth_hash'], proxy=proxy)
+        self._ws_pending = None
+
+        problem = self._write_active(account) if proxy else trouble
+        self._sync_providers()
+        return {'ok': True, 'username': who['username'],
+                'credentials': bool(proxy) and not problem,
+                # From what put() just returned rather than looked up again -
+                # a second read that comes back empty would crash on the way
+                # out of a sign-in that had actually worked.
+                'remembered': account.get('password') is not None,
+                'error': problem or trouble or '',
+                'premium': who['premium']}
+
+    def windscribeRefresh(self):
+        """The whole of what this app does on its own: token in, working
+        proxy credential out, no captcha anywhere. Also the answer to the one
+        open question in windscribe.md - if this still works in a month, the
+        sign-in was a one-time thing."""
+        account = accounts.active(accounts.WINDSCRIBE)
+        secrets = accounts.secrets(account['id']) if account else None
+        session = (secrets or {}).get('session') or (
+            (windscribe.load_token() or {}).get('session_auth_hash'))
+        if not session:
+            return {'ok': False, 'error': 'Not signed in to Windscribe.'}
+        try:
+            user, password = windscribe.proxy_credentials(session)
+        except windscribe.ApiError as e:
+            return {'ok': False, 'error': str(e), 'code': e.code}
+        windscribe.save_proxy_credentials(user, password)
+        if account:
+            accounts.put(accounts.WINDSCRIBE, account.get('label'),
+                         account.get('username'), proxy=(user, password),
+                         account_id=account['id'])
+        return {'ok': True, 'proxyUser': user}
+
+    def windscribeServers(self, freeOnly=False):
+        """Fetch the published fleet and write it out as configs to pin.
+
+        Unpinned on purpose. These are hostnames, and a hostname is the thing
+        this line answers dishonestly - so they go through the same pinning
+        the rest of the app uses rather than being resolved here.
+        """
+        try:
+            out = windscribe.write_configs(free_only=bool(freeOnly))
+        except windscribe.ApiError as e:
             return {'ok': False, 'error': str(e)}
-        return {'ok': True}
+        except OSError as e:
+            return {'ok': False,
+                    'error': f'Could not write into {windscribe.CONFIG_DIR}: {e}'}
+        out['ok'] = True
+        return out
+
+    def surfsharkServers(self):
+        """Fetch the published cluster list and fill in what the folder is
+        missing.
+
+        The same shape as windscribeServers and for the same reason: these
+        are hostnames, and a hostname is the thing this line answers
+        dishonestly, so they go through the same pinning as everything else
+        rather than being resolved here.
+
+        Additive. A config already in the folder is left alone - it may be
+        the user's own download - so this is safe to press twice, and safe
+        to press on a folder somebody has curated.
+        """
+        try:
+            out = surfshark.write_configs()
+        except surfshark.ApiError as e:
+            return {'ok': False, 'error': str(e)}
+        except OSError as e:
+            return {'ok': False,
+                    'error': f'Could not write into {surfshark.CONFIG_DIR}: {e}'}
+        out['ok'] = True
+        return out
 
     # -- measuring the servers properly ------------------------------------
 
@@ -712,6 +1065,63 @@ class Api:
                 'minutes': sweep.estimate_minutes(
                     len(sweep.configs_in(self._engine.folder)), len(named))}
 
+    def _apply_sources(self):
+        """Which folders the engine reads.
+
+        The chosen folder first, and then the other places pinned configs
+        land. Both providers have to be visible at once for "use both" to
+        mean anything, and they do not share a folder: Surfshark's configs
+        are downloaded and pinned, Windscribe's are fetched and pinned, and
+        nobody should have to merge two folders by hand to have both offered.
+
+        Picking a site's folder is the one case that narrows rather than
+        widens - see useSiteFolder, which is the whole point of that feature.
+        """
+        folders = [self._engine.folder]
+        if not self._settings.get('folderIsSite'):
+            for name in paths.SERVER_DIRS:
+                path = os.path.join(paths.DATA_DIR, name)
+                if os.path.isdir(path) and path not in folders:
+                    folders.append(path)
+        self._engine.folders = folders
+        return folders
+
+    def setProviders(self, providers=None):
+        """Which providers to offer exits from.
+
+        An empty choice is refused rather than obeyed. "None of them" is a
+        setting whose only effect is an app that cannot connect and does not
+        say why, and the button that produced it looked like a filter.
+        """
+        wanted = [p for p in (providers or []) if p in accounts.PROVIDERS]
+        if not wanted:
+            return {'ok': False,
+                    'error': 'Pick at least one — with none chosen there is '
+                             'nothing to connect through.'}
+
+        state = self._provider_state()
+        usable = [p for p in wanted if state[p]['usable']]
+        if not usable:
+            names = {accounts.SURFSHARK: 'Surfshark',
+                     accounts.WINDSCRIBE: 'Windscribe'}
+            # Which half is missing, because the two want opposite things
+            # doing about them and "unavailable" says neither.
+            why = []
+            for p in wanted:
+                if not state[p]['account']:
+                    why.append(f'no {names.get(p, p)} account')
+                elif not state[p]['servers']:
+                    why.append(f'no pinned {names.get(p, p)} servers')
+            return {'ok': False, 'error': (' and '.join(why) or 'nothing to '
+                                           'connect through') + '.'}
+
+        self._engine.providers = set(usable)
+        self._settings['providers'] = sorted(usable)
+        save_settings(self._settings)
+        return {'ok': True, 'providers': sorted(usable),
+                'serverCount': len(self._engine.servers()),
+                'countries': self._engine.catalogue()}
+
     def useSiteFolder(self, folder):
         """Point the app at one site's folder.
 
@@ -724,7 +1134,12 @@ class Api:
                     'error': 'That folder has no servers in it any more.'}
         self._engine.folder = folder
         self._settings['folder'] = folder
+        # Narrowed on purpose. The point of a site folder is "only the exits
+        # that were measured getting into this site", and quietly reading the
+        # other folders beside it would give back exactly what was excluded.
+        self._settings['folderIsSite'] = True
         save_settings(self._settings)
+        self._apply_sources()
         return {'ok': True, 'folder': folder,
                 'count': len(sweep.configs_in(folder))}
 
@@ -843,6 +1258,95 @@ class Api:
         site's folder, and the same guard on it."""
         _, into = self._pin_folders()
         return self.useSiteFolder(folder or into)
+
+    # -- which of them answer, and how fast --------------------------------
+
+    def testReach(self, country=None, provider=None):
+        """Ask every exit on offer whether it takes the credentials.
+
+        The one thing the app could never say. An exit filtered on this line
+        looks exactly like one that is merely slow, and the only way to tell
+        them apart is to ask - which the connect race does every time and
+        then throws away. This asks once and keeps the answer.
+        """
+        if self._testing:
+            return {'ok': False, 'error': 'busy'}
+
+        pool = [s for s in self._engine.servers()
+                if (not country or s.country == country)
+                and (not provider or s.provider == provider)]
+        if not pool:
+            return {'ok': False, 'error': 'Nothing to test.'}
+        only = {s.file for s in pool}
+        self._testing = True
+
+        def work():
+            try:
+                out = self._engine.test_reach(
+                    lambda p: self._emit('Reach', p), only=only)
+                out['ok'] = True
+                out['countries'] = self._engine.catalogue()
+                self._emit('ReachDone', out)
+            except Exception as e:
+                self._emit('ReachDone', {'ok': False, 'error': str(e)})
+            finally:
+                self._testing = False
+
+        threading.Thread(target=work, daemon=True).start()
+        return {'ok': True, 'total': len(only)}
+
+    def cancelReach(self):
+        self._engine.cancelled.set()
+        return {'ok': True}
+
+    def exitsIn(self, country, provider=None):
+        """The individual exits behind one country or city, with their times."""
+        where, _, via = (country or '').partition(':')
+        city = None
+        if '/' in where:
+            where, city = where.split('/', 1)
+        return {'ok': True,
+                'exits': self._engine.exits(where, provider or via or None,
+                                            city)}
+
+    # -- the ones worth keeping ------------------------------------------
+
+    def favourites(self):
+        return {'ok': True, 'codes': self._settings.get('favourites') or []}
+
+    def toggleFavourite(self, code):
+        """Star a place, or unstar it.
+
+        Kept as picker codes rather than as countries, so that whatever can
+        be picked can be starred: a country, a city inside it, one provider's
+        share of a country, or a single exit. They are the same strings the
+        connect button already understands, which is what stops a favourite
+        meaning something the app cannot act on.
+        """
+        codes = list(self._settings.get('favourites') or [])
+        if code in codes:
+            codes.remove(code)
+            on = False
+        else:
+            codes.append(code)
+            on = True
+        self._settings['favourites'] = codes
+        save_settings(self._settings)
+        return {'ok': True, 'codes': codes, 'on': on}
+
+    def setSort(self, kind=None):
+        """How the list is ordered. Answering-first stays underneath every
+        one of them: a blocked exit is not a good answer to "sort by name"
+        either."""
+        kind = kind if kind in ('ping', 'name', 'load') else 'ping'
+        self._settings['sortBy'] = kind
+        save_settings(self._settings)
+        return {'ok': True, 'sortBy': kind}
+
+    def setKeepOnClose(self, on=False):
+        self._settings['keepOnClose'] = bool(on)
+        save_settings(self._settings)
+        return {'ok': True, 'keepOnClose': bool(on)}
 
     def remember(self, code):
         self._settings['picked'] = code
@@ -1040,15 +1544,51 @@ class Api:
         self._busy = True
         self._retray('busy')
 
+        # "fr" is France through whichever provider answers first;
+        # "fr:windscribe" is France through that one. A country reached by
+        # both is one place with two ways in, and which way in is a real
+        # choice - they are different companies, different addresses and,
+        # on this line, different odds of being filtered.
+        # Three shapes, narrowing. "fr" is France through whichever provider
+        # answers first; "fr:windscribe" is France through that one;
+        # "file:<config>" is one named exit, picked off a list that had its
+        # measured time beside it - so racing its neighbours instead would be
+        # answering a question nobody asked.
+        only, city = None, None
+        if (country or '').startswith('file:'):
+            only = country[5:]
+            where, want = None, None
+        else:
+            where, _, want = (country or '').partition(':')
+            want = want if want in accounts.PROVIDERS else None
+            # "fr/par" is one city inside France. A slash rather than another
+            # colon so that the two never have to be told apart by counting
+            # them - a city and a provider are different kinds of narrowing
+            # and reading them wrong connects somewhere else entirely.
+            if '/' in where:
+                where, city = where.split('/', 1)
+        # A saved pick can outlive the provider it names - switched off in
+        # the roster, or its account removed. Asking for it anyway is
+        # guaranteed to find nothing and to say so in terms of folders, which
+        # is not what went wrong. The country on its own still works.
+        if want and self._engine.providers is not None \
+                and want not in self._engine.providers:
+            want = None
+
+        # Which way out. Three of them now: straight to a provider's exit,
+        # through a tunnel of our own, or through the tunnel and out of an
+        # exit beyond it. The picker on the card sets this; the parse above
+        # says which country, and is the same question either way.
         mode = self._settings.get('mode', 'surfshark')
 
         def work():
             try:
                 if mode == 'surfshark':
                     result = self._engine.connect(
-                        country, lambda p: self._emit('Progress', p))
+                        where, lambda p: self._emit('Progress', p),
+                        provider=want, only=only, city=city)
                 else:
-                    result = self._through_tunnel(country, mode)
+                    result = self._through_tunnel(where, mode)
                 self._since = time.time()
                 self._retray('on')
                 self._emit('Connected', result)
@@ -1063,7 +1603,11 @@ class Api:
                 except Exception:
                     pass
                 self._retray('off')
-                self._emit('Failed', {'kind': kind, 'detail': str(e)})
+                # The port goes with it: the one failure the page has to name
+                # a number in is the port being held by somebody else, and
+                # the page has no other way to know which port was tried.
+                self._emit('Failed', {'kind': kind, 'detail': str(e),
+                                      'port': self._engine.port})
             finally:
                 self._busy = False
 
@@ -1151,8 +1695,25 @@ def install_safety(api):
     file on disk is for.
     """
     def undo(*_):
+        # The proxy is a detached process on purpose, so that a wedged
+        # connection cannot take the window down with it. The cost of that is
+        # this: closing the window restores the Windows proxy but leaves the
+        # worker listening, so the tunnel is up and nothing is using it - and
+        # only the registry says so.
+        #
+        # Off by default, then. Somebody who wants the connection to outlive
+        # the window can say so, and the setting is where they would look.
+        if not api._settings.get('keepOnClose'):
+            try:
+                api._engine.disconnect(quiet=True)
+            except Exception:
+                pass
         try:
-            api._sysproxy.restore()
+            # Same rule as disconnect: only ours to put back if the machine
+            # is pointed at our port. Another copy of this app, on another
+            # port, is somebody's live connection and not our business.
+            if api._sysproxy.engaged_for(api._engine.port):
+                api._sysproxy.restore()
         except Exception:
             pass
         # A pinning run is an ordinary child of this process rather than
@@ -1310,6 +1871,41 @@ def dress_window():
     return done
 
 
+def _flat_png(width, height, rgb):
+    """A solid rectangle, built here rather than kept as a wall of base64.
+
+    Only the Windscribe captcha check wants these, and only for its geometry:
+    it needs an image with a known natural width to measure the drawn scale
+    against, and a second one to move. What they look like is irrelevant, so
+    a file is not worth carrying.
+    """
+    import struct
+    import zlib
+    raw = b''.join(b'\x00' + bytes(rgb) * width for _ in range(height))
+
+    def chunk(tag, data):
+        body = tag + data
+        return (struct.pack('>I', len(data)) + body
+                + struct.pack('>I', zlib.crc32(body) & 0xffffffff))
+
+    png = (b'\x89PNG\r\n\x1a\n'
+           + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
+           + chunk(b'IDAT', zlib.compress(raw))
+           + chunk(b'IEND', b''))
+    import base64
+    return base64.b64encode(png).decode()
+
+
+# The sizes a real puzzle arrives at, measured from one: a 700x400 background
+# with a 240x240 piece, cut at top=56. Not round numbers picked to be easy -
+# at the width the sheet draws them the scale is about 0.45, so an answer that
+# forgot to convert back out of drawn pixels is wrong by more than double, and
+# a piece that was not scaled with the background covers a third of it.
+UI_CHECK_BG = _flat_png(700, 400, (40, 60, 90))
+UI_CHECK_PIECE = _flat_png(240, 240, (200, 180, 60))
+UI_CHECK_TOP = 56
+
+
 def ui_check(window):
     """Open the window, photograph it, and say what the page thinks it shows.
 
@@ -1358,68 +1954,16 @@ def ui_check(window):
         return found[0] if found else 0
 
     def shot(name):
-        """Our own window, asked to draw itself.
+        """Our own window, asked to draw itself. In uishot, so that the
+        layout audit takes the same photographs rather than its own.
 
-        PrintWindow rather than a screen grab, and the difference is not a
-        detail. A grab of the rectangle our window occupies captures whatever
-        is actually on those pixels - and this runs while the person's own
-        windows still have focus, so the first two versions of this wrote
-        somebody's chat window to disk under our name. Asking the window to
-        render itself can only ever produce the window. It also works while it
-        is behind something, which a check running in the background always is.
-
-        PW_RENDERFULLCONTENT, because WebView2 draws through DWM and the plain
-        call comes back with the page missing.
-
-        Found by process rather than by title. FindWindowW takes the first
-        window with that caption, and a built copy of this app open on the
-        same desktop has exactly that caption - so a check run while the
-        person has Relay open photographed *their* window instead of its own,
-        and reported the size it meant to capture rather than the size it got.
-        Every picture in that run came back 237x39 and said 600x1110.
+        The process id goes with it. Finding the window by caption alone is
+        what main fixed: a built Relay open beside the one being checked
+        answers to the same name, and whichever Windows hands back first is
+        the one that gets photographed - every picture in one such run came
+        back 237x39 and said 600x1110.
         """
-        try:
-            from PIL import Image
-            user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
-            handle = our_window()
-            if not handle:
-                return 'no picture: our window was not found'
-            rect = ctypes.wintypes.RECT()
-            user32.GetWindowRect(handle, ctypes.byref(rect))
-            w, h = rect.right - rect.left, rect.bottom - rect.top
-
-            screen = user32.GetDC(0)
-            dc = gdi32.CreateCompatibleDC(screen)
-            bitmap = gdi32.CreateCompatibleBitmap(screen, w, h)
-            gdi32.SelectObject(dc, bitmap)
-            drawn = user32.PrintWindow(handle, dc, 2)
-
-            buf = ctypes.create_string_buffer(w * h * 4)
-            info = ctypes.create_string_buffer(40)
-            ctypes.memmove(info, int(40).to_bytes(4, 'little')
-                           + w.to_bytes(4, 'little')
-                           + (-h & 0xFFFFFFFF).to_bytes(4, 'little')
-                           + int(1).to_bytes(2, 'little')
-                           + int(32).to_bytes(2, 'little')
-                           + bytes(20), 40)
-            gdi32.GetDIBits(dc, bitmap, 0, h, buf, info, 0)
-            image = Image.frombuffer('RGBA', (w, h), buf, 'raw', 'BGRA', 0, 1)
-
-            gdi32.DeleteObject(bitmap)
-            gdi32.DeleteDC(dc)
-            user32.ReleaseDC(0, screen)
-
-            path = os.path.join(out, f'{name}.png')
-            image.convert('RGB').save(path)
-            size = f'{w}x{h}'
-            if h < 300:
-                # Worth saying rather than leaving as a picture of a title
-                # bar: a window this short is a window that was not ready,
-                # and the shot is of nothing.
-                return f'{path} ({size} - too short to be the window)'
-            return f'{path} ({size})' if drawn else f'{path} ({size}, PrintWindow said no)'
-        except Exception as e:
-            return f'no picture: {e!r}'
+        return uishot.shot(name, out, APP_NAME, os.getpid())
 
     try:
         time.sleep(2.5)
@@ -1475,8 +2019,253 @@ def ui_check(window):
         said['settings'] = shot('settings')
         # What the two new sections are actually saying, which is the part a
         # picture of a scrolled sheet can miss.
-        said['signIn'] = window.evaluate_js(
-            "document.getElementById('authSaid').textContent")
+        # -- the settings, as a stack ---------------------------------
+        #
+        # A list of four, then the one you picked, then back. Driven rather
+        # than looked at: the thing that can be wrong is whether the other
+        # three screens are really gone or merely scrolled past, and a
+        # screenshot of the right one showing proves neither.
+        said['menu'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.menu__name'))"
+            ".map(e => e.textContent)")
+        said['screensAtRest'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.screen'))"
+            ".filter(s => !s.hidden).length")
+        window.evaluate_js(
+            "document.querySelector('.menu__row[data-goto=servers]').click()")
+        time.sleep(0.5)
+        said['screenOpen'] = window.evaluate_js(
+            "(document.querySelector('.screen:not([hidden])')||{}).dataset"
+            " && document.querySelector('.screen:not([hidden])').dataset.screen")
+        said['onlyOneScreen'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.screen'))"
+            ".filter(s => !s.hidden).length === 1")
+        said['menuGoneWhileIn'] = window.evaluate_js(
+            "document.getElementById('prefsMenu').hidden")
+        said['backOffered'] = window.evaluate_js(
+            "!document.getElementById('prefsBack').hidden")
+        said['titleFollows'] = window.evaluate_js(
+            "document.getElementById('prefsTitle').textContent")
+        window.evaluate_js("document.getElementById('prefsBack').click()")
+        time.sleep(0.4)
+        said['backWorks'] = window.evaluate_js(
+            "!document.getElementById('prefsMenu').hidden"
+            " && document.querySelectorAll('.screen:not([hidden])').length === 0"
+            " && document.getElementById('prefsBack').hidden")
+        said['titleBack'] = window.evaluate_js(
+            "document.getElementById('prefsTitle').textContent")
+        # Into the one the rest of this check needs.
+        window.evaluate_js(
+            "document.querySelector('.menu__row[data-goto=sign-in]').click()")
+        time.sleep(0.4)
+
+        # -- the whys, moved into (i) buttons -------------------------------
+        #
+        # The paragraphs are not deleted, they are relocated - so the test is
+        # that the text still exists, not merely that the paragraphs are gone.
+        said['infoButtons'] = window.evaluate_js(
+            "document.querySelectorAll('.pane .info').length")
+        said['whysLeftInline'] = window.evaluate_js(
+            "document.querySelectorAll('.pane__why').length")
+        said['infoKeptTheWords'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.info__bubble'))"
+            ".every(b => b.textContent.trim().length > 40)")
+        said['infoHiddenUntilAsked'] = window.evaluate_js(
+            "getComputedStyle(document.querySelector('.info__bubble'))"
+            ".visibility")
+
+        # -- the roster -----------------------------------------------------
+        said['acctPane'] = window.evaluate_js(
+            "!!document.getElementById('prefAccounts')")
+        said['acctPill'] = window.evaluate_js(
+            "document.getElementById('acctPill').textContent")
+        said['acctRows'] = window.evaluate_js(
+            "document.querySelectorAll('.acct__row').length")
+        said['acctSays'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.acct__row')).map("
+            "r => r.dataset.provider + ':' + r.dataset.active)")
+        # One form for both providers, and the provider switch changes what
+        # it asks for rather than which form is shown.
+        # The provider chooser, which is a different question from the
+        # roster above it: an account can be signed in and still be one you
+        # do not want exits from today.
+        said['useBoxes'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.use__opt input'))"
+            ".map(b => b.value + ':' + (b.disabled ? 'none' : b.checked))")
+        said['useCounts'] = window.evaluate_js(
+            "[document.getElementById('useSurfsharkN').textContent,"
+            " document.getElementById('useWindscribeN').textContent]")
+
+        window.evaluate_js("document.getElementById('acctAdd').click()")
+        time.sleep(0.5)
+        # A dialog over the pane, not a form unfolding inside the list - the
+        # list is what "is this one already here" needs to still see.
+        said['acctFormOpen'] = window.evaluate_js(
+            "document.getElementById('acctDlg').open")
+        said['acctCapSurfshark'] = window.evaluate_js(
+            "document.getElementById('acctUserCap').textContent")
+        window.evaluate_js(
+            "document.querySelector('#acctWhich [data-provider=windscribe]').click()")
+        time.sleep(0.3)
+        said['acctCapWindscribe'] = window.evaluate_js(
+            "document.getElementById('acctUserCap').textContent")
+        said['acctTwoShown'] = window.evaluate_js(
+            "!document.getElementById('acctTwoWrap').hidden")
+        said['acctForm'] = shot('settings-add-account')
+        window.evaluate_js("document.getElementById('acctCancel').click()")
+        time.sleep(0.3)
+        said['acctFormClosed'] = window.evaluate_js(
+            "!document.getElementById('acctDlg').open")
+        said['accounts'] = shot('settings-accounts')
+
+        # -- the Windscribe puzzle ------------------------------------
+        #
+        # Driven rather than looked at, because the part that can be wrong is
+        # arithmetic and not appearance: the answer has to be given in the
+        # background image's own pixels, and what the drag produces is
+        # positions in a box that is a different width. A screenshot of a
+        # piece in the right place proves none of that.
+        #
+        # Letting go now sends the puzzle, so the bridge call is replaced
+        # first with one that writes down what it was given. Without that,
+        # running this test would attempt a real login against a real
+        # account - and there is a rate limiter and a lockout on the other
+        # end of that. Recording it is also the better test: what matters is
+        # what would have been sent.
+        said['wsPane'] = window.evaluate_js(
+            "!!document.getElementById('acctWsTools')")
+        window.evaluate_js("""
+            (function () {
+              window.__wsReal = window.pywebview.api.windscribeFinish;
+              window.__wsSent = null;
+              window.pywebview.api.windscribeFinish =
+                (token, solution, trailX, trailY, code2fa) => {
+                  window.__wsSent = {token, solution, trailX, trailY, code2fa};
+                  return Promise.resolve(
+                    {ok: false, error: 'not sent - ui-check stub'});
+                };
+            })()""")
+
+        # The token comes from the call that fetched the puzzle, and this
+        # test skips that call - so it is stood in for here. Without it the
+        # submit refuses, correctly, and the drag looks broken for a reason
+        # that only exists in the test.
+        # With the add-account dialog already up, which is where a real
+        # puzzle arrives from - one modal opening over another, and the drag
+        # having to work in the top one. Shown on its own, this test passed
+        # while the flow it stands for was never tried.
+        window.evaluate_js("acctShowForm(true); acctSetProvider('windscribe')")
+        time.sleep(0.5)
+        window.evaluate_js(
+            f"wsShowCaptcha({{kind:'slider',top:{UI_CHECK_TOP},"
+            f"background:'{UI_CHECK_BG}',slider:'{UI_CHECK_PIECE}'}});"
+            "ws.token = 'ui-check-token'")
+        time.sleep(1.5)
+        said['captchaOverForm'] = window.evaluate_js(
+            "document.getElementById('acctDlg').open"
+            " && document.getElementById('wsCapDlg').open")
+        # The one that decides whether it can be dragged at all: the piece
+        # has to be the topmost thing under the pointer where it is drawn.
+        said['captchaOnTop'] = window.evaluate_js(
+            "(() => { const p = document.getElementById('wsCapPc');"
+            " const b = p.getBoundingClientRect();"
+            " const hit = document.elementFromPoint(b.left + b.width / 2,"
+            "                                       b.top + b.height / 2);"
+            " return hit === p ? 'the piece' : (hit && hit.id) || 'something else'; })()")
+        # A dialog, so that "is it up" is a question about the window rather
+        # than about a hidden attribute somewhere down the settings sheet.
+        said['wsCaptchaShown'] = window.evaluate_js(
+            "document.getElementById('wsCapDlg').open")
+        said['wsScale'] = window.evaluate_js('ws.scale')
+        # The two widths the clamp is built out of. Reported because when a
+        # drag comes back pinned at zero these are the only two numbers that
+        # can be responsible, and neither is visible in a screenshot.
+        said['wsStageW'] = window.evaluate_js(
+            "document.getElementById('wsCapStage').getBoundingClientRect().width")
+        said['wsPieceW'] = window.evaluate_js(
+            "document.getElementById('wsCapPc').offsetWidth")
+        # The piece is scaled with the background rather than drawn at its own
+        # 240px, and sits where the cut is. Both are what make the puzzle
+        # solvable at all: an unscaled piece covers a third of the picture.
+        said['wsPieceTop'] = window.evaluate_js(
+            "document.getElementById('wsCapPc').style.top")
+        said['wsCaptcha'] = shot('settings-windscribe')
+
+        # A drag in three moves, so the trail has to collect more than the
+        # endpoint. Dispatched at the piece, which is the handle, and from a
+        # cursor 7px below the top of the picture - the y values sent are
+        # measured from there, so a wrong origin shows up as a trail of the
+        # wrong numbers rather than as anything visible.
+        window.evaluate_js("""
+            (function () {
+              const pc = document.getElementById('wsCapPc');
+              const box = document.getElementById('wsCapStage')
+                            .getBoundingClientRect();
+              const y = box.top + 7;
+              const at = (type, x) => pc.dispatchEvent(new PointerEvent(type, {
+                clientX: x, clientY: y, pointerId: 1, bubbles: true }));
+              at('pointerdown', box.left + 10);
+              at('pointermove', box.left + 40);
+              at('pointermove', box.left + 80);
+              at('pointermove', box.left + 120);
+              at('pointerup', box.left + 120);
+            })()""")
+        # Let go is the answer, so by now it should already have gone.
+        time.sleep(1.2)
+
+        said['wsLeft'] = window.evaluate_js('ws.left')
+        said['wsSolution'] = window.evaluate_js('wsSolution()')
+        # The piece must have moved, and the rail's knob with it.
+        said['wsPieceMoved'] = window.evaluate_js(
+            "document.getElementById('wsCapPc').style.transform")
+        said['wsKnobFollowed'] = window.evaluate_js(
+            "document.getElementById('wsCapKnob').style.transform")
+
+        # What letting go actually sent - the whole point of the change, and
+        # the thing that was silently not happening before.
+        said['wsAutoSent'] = window.evaluate_js('!!window.__wsSent')
+        said['wsSentSolution'] = window.evaluate_js(
+            'window.__wsSent && window.__wsSent.solution')
+        said['wsSentMatches'] = window.evaluate_js(
+            'window.__wsSent && window.__wsSent.solution === wsSolution()')
+        said['wsSentTrail'] = window.evaluate_js(
+            'window.__wsSent && window.__wsSent.trailX.length')
+        # The trail carries the piece's position, not the cursor's - so the
+        # last x has to be the piece's left, and not the pointer's distance
+        # across the screen.
+        said['wsTrailIsPiece'] = window.evaluate_js(
+            'window.__wsSent && window.__wsSent.trailX[window.__wsSent.trailX.length - 1]'
+            ' === Math.round(ws.left)')
+        # And y is measured from the top of the picture, so a cursor 7px down
+        # reads as 7 rather than as several hundred.
+        said['wsTrailY'] = window.evaluate_js(
+            'window.__wsSent && window.__wsSent.trailY[0]')
+        said['wsTrailWhole'] = window.evaluate_js(
+            'window.__wsSent && window.__wsSent.trailX.every(Number.isInteger)'
+            ' && window.__wsSent.trailY.every(Number.isInteger)')
+        # An answer has to land inside what the puzzle can accept, which is
+        # the background's own width less the piece - 460 for a real one.
+        said['wsSolutionInRange'] = window.evaluate_js(
+            'wsSolution() >= 0 && wsSolution() <= 700 - 240')
+        # And a rejected puzzle takes the dialog down with it rather than
+        # leaving a spent token on screen.
+        said['wsClosedOnFail'] = window.evaluate_js(
+            "!document.getElementById('wsCapDlg').open && ws.token === null")
+        said['wsToldWhy'] = window.evaluate_js(
+            "document.getElementById('wsSaid').textContent")
+
+        window.evaluate_js(
+            'window.pywebview.api.windscribeFinish = window.__wsReal')
+        window.evaluate_js('wsHideCaptcha()')
+        said['wsCleared'] = window.evaluate_js(
+            "!document.getElementById('wsCapDlg').open && ws.token === null")
+        # And the form it opened over. Left up, it is a modal covering every
+        # screenshot taken after this point - which is how the exits shot
+        # came back showing the add-account dialog.
+        window.evaluate_js('acctShowForm(false)')
+        time.sleep(0.4)
+        said['formClosedAfterCaptcha'] = window.evaluate_js(
+            "!document.getElementById('acctDlg').open")
         said['sweep'] = window.evaluate_js(
             "document.getElementById('sweepSaid').textContent")
         said['sweepFolder'] = window.evaluate_js(
@@ -1696,6 +2485,100 @@ def ui_check(window):
         said['pickerOpen'] = window.evaluate_js(
             "document.getElementById('picker').open")
         said['picker'] = shot('picker')
+        # Which provider each country's exits come from, said on the row. The
+        # point of the tag is the rows backed by both: with one provider
+        # switched on it is decoration, and with two it is the only thing
+        # that says which credential is about to open the exit.
+        said['rowsTagged'] = window.evaluate_js(
+            "document.querySelectorAll('.row .row__tag:not(.row__tag--none)').length")
+        said['rowsWithBoth'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row'))"
+            ".filter(r => r.querySelectorAll("
+            "'.row__tag:not(.row__tag--none)').length > 1).length")
+        said['tagLetters'] = window.evaluate_js(
+            "Array.from(new Set(Array.from("
+            "document.querySelectorAll('.row__tag:not(.row__tag--none)'))"
+            ".map(t => t.textContent))).sort()")
+        said['tagSaysWhich'] = window.evaluate_js(
+            "(document.querySelector('.row__tag:not(.row__tag--none)') || {}).title")
+
+        # -- one country, two ways into it ----------------------------
+        #
+        # Fed synthetic countries rather than whatever is pinned today: the
+        # case that matters is a country both providers reach, and whether
+        # this machine happens to have one is not something a test should
+        # depend on. The rows are the real ones, built by the real builder.
+        window.evaluate_js("""
+            (function () {
+              window.__realCountries = state.countries;
+              state.countries = [
+                {code: 'zz', name: 'Bothland', alias: '', cities: 2, count: 12,
+                 best: null, by: {surfshark: 9, windscribe: 3}},
+                {code: 'zy', name: 'Onlyland', alias: '', cities: 1, count: 4,
+                 best: null, by: {windscribe: 4}}
+              ];
+              drawList('');
+            })()""")
+        time.sleep(0.6)
+        # One row per place now, with a sign for each provider that backs
+        # it - the rows-per-provider said less than the signs do and cost a
+        # line each, on a list whose whole job is to be scanned.
+        said['splitRows'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row[data-code]'))"
+            ".map(r => r.dataset.code).filter(c => c.startsWith('z'))")
+        said['splitSigns'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row[data-code=zz]"
+            " .row__tag:not(.row__tag--none)')).map(t => t.textContent + ':' + t.dataset.state)")
+        said['splitOneSign'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row[data-code=zy]"
+            " .row__tag:not(.row__tag--none)')).map(t => t.textContent)")
+        # And the sign's colour is that provider's own tally, which is the
+        # whole reason it replaced the rows: a provider nobody asked about
+        # must not inherit the other one's verdict.
+        said['signStates'] = window.evaluate_js(
+            "(() => { const n = {};"
+            " for (const t of document.querySelectorAll('.row__tag:not(.row__tag--none)'))"
+            "   n[t.dataset.state] = (n[t.dataset.state] || 0) + 1;"
+            " return n; })()")
+        # The rows must all be one height. Tags used to sit under the name,
+        # so a country that had them was half a row taller than one that did
+        # not, for a reason nothing on screen explained.
+        said['rowHeights'] = window.evaluate_js(
+            "Array.from(new Set(Array.from("
+            "document.querySelectorAll('.row:not(.row--auto)'))"
+            ".map(r => Math.round(r.getBoundingClientRect().height)))).sort()")
+        said['splitSignTitles'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row[data-code=zz]"
+            " .row__tag:not(.row__tag--none)')).map(t => t.title)")
+        # A country only one provider reaches stays a single plain row - if
+        # everything split, the split would mean nothing.
+        said['splitLeavesSingles'] = window.evaluate_js(
+            'document.querySelectorAll(".row[data-code=zy]").length === 1'
+            ' && document.querySelectorAll(".row[data-code^=\'zy:\']").length === 0')
+        # And picking one of the sub-rows is what tells the app which.
+        said['splitPickable'] = window.evaluate_js(
+            '!!document.querySelector(".row[data-code=\'zz:windscribe\']")')
+        said['splitNames'] = window.evaluate_js(
+            "nameOf('zz:windscribe') + ' | ' + nameOf('zz')")
+        # Indented rows must still fit. .row is width:100%, so an indent put
+        # on as a margin makes every one of them overhang by exactly the
+        # indent and gives the list a horizontal scrollbar.
+        said['splitOverflows'] = window.evaluate_js(
+            "(() => { const l = document.getElementById('list');"
+            " return l.scrollWidth - l.clientWidth; })()")
+        said['splitWidest'] = window.evaluate_js(
+            "(() => { const l = document.getElementById('list').getBoundingClientRect();"
+            " return Math.max(0, ...Array.from(document.querySelectorAll('.row'))"
+            ".map(r => Math.round(r.getBoundingClientRect().right - l.right))); })()")
+        said['splitShot'] = shot('picker-split')
+        window.evaluate_js(
+            "state.countries = window.__realCountries; drawList('')")
+        # A country only one of them reaches is the other half of the same
+        # claim - if every row carried both tags the tag would mean nothing.
+        said['rowsOneOnly'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row'))"
+            ".filter(r => r.querySelectorAll("
+            "'.row__tag:not(.row__tag--none)').length === 1).length")
         # And the chosen row, which is the only one that looks different and
         # is almost never the one at the top of the list.
         said['pickedRow'] = window.evaluate_js(
@@ -1704,6 +2587,342 @@ def ui_check(window):
             " r.scrollIntoView({block: 'center'});"
             " return r.dataset.code; })()")
         time.sleep(0.7)
+        # -- cities, marks, stars and order ---------------------------
+        #
+        # The four things Windscribe's own list has that ours did not, and
+        # three of them come off data we were already downloading and
+        # throwing away.
+        # Shut by default now, which is the point - every country's cities
+        # at once was a list of cities pretending to be a list of countries.
+        said['citiesShutAtRest'] = window.evaluate_js(
+            "document.querySelectorAll('.row--city').length")
+        said['expandersOffered'] = window.evaluate_js(
+            "document.querySelectorAll('[data-expand]').length")
+        # From partway down, because the bug was that opening one threw the
+        # list back to the top and lost the row that had just been clicked.
+        window.evaluate_js(
+            "document.getElementById('list').scrollTop = 320")
+        time.sleep(0.4)
+        said['scrollBefore'] = window.evaluate_js(
+            "document.getElementById('list').scrollTop")
+        window.evaluate_js(
+            "(() => { const ps = document.querySelectorAll('[data-expand]');"
+            " const p = ps[Math.min(3, ps.length - 1)];"
+            " if (p) p.click(); return !!p; })()")
+        time.sleep(0.9)
+        said['scrollAfter'] = window.evaluate_js(
+            "document.getElementById('list').scrollTop")
+        said['cityRows'] = window.evaluate_js(
+            "document.querySelectorAll('.row--city').length")
+        said['expandDidNotConnect'] = window.evaluate_js(
+            "document.getElementById('picker').open && state.mode !== 'busy'")
+        said['cityNicks'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row--city .row__nick'))"
+            ".slice(0, 4).map(e => e.textContent)")
+        said['cityMarks'] = window.evaluate_js(
+            "(() => { const r = document.querySelector('.row--city');"
+            " if (!r) return null;"
+            " return { load: !!r.querySelector('.load'),"
+            "          marks: Array.from(r.querySelectorAll('.mark'))"
+            "                      .map(m => m.textContent) }; })()")
+        # A star is inside a row that would otherwise take the click and
+        # connect somewhere, so the one thing worth asserting is that it
+        # does not - and that the row it names goes to the top.
+        # From a known state, and put back afterwards. A test that toggles
+        # leaves the toggle where it left it, so the next run starts from the
+        # opposite of what this one assumed and asserts the reverse.
+        window.evaluate_js(
+            "(async () => { for (const c of state.favourites.slice())"
+            "   await window.pywebview.api.toggleFavourite(c);"
+            " state.favourites = []; })()")
+        time.sleep(0.8)
+        said['starBefore'] = window.evaluate_js(
+            "(document.querySelectorAll('.row[data-code]')[1] || {}).dataset"
+            " && document.querySelectorAll('.row[data-code]')[1].dataset.code")
+        window.evaluate_js(
+            "(() => { const rows = document.querySelectorAll('.row[data-code]');"
+            " const s = rows[1] && rows[1].querySelector('[data-star]');"
+            " if (s) s.click(); return !!s; })()")
+        time.sleep(1.0)
+        said['starDidNotConnect'] = window.evaluate_js(
+            "document.getElementById('picker').open && state.mode !== 'busy'")
+        # Past the "Fastest available" row, which is always first and is not
+        # a place - so the starred one is the first country, not the first
+        # row.
+        said['starFloatsUp'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row[data-code]'))"
+            ".map(r => r.dataset.code).filter(c => c !== 'auto')[0]")
+        said['starKept'] = window.evaluate_js('state.favourites.slice(0, 3)')
+        # And unstarred again, so the roster this check leaves behind is the
+        # one it found.
+        window.evaluate_js(
+            "(() => { const s = document.querySelector('[data-star][data-on=true]');"
+            " if (s) s.click(); })()")
+        time.sleep(0.6)
+        said['starCleared'] = window.evaluate_js('state.favourites.length')
+        # And the order really is a choice now.
+        window.evaluate_js(
+            "document.querySelector('#sortBy [data-sort=name]').click()")
+        time.sleep(0.8)
+        said['sortedByName'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row:not(.row--city)"
+            "[data-code]')).slice(0, 4).map(r => r.dataset.code)")
+        # If the picker has closed by here, something in the steps above
+        # picked a row - which is worth knowing about, because none of them
+        # is supposed to.
+        said['pickerStillOpen'] = window.evaluate_js(
+            "document.getElementById('picker').open")
+        said['modeNow'] = window.evaluate_js('state.mode')
+        said['citiesShot'] = shot('picker-cities')
+
+        # -- picking one connects to it -------------------------------
+        #
+        # Stubbed, because the assertion is that choosing calls connect with
+        # the code that was chosen - not that this machine can reach Austria
+        # right now. Letting it through would also leave the check having
+        # moved the Windows proxy, which is not a thing a check should do.
+        window.evaluate_js("""
+            (function () {
+              window.__realConnect = window.pywebview.api.connect;
+              window.__connectedTo = null;
+              window.pywebview.api.connect = (code) => {
+                window.__connectedTo = code;
+                return Promise.resolve({ok: true});
+              };
+            })()""")
+        window.evaluate_js(
+            "(() => { const r = Array.from("
+            "document.querySelectorAll('.row[data-code]'))"
+            ".find(r => r.dataset.code !== 'auto');"
+            " if (r) r.click(); return r && r.dataset.code; })()")
+        time.sleep(1.0)
+        said['pickConnected'] = window.evaluate_js('window.__connectedTo')
+        said['pickClosedSheet'] = window.evaluate_js(
+            "!document.getElementById('picker').open")
+        # Put it all back: the real call, the idle state, and the status
+        # line, which choose() had set to CONNECTING and which nothing else
+        # resets while the connection it describes never happened.
+        window.evaluate_js(
+            'window.pywebview.api.connect = window.__realConnect;'
+            "state.mode = 'off'; render();"
+            "setStatus('DISCONNECTED', 'off', '', '');"
+            'openPicker()')
+        time.sleep(1.0)
+        # Asserted, because the rows stay in the DOM whether the sheet is up
+        # or not - so every check after this one passed while the screenshots
+        # showed the window behind it.
+        said['pickerBackOpen'] = window.evaluate_js(
+            "document.getElementById('picker').open")
+        window.evaluate_js(
+            "document.querySelector('#sortBy [data-sort=ping]').click()")
+
+        # -- which answered, and how fast -----------------------------
+        #
+        # Read off the real list rather than a synthetic one, because the
+        # point of the feature is what it says about exits that have been
+        # asked - and by now some of these have been.
+        said['reachBar'] = window.evaluate_js(
+            "!!document.getElementById('reachGo')")
+        said['rowStates'] = window.evaluate_js(
+            "(() => { const n = {};"
+            " for (const r of document.querySelectorAll('.row[data-state]'))"
+            "   n[r.dataset.state] = (n[r.dataset.state] || 0) + 1;"
+            " return n; })()")
+        said['rowsSayMs'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row__meta'))"
+            ".filter(e => / ms| s$|blocked here/.test(e.textContent)).length")
+        # Opening one country's exits, which is the "each server" half.
+        window.evaluate_js(
+            "(() => { const m = document.querySelector('[data-exits]');"
+            " if (m) m.click(); return !!m; })()")
+        time.sleep(1.2)
+        said['exitsOpened'] = window.evaluate_js(
+            "document.querySelectorAll('.exit').length")
+        said['exitsPickable'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.exit'))"
+            ".every(e => (e.dataset.code || '').startsWith('file:'))")
+        said['exitsSay'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.exit')).slice(0, 4).map("
+            "e => e.dataset.state + ' ' + e.querySelector('.exit__ping').textContent)")
+        # Which provider each exit is, and that opening one did not throw
+        # the reader back to the top of the list.
+        said['exitSigns'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.exit .row__tag:not(.row__tag--none)'))"
+            ".slice(0, 4).map(t => t.textContent + ':' + t.dataset.state)")
+        said['exitNames'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.exit__name'))"
+            ".slice(0, 3).map(e => e.textContent)")
+        said['exitsShot'] = shot('picker-exits')
+        # A country whose every address was refused. It has to read as
+        # different from one nobody has asked yet - that difference is the
+        # whole feature, and it is the one thing a colour alone cannot carry.
+        said['blockedSays'] = window.evaluate_js(
+            "(() => { const r = document.querySelector('.row[data-state=blocked]');"
+            " if (!r) return null; r.scrollIntoView({block: 'center'});"
+            " return r.querySelector('.row__name').textContent + ' | '"
+            "      + r.querySelector('.row__meta').textContent; })()")
+        time.sleep(0.7)
+        said['blockedShot'] = shot('picker-blocked')
+        # -- a sweep of the whole list ---------------------------------
+        #
+        # Asked of the rendered page rather than of the code, because every
+        # one of these has been wrong at some point in a way the code read
+        # correctly: a row two pixels wider than the list, a control that
+        # lost its column, a name that came out as its own filename.
+        said['audit'] = window.evaluate_js(r"""
+            (function () {
+              const list = document.getElementById('list');
+              const box = list.getBoundingClientRect();
+              // Only the rows actually on screen. The list uses
+              // content-visibility, so anything scrolled out of view reports
+              // its contain-intrinsic-size placeholder rather than a height
+              // anything has measured - and comparing those against real
+              // ones invents a difference that is not on the page.
+              const rows = Array.from(list.querySelectorAll('.row[data-code]'))
+                .filter((r) => {
+                  const b = r.getBoundingClientRect();
+                  return b.bottom > box.top && b.top < box.bottom;
+                });
+              const heights = new Set();
+              const bad = [];
+              let noName = 0, noChip = 0, escaped = 0, rawCode = 0;
+              for (const r of rows) {
+                const rb = r.getBoundingClientRect();
+                heights.add(Math.round(rb.height));
+                if (rb.right > box.right + 0.5 || rb.left < box.left - 0.5) {
+                  bad.push(r.dataset.code);
+                }
+                const n = r.querySelector('.row__name');
+                if (!n || !n.textContent.trim()) noName++;
+                // A name that still looks like a filename or a code.
+                if (n && /\.ovpn|\.prod\.|totallyacdn/.test(n.textContent)) rawCode++;
+                if (!r.querySelector('.chip')) noChip++;
+                if (r.querySelector('.row__meta') &&
+                    r.querySelector('.row__meta').scrollWidth
+                      > r.querySelector('.row__meta').clientWidth + 1) escaped++;
+              }
+              // The right-hand controls must all start at the same x, or the
+              // column reads as ragged however tidy each row is on its own.
+              const starXs = new Set(Array.from(
+                list.querySelectorAll('.row > .star'))
+                .map(e => Math.round(e.getBoundingClientRect().left)));
+              return {
+                rows: rows.length,
+                heights: [...heights].sort((a, b) => a - b),
+                overflowing: bad.slice(0, 4),
+                // What sticks out, which is the only sideways overflow a
+                // person can see. Not scrollWidth against clientWidth, which
+                // differ by the list's own padding and by the width a
+                // vertical scrollbar takes back after the rows were sized
+                // without it; and not scrollLeft, which moves under script
+                // even on a box whose overflow-x is hidden. Both of those
+                // report eight pixels of nothing on a list where no row
+                // overhangs by one.
+                sideways: (function () {
+                  let by = 0;
+                  for (const el of list.querySelectorAll('.row, .exit')) {
+                    const b = el.getBoundingClientRect();
+                    by = Math.max(by, b.right - box.right, box.left - b.left);
+                  }
+                  return Math.round(by);
+                })(),
+                withoutName: noName,
+                withoutFlag: noChip,
+                nameIsAFilename: rawCode,
+                metaTruncated: escaped,
+                starColumns: [...starXs].sort((a, b) => a - b),
+                // And if the list scrolls sideways at all, which element is
+                // sticking out. "8px of overflow" is not actionable; the
+                // class of the thing causing it is.
+                overflowX: getComputedStyle(list).overflowX,
+                padding: getComputedStyle(list).paddingLeft + '/'
+                  + getComputedStyle(list).paddingRight,
+                widest: (function () {
+                  let worst = null, by = 0;
+                  for (const el of list.querySelectorAll('*')) {
+                    const over = el.getBoundingClientRect().right - box.right;
+                    if (over > by) { by = over; worst = el; }
+                  }
+                  for (const el of list.querySelectorAll('*')) {
+                    const under = box.left - el.getBoundingClientRect().left;
+                    if (under > by) { by = under; worst = el; }
+                  }
+                  return worst
+                    ? `${worst.className} ${Math.round(by)}px` : 'nothing';
+                })(),
+              };
+            })()""")
+        said['whyTall'] = window.evaluate_js("""
+            (function () {
+              const pick = (sel) => document.querySelector(sel);
+              const shape = (r) => {
+                if (!r) return null;
+                const cs = getComputedStyle(r);
+                const copy = r.querySelector('.row__copy');
+                const meta = r.querySelector('.row__meta');
+                return {
+                  code: r.dataset.code,
+                  h: Math.round(r.getBoundingClientRect().height),
+                  pad: cs.paddingTop + '/' + cs.paddingBottom,
+                  copyH: copy ? Math.round(copy.getBoundingClientRect().height) : 0,
+                  metaH: meta ? Math.round(meta.getBoundingClientRect().height) : 0,
+                  metaW: meta ? Math.round(meta.getBoundingClientRect().width) : 0,
+                  metaScroll: meta ? meta.scrollWidth : 0,
+                  kids: Array.from(r.children).map(k => k.className),
+                };
+              };
+              const rows = Array.from(
+                document.querySelectorAll('.row[data-code]'));
+              const short = rows.find(r =>
+                Math.round(r.getBoundingClientRect().height) < 60);
+              const tall = rows.find(r =>
+                Math.round(r.getBoundingClientRect().height) >= 60);
+              return {short: shape(short), tall: shape(tall)};
+            })()""")
+        said['auditDetail'] = window.evaluate_js("""
+            (function () {
+              const out = {tall: [], cut: []};
+              const lb = document.getElementById('list').getBoundingClientRect();
+              for (const r of document.querySelectorAll('.row[data-code]')) {
+                const b = r.getBoundingClientRect();
+                if (b.bottom <= lb.top || b.top >= lb.bottom) continue;
+                const h = Math.round(b.height);
+                if (h !== 53) out.tall.push(r.dataset.code + ':' + h);
+                const m = r.querySelector('.row__meta');
+                if (m && m.scrollWidth > m.clientWidth + 1) {
+                  out.cut.push(r.dataset.code + ' :: ' + m.textContent);
+                }
+              }
+              return out;
+            })()""")
+        # Search, which is the other way into the same list.
+        window.evaluate_js(
+            "document.getElementById('search').value = 'net';"
+            "drawList('net')")
+        time.sleep(0.6)
+        said['searchFound'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row[data-code]'))"
+            ".map(r => r.dataset.code).slice(0, 5)")
+        said['searchKeepsControls'] = window.evaluate_js(
+            "Array.from(document.querySelectorAll('.row[data-code]'))"
+            ".every(r => r.querySelector('.star'))")
+        window.evaluate_js(
+            "document.getElementById('search').value = ''; drawList('')")
+        time.sleep(0.5)
+        # Each sort really reorders, and none of them loses a row.
+        said['sortCounts'] = window.evaluate_js("""
+            (function () {
+              const out = {};
+              for (const k of ['ping', 'load', 'name']) {
+                document.querySelector(`#sortBy [data-sort=${k}]`).click();
+                const rows = Array.from(
+                  document.querySelectorAll('.row[data-code]'))
+                  .map(r => r.dataset.code).filter(c => c !== 'auto');
+                out[k] = [rows.length, rows.slice(0, 3).join(',')];
+              }
+              document.querySelector('#sortBy [data-sort=ping]').click();
+              return out;
+            })()""")
         said['pickedShot'] = shot('picker-picked')
         said['errorsAfter'] = window.evaluate_js('window.__errs')
     except Exception as e:
@@ -1771,6 +2990,15 @@ def main():
                 traceback.print_exc()
         if '--ui-check' in sys.argv:
             threading.Thread(target=ui_check, args=(window,),
+                             daemon=True).start()
+        if '--ui-layout' in sys.argv:
+            # An optional scene name after the flag, for the loop where you
+            # are fixing one sheet and do not want to sit through nine.
+            import uilayout
+            i = sys.argv.index('--ui-layout') + 1
+            only = sys.argv[i] if len(sys.argv) > i                 and not sys.argv[i].startswith('-') else None
+            threading.Thread(target=uilayout.run,
+                             args=(window, only, '--notes' in sys.argv),
                              daemon=True).start()
 
     def closing():

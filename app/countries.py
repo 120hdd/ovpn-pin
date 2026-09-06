@@ -8,12 +8,33 @@ misleading, which is the right way round - inventing a country name for a
 server would put a claim on screen that nothing checked.
 """
 
+# One country, one code, whatever the provider calls it.
+#
+# Surfshark's configs say `uk` and Windscribe's say `gb`, and with both
+# switched on the United Kingdom appeared twice in the list - two rows, two
+# flags' worth of servers split between them, and no way to tell from either
+# that the other existed. The docstring above already settles which one wins:
+# the codes here come from the config filenames, and in those it is `uk`.
+#
+# Applied where a code is read rather than where it is written, so that
+# configs pinned before this existed are filed with the ones pinned after.
+CANON = {'gb': 'uk'}
+
+
+def canon(code):
+    code = (code or '').lower()
+    return CANON.get(code, code)
+
+
 NAMES = {
     'ad': 'Andorra',        'ae': 'United Arab Emirates',
     'af': 'Afghanistan',    'al': 'Albania',
-    'am': 'Armenia',        'ar': 'Argentina',
-    'at': 'Austria',        'au': 'Australia',
-    'az': 'Azerbaijan',     'ba': 'Bosnia and Herzegovina',
+    # Antarctica is not a joke entry: Windscribe lists one, and without a
+    # name here the country picker offers a row reading "AQ".
+    'am': 'Armenia',        'aq': 'Antarctica',
+    'ar': 'Argentina',      'at': 'Austria',
+    'au': 'Australia',      'az': 'Azerbaijan',
+    'ba': 'Bosnia and Herzegovina',
     'bd': 'Bangladesh',     'be': 'Belgium',
     'bg': 'Bulgaria',       'bh': 'Bahrain',
     'bn': 'Brunei',         'bo': 'Bolivia',

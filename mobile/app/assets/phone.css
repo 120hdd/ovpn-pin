@@ -1,0 +1,96 @@
+/* What a phone needs and a 400x660 window did not.
+ *
+ * Loaded after app.css and never instead of it. app/ui stays the original, and
+ * this is the only file that knows a phone exists - so a change to the design
+ * still arrives by re-running sync-ui.sh, and nothing here has to be
+ * reconciled with anything there.
+ *
+ * Everything below earns its place by being *wrong* on a phone rather than by
+ * being different on one. Taste goes upstream into app.css, where the desktop
+ * gets it too.
+ */
+
+/* ------------------------------------------------------------ the tall gap */
+
+/* .hero and .swap are both `flex: 1`. In a 660px window that shares the slack
+ * between the orb and the two address cards, which is what it is for. On a
+ * phone there is nearer 870px and the surplus lands in one hole in the middle
+ * - which reads as something failing to load rather than as space.
+ *
+ * The orb keeps growing, because it is the thing worth looking at. The cards
+ * stop at the size they were drawn, because a two-line card stretched to four
+ * lines of nothing is not a bigger card, it is a card with a hole in it. */
+/* .hero is `flex: 1`, and inside it the orb is pinned to the top
+ * (`.blob-stage { position: absolute; top: 1px }`) and the two address cards
+ * to the bottom (`.swap { position: absolute; bottom: 0 }`). So the hole in
+ * the middle is not a bug in either of them - it is the height of .hero, and
+ * .hero is however much column is left over.
+ *
+ * Which means the honest fix is not a number invented here. It is to give the
+ * page the window it was drawn for and put the surplus outside it: 660px, the
+ * height app/main.py opens on the desktop, centred, with the rest as margin.
+ * Then every proportion inside is the desktop's, because it is the desktop's
+ * own arithmetic doing it.
+ *
+ * max-height keeps it honest the other way too - a phone shorter than 660
+ * gets the layout app.css already handles at that size. */
+body {
+  display: flex;
+  align-items: center;
+}
+
+.app {
+  height: 660px;
+  max-height: 100%;
+  width: 100%;
+}
+
+/* --------------------------------------------------------- the safe areas */
+
+/* Flutter hands the page the whole screen, status bar and gesture bar
+ * included. Unpaid, the RELAY mark sits under the clock. */
+body {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  box-sizing: border-box;
+}
+
+/* ---------------------------------------------------------------- touch */
+
+@media (pointer: coarse) {
+  /* 44px is the smallest a finger hits reliably, and several of these were
+   * drawn at 34 for a mouse. */
+  .btn,
+  .row,
+  .chip,
+  .quiet {
+    min-height: 44px;
+  }
+
+  /* Nothing here is hovered. Left in, a tapped control keeps its hover
+   * colour until something else is tapped - which reads as a selection that
+   * will not clear. */
+  .quiet:hover,
+  .row:hover,
+  .chip:hover,
+  .icon:hover {
+    background: inherit;
+  }
+}
+
+/* A long press selects text and offers to copy it. Over a status line that is
+ * a magnifier on a word nobody wanted. Left on for the addresses, which are
+ * the one thing here worth copying. */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+.mono,
+#realIp,
+#exitIp {
+  -webkit-user-select: text;
+  user-select: text;
+}

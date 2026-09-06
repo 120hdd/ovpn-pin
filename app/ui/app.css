@@ -3147,3 +3147,787 @@ canvas.blob__body {
    with a filter to run over it. The look survives being folded into the
    opacity and the mask that were already there; the layer does not. */
 .sheet__list .row::before { filter: none; }
+
+/* ------------------------------------------------- the Windscribe captcha */
+
+/* A slider puzzle, drawn from the two base64 images the API sends. It is
+   here rather than in a hosted page or a second window for one reason worth
+   writing down: the puzzle arrives as data, so there is nothing to embed and
+   nobody else's frame to trust. The app draws it, the person drags it, and
+   the pointer path that comes out is what gets sent.
+
+   The stage is sized by the background's natural width, and the piece is
+   positioned in that same coordinate space - which is the space the solution
+   is measured in, so nothing has to be scaled back on the way out. */
+.ws-cap { display: grid; gap: 8px; margin: 2px 0 4px; }
+
+.ws-cap__stage {
+  position: relative;
+  width: 100%;
+  border-radius: var(--r-ctl);
+  overflow: hidden;
+  background: var(--control);
+  border: 1px solid var(--border);
+  /* No selection and no drag-image: both fire on a slow drag over an <img>
+     and both end the gesture, which loses the trail halfway through and
+     submits a path that stops in the middle of the puzzle. */
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.ws-cap__bg { display: block; width: 100%; height: auto; pointer-events: none; }
+/* The handle, not decoration - this is what gets dragged, so it has to take
+   the pointer. The rail below only mirrors where it reached. */
+.ws-cap__pc {
+  position: absolute;
+  left: 0;
+  cursor: grab;
+  touch-action: none;
+  will-change: transform;
+}
+.ws-cap__stage.is-held .ws-cap__pc { cursor: grabbing; }
+
+/* The rail is the thing under the pointer, not the piece. Dragging the piece
+   itself means the grab point and the reported position drift apart as the
+   image scales, and the first version did exactly that - the piece lagged
+   the cursor by a few pixels at one window size and matched it at another. */
+.ws-cap__rail {
+  position: relative;
+  height: 34px;
+  border-radius: 999px;
+  background: var(--control);
+  border: 1px solid var(--border);
+  touch-action: none;
+  /* Draggable too, so it has to say so. A bar with a knob on it reads as
+     draggable whatever the caption above says. */
+  cursor: grab;
+}
+.ws-cap__stage.is-held ~ .ws-cap__rail { cursor: grabbing; }
+.ws-cap__knob {
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 46px; height: 26px;
+  border-radius: 999px;
+  background: var(--control-active);
+  border: 1px solid var(--border);
+  will-change: transform;
+}
+.ws-cap__stage.is-held ~ .ws-cap__rail .ws-cap__knob {
+  background: var(--control-hover);
+}
+
+.ws-cap__ascii {
+  margin: 0;
+  padding: 10px;
+  border-radius: var(--r-ctl);
+  background: var(--control);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1.05;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* "optional", beside a caption that would otherwise read as a demand. Same
+   size as the caption and dimmer, so it reads as an aside rather than as a
+   second label. */
+.field__hint {
+  color: var(--text-off);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* The captcha dialog. Full-window like the other sheets, because the app's
+   window is small and a floating box inside a 400px-wide window is a box
+   with nowhere to float. The content sits at the top rather than centred:
+   the piece has to line up with a gap in a picture, and a puzzle that moves
+   vertically when the error line appears under it is a puzzle you have to
+   re-aim at. */
+.sheet--captcha .ws-cap {
+  padding: 0 16px 16px;
+  align-content: start;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+/* ------------------------------------------------ the settings, as a stack */
+
+/* A list of four, then the one you picked. Not four dropdowns: collapsed
+   sections still put every heading and the top of whichever was left open in
+   front of you at once, and closing one leaves you wherever the page had
+   scrolled to rather than back where you started. */
+.menu { padding: 6px 0; }
+
+.menu__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 15px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--divider);
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.menu__row:last-child { border-bottom: 0; }
+.menu__row:hover { background: var(--control-hover); }
+.menu__row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+.menu__copy { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.menu__name { font-size: 13.5px; font-weight: 650; color: var(--text); }
+.menu__note {
+  font-size: 11px;
+  color: var(--text-off);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+/* The same chevron the groups used, turned to point the way it now goes. */
+.menu__chev {
+  flex: none;
+  width: 15px; height: 15px;
+  color: var(--text-off);
+  transform: rotate(-90deg);
+}
+
+.screen { display: block; padding: 4px 0 8px; animation: rise var(--enter); }
+
+/* Back points left, out of the same sprite. */
+.icon--back { order: -1; margin-right: 2px; }
+.icon--back .ico { transform: rotate(90deg); }
+
+/* ------------------------------------------------------ the (i) tooltips */
+
+/* The explanations used to sit under every title as a paragraph, which made
+   a sheet of seven settings read as a page of documentation. They are still
+   there, in full, one hover away - and the ones that are corrections rather
+   than descriptions ("this port answers both", "being blocked is mostly a
+   property of the address") stay where they are, inline, because those are
+   about the control beside them and not about the pane. */
+.info {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  /* It lives in the heading's own line now, where an inline-grid would
+     otherwise sit on the baseline and hang below the letters. */
+  vertical-align: middle;
+  width: 18px; height: 18px;
+  margin-left: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--text-off);
+  cursor: help;
+  position: relative;
+}
+.info:hover, .info:focus-visible { color: var(--text); }
+.info:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.info .ico { width: 13px; height: 13px; }
+
+.info__bubble {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 50%;
+  z-index: 40;
+  /* Anchored to the middle of the sheet rather than to the button, because
+     the button can sit two pixels from the right edge and a bubble centred
+     on it would hang off the window. */
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(280px, calc(100vw - 44px));
+  padding: 9px 11px;
+  border-radius: var(--r-ctl);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: left;
+  white-space: normal;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 120ms ease, visibility 120ms;
+}
+.info:hover .info__bubble,
+.info:focus-visible .info__bubble { opacity: 1; visibility: visible; }
+.info__bubble b { color: var(--text); font-weight: 600; }
+
+/* Near the right edge the bubble is pinned to the sheet instead of centred,
+   which is the one case translateX(-50%) cannot solve on its own. */
+.info--right .info__bubble { left: auto; right: 0; transform: none; }
+
+/* ----------------------------------------------------------- the roster */
+
+.acct { display: grid; gap: 6px; }
+
+.acct__row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border-radius: var(--r-ctl);
+  border: 1px solid var(--border);
+  background: var(--control);
+}
+.acct__row[data-active="1"] {
+  border-color: var(--ok);
+  background: var(--control-active);
+}
+
+.acct__who { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.acct__name {
+  font-size: 12.5px;
+  color: var(--text);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.acct__sub {
+  font-size: 10.5px;
+  color: var(--text-off);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+
+/* Which provider, said in a word rather than with a logo nobody licensed. */
+.acct__tag {
+  flex: none;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.acct__row[data-provider="windscribe"] .acct__tag { color: var(--jade-2, var(--ok)); }
+
+.acct__act { flex: none; display: flex; gap: 5px; }
+
+.acct__new {
+  display: grid;
+  gap: 9px;
+  margin-top: 4px;
+  padding: 11px;
+  border-radius: var(--r-ctl);
+  border: 1px dashed var(--border);
+}
+
+.acct__none {
+  padding: 11px;
+  border-radius: var(--r-ctl);
+  border: 1px dashed var(--border);
+  color: var(--text-off);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+
+/* -------------------------------------------- which providers, and whose */
+
+.use {
+  display: grid;
+  gap: 7px;
+  padding: 10px 11px;
+  margin-top: 8px;
+  border-radius: var(--r-ctl);
+  border: 1px solid var(--border);
+  background: var(--control);
+}
+.use__cap {
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-off);
+}
+.use__opts { display: grid; gap: 5px; }
+.use__opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+.use__opt input { accent-color: var(--ok); cursor: pointer; }
+/* Nothing pinned is said rather than shown as an empty tick that refuses. */
+.use__opt[data-empty="1"] { color: var(--text-off); cursor: default; }
+.use__opt[data-empty="1"] input { cursor: default; }
+.use__n { margin-left: auto; font-size: 10.5px; color: var(--text-off); }
+
+/* The tag on a country row. An initial, because the country's own name is
+   what the row is for and a word beside it competes with it. */
+.row__tags { display: flex; gap: 3px; margin-top: 3px; }
+.row__tag {
+  display: grid;
+  place-items: center;
+  width: 15px; height: 15px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--text-off);
+  background: var(--control);
+}
+.row__tag[data-provider="windscribe"] {
+  color: var(--jade-2, var(--ok));
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+}
+
+/* ------------------------------------- one country, two ways into it */
+
+/* The country's own row still means "whichever answers", so it keeps its
+   full weight. The rows under it are the same place through one provider
+   each: indented, quieter, and without a flag of their own - repeating the
+   flag three times would make one country look like three. */
+.row--via {
+  /* Taken out of the width as well as added to the left. .row is width:100%,
+     so an indent that is only a margin makes every indented row overhang by
+     exactly the indent - which showed up as 22px of horizontal scroll on the
+     whole list and rows running under its right edge. */
+  margin-left: 22px;
+  width: calc(100% - 22px);
+  min-height: 46px;
+}
+.row--via::before { opacity: 0.16; }
+.row--via .row__name { font-size: 12.5px; font-weight: 550; }
+
+/* A rule down the left, so the indented rows read as belonging to the one
+   above rather than as three separate countries that happen to be near
+   each other. */
+.row--via::after {
+  content: '';
+  position: absolute;
+  left: -12px; top: 6px; bottom: 6px;
+  width: 1px;
+  background: var(--divider);
+}
+
+/* ------------------------------------------ which of them actually answer */
+
+.reach {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px 10px;
+}
+.reach .note { flex: 1; min-width: 0; margin: 0; }
+
+/* The progress line sits along the bottom edge of the bar rather than in a
+   box of its own. Eight probes run at once, so the number moves in steps -
+   a line that fills is the honest shape for that, where a smooth bar would
+   be pretending to know how long the ones still in flight will take. */
+.reach__bar {
+  position: absolute;
+  left: 0; bottom: 0;
+  height: 2px;
+  width: var(--at, 0%);
+  background: var(--ok);
+  transition: width 240ms ease;
+}
+
+/* A row's own verdict, said in the one place a colour can carry it. Blocked
+   is the only one drawn loudly: it is the row you must not pick, and every
+   other state is some degree of fine. */
+.row[data-state="blocked"] .row__name { color: var(--text-off); }
+.row[data-state="blocked"] .row__meta { color: var(--fail); }
+.row[data-state="ok"] .row__meta,
+.row[data-state="some"] .row__meta { color: var(--text-muted); }
+
+.exits {
+  display: grid;
+  gap: 2px;
+  padding: 2px 16px 8px;
+}
+
+.exit {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--r-ctl);
+  background: var(--control);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.exit:hover { background: var(--control-hover); }
+.exit:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+.exit__name {
+  flex: 1; min-width: 0;
+  font-size: 11.5px;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.exit__meta {
+  flex: none;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px;
+  color: var(--text-off);
+}
+.exit__ping {
+  flex: none;
+  min-width: 62px;
+  text-align: right;
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+/* Blocked exits stay in the list rather than being hidden. Which addresses
+   are refused is the finding - dropping them would leave a shorter list
+   with no way to tell it had been filtered. */
+.exit[data-state="blocked"] { opacity: 0.55; }
+.exit[data-state="blocked"] .exit__ping {
+  color: var(--fail);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  max-width: 120px;
+}
+.exit[data-state="ok"] .exit__ping { color: var(--ok); }
+
+/* ------------------------------------------- keeping names off the flags */
+
+/* The flag wash is the row's ground, and it had crept far enough left to sit
+   under the longer country names - "Bosnia and Herzegovina" and "United Arab
+   Emirates" were being read off the middle of a flag. Now that rows carry a
+   time and a verdict as well as a name, there is more to read on that line
+   and less room to lose.
+
+   So the ramp starts later and ends later: faint until well past the text,
+   full only at the trailing edge. Hovering still brings it up, which is when
+   somebody is looking at that row rather than scanning past it. */
+.row::before {
+  opacity: 0.34;
+  -webkit-mask-image: linear-gradient(to right, transparent 0%,
+                      rgba(0, 0, 0, 0.10) 44%, #000 82%);
+  mask-image: linear-gradient(to right, transparent 0%,
+              rgba(0, 0, 0, 0.10) 44%, #000 82%);
+}
+.row:hover::before, .row.is-cursor::before { opacity: 0.5; }
+
+/* The name gets the weight now that there is a time beside it competing for
+   the eye. */
+.row__name { font-weight: 600; letter-spacing: -0.005em; }
+
+/* One line, and it has to hold "BE · 1 relay · 1.2 s · 5/6 answering" on a
+   narrow window without pushing the flag out of the row. */
+.row__meta {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* The test control is a thing you press once in a while, not the reason the
+   sheet is open - so it sits at the weight of the note beside it rather than
+   at the weight of Connect. */
+.reach .btn {
+  height: 30px;
+  padding: 0 13px;
+  font-size: 11.5px;
+  border-radius: 999px;
+}
+
+/* --------------------------------------- cities, their marks, and stars */
+
+.reach__said { margin: 0; padding: 0 16px 8px; }
+.pair--sort { flex: 1; min-width: 0; }
+
+/* A city sits under its country: indented, and without a flag of its own -
+   repeating the flag once per city would make one country look like six. */
+.row--city {
+  margin-left: 22px;
+  width: calc(100% - 22px);
+  height: 52px;
+}
+.row--city::before { opacity: 0.10; }
+.row--city .row__name { font-size: 12.5px; font-weight: 550; }
+
+/* The name Windscribe gives the place, which is theirs rather than a fact
+   about geography - so it is said quietly, beside the real one. */
+.row__nick {
+  font-style: normal;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-off);
+}
+
+.row__marks { flex: none; display: flex; align-items: center; gap: 5px; }
+
+/* Load, as a bar rather than a number: which of two cities is emptier is the
+   question, and the exact percentage is a tooltip's business. */
+.load {
+  width: 22px; height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.10);
+  overflow: hidden;
+  position: relative;
+}
+.load::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--at, 0%);
+  background: var(--ok);
+}
+.load[data-level="mid"]::after { background: var(--work, #d9a441); }
+.load[data-level="high"]::after { background: var(--fail); }
+
+.mark {
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-off);
+}
+
+/* Starred rows go to the top of the list, so the star has to be reachable
+   without picking the row it sits in - the list catches it first. */
+.star {
+  flex: none;
+  width: 22px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-off);
+  cursor: pointer;
+  transition: color var(--fade), transform 90ms ease;
+}
+.star:hover { color: var(--text); transform: scale(1.15); }
+.star[data-on="true"] { color: var(--work, #e5c454); }
+
+/* ------------------------------------------------- opening and closing */
+
+/* The plus that opens a country, and the star beside it. Both sit inside a
+   row that is itself a button, so both are spans the list catches before the
+   row sees the click - and both have to look pressable without being one. */
+.expand, .star {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px; height: 24px;
+  border-radius: 7px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-off);
+  cursor: pointer;
+}
+.expand { font-size: 17px; font-weight: 400; }
+.expand:hover, .star:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+}
+.expand[data-on="true"] { color: var(--ok); }
+.star[data-on="true"] { color: var(--work, #e5c454); }
+
+.row__via {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text-off);
+  text-transform: uppercase;
+}
+
+/* ============================================ the locations, plainly ==== */
+
+/* Windscribe's own list is a flag, a name, and a plus, on a flat row with a
+   hairline under it. Ours had become a name floating on a quarter-page of
+   tinted flag, which was fine when the row said "France - 24 relays" and is
+   not now that it says a time, a load, how many answered and which provider.
+   The picture moves to a chip and the line gets its room back. */
+.sheet__list .row {
+  height: auto;
+  min-height: 46px;
+  margin: 0;
+  padding: 9px 14px;
+  gap: 10px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  contain-intrinsic-size: auto 46px;
+}
+.sheet__list .row:hover { background: rgba(255, 255, 255, 0.035); }
+.sheet__list .row.is-picked {
+  background: rgba(74, 229, 195, 0.07);
+  box-shadow: inset 2px 0 0 var(--ok);
+}
+/* The wash is gone. It is the whole of what made this look unlike the app it
+   is modelled on, and every row now carries its flag as an object instead. */
+.sheet__list .row::before { display: none; }
+
+.chip {
+  flex: none;
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background-image: var(--flag);
+  background-size: cover;
+  background-position: center;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+/* A city has no flag of its own - it is in the country above it - so it gets
+   a mark that holds the same column. */
+.chip--dot {
+  width: 26px; height: 26px;
+  background: none;
+  box-shadow: none;
+  position: relative;
+}
+.chip--dot::after {
+  content: '';
+  position: absolute;
+  left: 11px; top: 11px;
+  width: 4px; height: 4px;
+  border-radius: 50%;
+  background: var(--text-off);
+}
+
+/* Indented by the chip's width, so a city's name starts under its country's
+   name rather than under its flag. */
+.row--city { margin-left: 0; width: 100%; padding-left: 30px; }
+.row--city .chip--dot { width: 22px; }
+
+/* One column, the full width of the copy.
+
+   Stated rather than left to the default, because the rule further up still
+   says `justify-content: center` from when this was a flex column and that
+   meant "centre them vertically". Under `display: grid` the same declaration
+   centres the track horizontally instead - and an auto track is only as wide
+   as its longest line, so every row's text sat centred on its own length.
+   A country with a short name and "1 relay" under it started up to 10px
+   right of one with a long name, which is a list that does not line up and
+   is invisible to anything measuring a single row. */
+.row__copy {
+  flex: 1; min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+}
+.row__name { font-size: 13px; font-weight: 600; }
+.row--city .row__name { font-size: 12.5px; font-weight: 550; }
+.row__meta { font-size: 10.5px; }
+
+/* The count above the list, which is the one number about the list itself. */
+.listhead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 16px 6px;
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-off);
+}
+.listhead__n {
+  font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+  letter-spacing: 0;
+  color: var(--text-muted);
+}
+
+/* Tags sit with the other marks on the right. Under the name they pushed
+   every row that had them to two and a half lines while the rows that did
+   not stayed at one, so a list of countries had two different heights for a
+   reason nobody could see. */
+.row__tags { flex: none; margin: 0; align-self: center; }
+
+/* A provider row is the same country seen one way, so it lines up with the
+   cities rather than repeating the flag above it. */
+.row--via { padding-left: 30px; }
+
+/* An empty control keeping its column. */
+.expand--empty { pointer-events: none; }
+.expand--empty:hover { background: none; }
+
+/* Everything down the right-hand edge in one column, whatever a row happens
+   to carry: the star, then the plus, both the same width, both last. */
+.row__marks, .row__tags { margin-left: auto; }
+.star, .expand { margin-left: 0; }
+
+/* The auto row is one line like the rest of them. Three lines of prose about
+   racing every location was the tallest thing in a list whose whole job is
+   to be scanned. */
+.row--auto .row__sub {
+  font-size: 10.5px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The provider sign, beside the name, in the state that provider is in here.
+   It replaced a row each, which said less and cost a line apiece. */
+.row__tag {
+  display: grid;
+  place-items: center;
+  width: 17px; height: 17px;
+  padding: 0;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--text-off);
+  background: rgba(255, 255, 255, 0.03);
+}
+.row__tag[data-state="ok"] {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+.row__tag[data-state="some"] {
+  color: var(--work, #e5c454);
+  border-color: color-mix(in srgb, var(--work, #e5c454) 40%, transparent);
+}
+.row__tag[data-state="blocked"] {
+  color: var(--fail);
+  border-color: color-mix(in srgb, var(--fail) 40%, transparent);
+}
+/* Untested keeps the default: dim, and plainly not a verdict. */
+
+/* A provider's column on a row that provider does not reach. Nothing to
+   see, and 17px wide, so the sign beside it stays in its own column and the
+   star and the plus after it do not move row to row. */
+.row__tag--none { border-color: transparent; background: none; }
+
+/* The provider sign on an individual exit, at the head of the row where the
+   eye lands first - "es-006" and "es-mad" are the same kind of nothing until
+   you know whose numbering each one is. */
+.exit .row__tag { flex: none; width: 16px; height: 16px; font-size: 8.5px; }
+.exit__name { flex: 1; min-width: 0; }
+
+/* The sort control, as three icons. Words there made a row of four things
+   that all read as buttons doing the same kind of job; the shapes separate
+   the choice from the action beside it. */
+.pair--sort { flex: none; }
+.pair--sort .pair__opt {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  padding: 0;
+}
+.pair--sort .ico { width: 15px; height: 15px; }
+.pair--sort .pair__opt[aria-selected="true"] { color: var(--text); }
+.pair--sort .pair__opt[aria-selected="false"] { color: var(--text-off); }
+
+/* The note about when the times were taken goes back on the same line, now
+   that the control beside it is three icons wide instead of three words. */
+.reach { flex-wrap: wrap; }
+
+/* Nothing in this list is ever meant to be reached by scrolling sideways.
+   It could be, by eight pixels: a vertical scrollbar takes its width out of
+   clientWidth after the rows have already been sized at 100% of the width
+   before it appeared. No row overhangs either edge - there is simply eight
+   pixels of nothing to slide to, which is untidy in the one direction the
+   list has no business moving in. */
+.sheet__list { overflow-x: clip; }
+/* clip rather than hidden: a `hidden` box is still a scroll container and
+   still moves when something sets scrollLeft, it just does not offer a bar
+   to do it with. clip is the one that means it cannot happen. */
