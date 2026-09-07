@@ -128,7 +128,12 @@ object Bridge {
                 args.getOrNull(1) as? String)
         }
         "favourites" -> ctx.favourites()
-        "toggleFavourite" -> ctx.toggleFavourite(args.getOrNull(0) as? String ?: "")
+        // Deferred because starring can empty or fill the Starred pool, and
+        // rebuilding it is a folder read. On the main thread that is a tap
+        // that drops frames on a phone with four hundred configs.
+        "toggleFavourite" -> work {
+            ctx.toggleFavourite(args.getOrNull(0) as? String ?: "")
+        }
         "setSort" -> ctx.setSort(args.getOrNull(0) as? String)
         "remember" -> ctx.remember(args.getOrNull(0) as? String ?: "auto")
 
