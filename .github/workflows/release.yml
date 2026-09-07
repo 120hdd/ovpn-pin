@@ -1,0 +1,46 @@
+# A tag becomes something a phone can download.
+#
+# The point of this file is the last three lines: an APK attached to a
+# release has a plain URL, and a plain URL is the whole of the install path on
+# a phone with no cable near it. Everything above them is the android
+# workflow, called rather than copied, so the release build and the build that
+# runs on every push are the same build.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    uses: ./.github/workflows/android.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # A called workflow's artifacts belong to this run, so they are here to
+      # be picked up rather than fetched across runs.
+      - uses: actions/download-artifact@v4
+        with:
+          name: relay-debug-apk
+          path: apk
+
+      # Named for the tag. Four downloads deep in a phone's folder, three
+      # files called app-debug.apk are three files nobody can tell apart.
+      - name: name it after the tag
+        run: mv apk/app-debug.apk "relay-${GITHUB_REF_NAME}.apk"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: relay-${{ github.ref_name }}.apk
+          body: |
+            Debug build, signed with the debug key - Android will ask twice
+            before installing it, and an upgrade over a differently-signed
+            copy has to be uninstalled first.
+
+            On the phone: download, allow this browser to install unknown
+            apps, open it. Configs and the sign-in go in from inside the app;
+            no cable is needed.

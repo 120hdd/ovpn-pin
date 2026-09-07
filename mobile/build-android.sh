@@ -18,14 +18,51 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-GO_BIN="${GO_BIN:-/c/Users/bashi/sdk/go1.27.0/go/bin}"
-GOPATH_BIN="${GOPATH_BIN:-/c/Users/bashi/go/bin}"
-JAVA_HOME="${JAVA_HOME:-/c/Program Files/Android/Android Studio/jbr}"
-export ANDROID_HOME="${ANDROID_HOME:-C:/Users/bashi/AppData/Local/Android/Sdk}"
-export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/27.3.13750724}"
+NDK_VERSION="${NDK_VERSION:-27.3.13750724}"
 
-export PATH="$GO_BIN:$GOPATH_BIN:$JAVA_HOME/bin:$PATH"
+# Named, then found, then left to PATH - in that order.
+#
+# What was here before pinned one person's home directory as the *default*,
+# so every other machine got "missing: go" for a go that was installed and on
+# PATH. An explicit variable still wins; after that, a directory is used only
+# if it is actually there.
+prefer() {                      # prefer VAR /a/path /another/path ...
+    local var="$1"; shift
+    [ -n "${!var-}" ] && return 0
+    local dir
+    for dir in "$@"; do
+        [ -n "$dir" ] && [ -d "$dir" ] || continue
+        printf -v "$var" '%s' "$dir"
+        return 0
+    done
+    return 0
+}
+
+prefer GO_BIN "/c/Users/bashi/sdk/go1.27.0/go/bin"
+prefer JAVA_HOME "/c/Program Files/Android/Android Studio/jbr"
+prefer ANDROID_HOME "${ANDROID_SDK_ROOT-}" "$HOME/Android/Sdk" "${LOCALAPPDATA-}/Android/Sdk" "C:/Users/bashi/AppData/Local/Android/Sdk"
+
+if [ -n "${ANDROID_HOME-}" ]; then
+    export ANDROID_HOME
+    export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/$NDK_VERSION}"
+fi
+
+# Only what exists goes on PATH. An empty element means the current
+# directory, and a PATH beginning with one runs whatever happens to be in the
+# folder the script was called from.
+for dir in "${GO_BIN-}" "${GOPATH_BIN-}" "${JAVA_HOME:+$JAVA_HOME/bin}"; do
+    if [ -n "$dir" ] && [ -d "$dir" ]; then PATH="$dir:$PATH"; fi
+done
+export PATH
 hash -r
+
+# Asked of go rather than guessed at, and only once go is reachable. gomobile
+# installs itself here, and this is the one path that cannot be written down
+# in advance because it is whatever GOPATH says today.
+if [ -z "${GOPATH_BIN-}" ] && command -v go >/dev/null; then
+    GOPATH_BIN="$(go env GOPATH)/bin"
+    if [ -d "$GOPATH_BIN" ]; then PATH="$GOPATH_BIN:$PATH"; export PATH; hash -r; fi
+fi
 
 need() { command -v "$1" >/dev/null || { echo "missing: $1" >&2; exit 1; }; }
 need go
@@ -50,5 +87,15 @@ go vet ./...
 gomobile bind -tags with_gvisor -target=android -androidapi 21 \
     -o "$HERE/relay.aar" ./bind
 
+# Where Gradle actually reads it. build.gradle.kts asks for
+# `files("libs/relay.aar")` - app/android/app/libs - and nothing ever put it
+# there, so a clean checkout could build the core, build the app, and ship an
+# APK with no core inside it. Both paths are gitignored; this is the copy
+# step that was only ever done by hand.
+LIBS="$HERE/app/android/app/libs"
+mkdir -p "$LIBS"
+cp "$HERE/relay.aar" "$LIBS/relay.aar"
+
 echo
 ls -la "$HERE/relay.aar" | awk '{printf "  relay.aar  %.1f MB\n", $5/1048576}'
+echo "  libs       app/android/app/libs/relay.aar"

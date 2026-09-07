@@ -14,3 +14,6 @@ app/android/app/libs/relay.aar
 # phone.css and phone.js beside it are not copies. They are the phone's own
 # two files, and they are carried.
 app/assets/ui/
+
+# Copied by sync-ui.sh out of tunnel/install-server.sh, which is the original.
+app/assets/install-server.sh

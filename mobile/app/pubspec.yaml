@@ -70,6 +70,10 @@ flutter:
     - assets/ui/
     - assets/ui/fonts/
     - assets/ui/flags/
+    # Copied by ../sync-ui.sh out of tunnel/. The tunnel pane hands this over
+    # as one base64 line to paste into an ssh session, and on a phone there is
+    # nowhere else it could be read from.
+    - assets/install-server.sh
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

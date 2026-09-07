@@ -54,6 +54,19 @@ cp "$SRC"/*LICENSE*.txt "$DEST/" 2>/dev/null || true
 # a sed replacement is a portability argument this script does not need to
 # have, and HTML does not care.
 cp "$HERE/app/assets/phone.css" "$HERE/app/assets/phone.js" "$DEST/"
+
+# The server installer, which the tunnel pane hands over as one pasteable
+# line. The desktop reads it off disk next to the app; a phone has no disk
+# next to the app, so it travels inside the APK and Kotlin base64s it from
+# there. Copied here rather than listed in pubspec by hand for the same
+# reason everything else here is: one original, and a script that carries it.
+INSTALLER="$HERE/../tunnel/install-server.sh"
+if [ -s "$INSTALLER" ]; then
+    cp "$INSTALLER" "$HERE/app/assets/install-server.sh"
+else
+    echo "tunnel/install-server.sh is missing - the tunnel pane will have no command to copy" >&2
+    exit 1
+fi
 sed -i 's|</head>|<link rel="stylesheet" href="phone.css"></head>|' "$DEST/index.html"
 sed -i 's|<script src="app.js"></script>|<script src="app.js"></script><script src="phone.js"></script>|' \
     "$DEST/index.html"
@@ -85,3 +98,4 @@ done
 echo "  ui       $(du -sh "$DEST" | cut -f1) copied from app/ui"
 echo "  scripts  $(ls "$DEST"/*.js "$DEST"/*.css 2>/dev/null | xargs -n1 basename | tr '\n' ' ')"
 echo "  flags    $(ls "$DEST/flags" | wc -l)"
+echo "  server   install-server.sh $(wc -c < "$HERE/app/assets/install-server.sh") bytes"

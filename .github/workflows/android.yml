@@ -1,0 +1,126 @@
+# The APK is built here rather than on a desk.
+#
+# Not for tidiness: the machine this repo is developed on has none of the
+# toolchain, and the line it is on drops multi-hundred-megabyte downloads
+# halfway through - which is the same reason the repo exists. A runner has a
+# clean line and throws its copy away afterwards, so the phone build stops
+# depending on which laptop is open.
+#
+# Everything the phone needs is pinned to something that is already pinned
+# somewhere else in the tree, so there is one version of each and it is named
+# twice rather than guessed at:
+#
+#   Flutter   mobile/app/.metadata revision d3b14c87... == tag 3.47.2
+#   NDK       mobile/app/android/app/build.gradle.kts  ndkVersion
+#   gomobile  mobile/core/go.mod's golang.org/x/mobile, via `go install`
+#             with no @version - which resolves out of the build list rather
+#             than off the tip of master, so the tool and the module it binds
+#             are the same x/mobile.
+name: android
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/ui/**'
+      - 'mobile/**'
+      - 'tunnel/install-server.sh'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+  workflow_call:
+
+env:
+  NDK_VERSION: '27.3.13750724'
+  FLUTTER_VERSION: '3.47.2'
+  GO_VERSION: '1.27'
+
+jobs:
+  # The core on its own, and allowed to be yellow. Its tests reach real exits
+  # on the real line on purpose - a stubbed certificate would prove the
+  # harness works and nothing about the exits - so on a runner they skip, and
+  # a skip is not a reason to withhold an APK.
+  core:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: mobile/core/go.sum
+      - name: vet
+        working-directory: mobile/core
+        run: go vet ./...
+      - name: test
+        working-directory: mobile/core
+        run: go test ./...
+
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # javac is not optional and not JAVA_HOME: gomobile compiles the Java it
+      # generates by shelling out to `javac` on PATH, and without it the bind
+      # runs, all four architectures compile, and it fails on the very last
+      # step leaving an empty .aar behind.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: mobile/core/go.sum
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools ndk;27.3.13750724'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      # No @version, and deliberately. `go install` from inside the module
+      # resolves out of its build list, so gomobile is the same x/mobile the
+      # bound package is compiled against. Pinning it separately is how the
+      # tool and the module drift apart and the bind fails with a generated
+      # file that does not match the generator.
+      - name: gomobile, from the module's own x/mobile
+        working-directory: mobile/core
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
+          go install golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
+          gomobile init
+
+      # The window is app/ui itself, copied rather than reimplemented.
+      - name: copy the desktop's window into the phone's assets
+        run: mobile/sync-ui.sh
+
+      - name: build the Go core
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
+          mobile/build-android.sh
+
+      # Gradle's own -Xmx8G is written for a desktop with room to spare. A
+      # runner has 16 GB for everything at once, so the daemon is told to want
+      # less here - the user-home file wins over the project's.
+      - name: keep Gradle inside the runner
+        run: |
+          mkdir -p ~/.gradle
+          echo 'org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g' >> ~/.gradle/gradle.properties
+
+      - name: build the APK
+        working-directory: mobile/app
+        run: |
+          flutter pub get
+          flutter build apk --debug --target-platform android-arm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-debug-apk
+          path: mobile/app/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
