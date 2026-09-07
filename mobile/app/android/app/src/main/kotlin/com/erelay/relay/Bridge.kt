@@ -203,10 +203,10 @@ object Bridge {
 
         "chooseSweepFolder" ->
             notHere("Sweeping is a desktop job.")
-        "choosePinFolder", "choosePinOut" ->
-            notHere("A phone has one folder for each of these. Configs come in " +
-                "through the folder picker in Settings, and pinned copies go " +
-                "where the app reads them.")
+        "choosePinFolder" -> ctx.choosePinFolder()
+        "choosePinOut" ->
+            notHere("Pinned copies go where the app reads them, and there is " +
+                "one such folder on a phone.")
         "setSystemProxy" -> notHere("There is no system proxy on a phone - the " +
             "tunnel carries everything.")
         "minimise" -> notHere("There is no window to minimise.")

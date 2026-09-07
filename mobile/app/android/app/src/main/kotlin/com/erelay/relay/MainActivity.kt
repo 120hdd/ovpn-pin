@@ -44,6 +44,7 @@ class MainActivity : FlutterActivity() {
         private const val STATUS = "relay/status"
         private const val VPN_REQUEST = 1
         private const val PICK_FOLDER = 2
+        private const val PICK_PIN_IN = 3
         private const val PREFS = "relay"
     }
 
@@ -1153,6 +1154,47 @@ class MainActivity : FlutterActivity() {
     fun usePinnedFolder(): Bridge.Later = Bridge.work {
         reload()
         Pin.usePinned(applicationContext, catalogue().count().toInt()).toString()
+    }
+
+    /**
+     * The pin pane pointing itself at a folder.
+     *
+     * The same import as the one in Settings, and then the inbox is set to
+     * whichever pile it filled. A folder of Windscribe configs and a folder
+     * of Surfshark ones are two piles rather than one, because the cards
+     * count them apart - so the answer to "which did I just import" is
+     * whichever grew.
+     */
+    fun choosePinFolder(): Bridge.Later {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+        return pick(PICK_PIN_IN, intent) { uri ->
+            if (uri == null) {
+                """{"ok":false}"""
+            } else {
+                val ctx = applicationContext
+                val before = AppFiles.count(AppFiles.configs(ctx)) to
+                    AppFiles.count(AppFiles.windscribe(ctx))
+                val got = Import.fromTree(ctx, uri)
+                reload()
+                if (got.seen == 0) {
+                    refusal("No .ovpn files in that folder, so it was not used.")
+                } else {
+                    val after = AppFiles.count(AppFiles.configs(ctx)) to
+                        AppFiles.count(AppFiles.windscribe(ctx))
+                    val folder = if (after.second - before.second >
+                        after.first - before.first
+                    ) {
+                        AppFiles.windscribe(ctx)
+                    } else {
+                        AppFiles.configs(ctx)
+                    }
+                    Pin.rememberInbox(ctx, folder)
+                    Pin.plan(ctx).put("ok", true).toString()
+                }
+            }
+        }
     }
 
     /** Back to the account list. */
