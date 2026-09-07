@@ -1,17 +1,9 @@
 # relay
 
-A new Flutter project.
+The Flutter half: a WebView, two channels, and the frame behind the page.
 
-## Getting Started
+The window itself is `app/ui` from the root of this repo, copied in by
+`../sync-ui.sh`. Nothing here draws the design.
 
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+See [../README.md](../README.md) for what any of it is for, and how to build
+it.
