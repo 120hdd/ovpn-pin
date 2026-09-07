@@ -19,8 +19,11 @@
 name: android
 
 on:
+  # Every branch, not only main. The APK is the only way to find out whether
+  # any of this compiles - there is no Android toolchain on the machine this
+  # is written on - so a branch that cannot be built is a branch that cannot
+  # be reviewed either.
   push:
-    branches: [main]
     paths:
       - 'app/ui/**'
       - 'mobile/**'
