@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net"
 	"sort"
@@ -219,4 +220,65 @@ func EdgesFor(ctx context.Context, domain string, timeout time.Duration) ([]stri
 		}
 	}
 	return live, said, nil
+}
+
+// EdgeScanJSON is EdgeScan in the shape the tunnel pane reads.
+//
+// The pane wants three things and the desktop's rescanEdges gives it three:
+// which addresses to dial, how many answered, and how many were asked. The
+// last two are what turn "it works" into a weather report - one address out
+// of fifty and forty out of fifty are both a working tunnel, and only one of
+// them is worth looking at again tomorrow.
+func EdgeScanJSON(domain string, timeout time.Duration) string {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	live, tally := EdgeScan(ctx, domain, 2500*time.Millisecond, 0)
+	if len(live) > EdgeKeep {
+		live = live[:EdgeKeep]
+	}
+	if live == nil {
+		live = []string{}
+	}
+
+	out := struct {
+		OK       bool     `json:"ok"`
+		Edges    []string `json:"edges"`
+		Answered int      `json:"answered"`
+		Tried    int      `json:"tried"`
+		Blocked  int      `json:"blocked"`
+		Foreign  int      `json:"foreign"`
+		Origin   int      `json:"origin"`
+		Odd      int      `json:"odd"`
+		Error    string   `json:"error"`
+	}{
+		OK:      len(live) > 0,
+		Edges:   live,
+		Tried:   len(EdgeCandidates()),
+		Blocked: tally[EdgeBlocked], Foreign: tally[EdgeForeign],
+		Origin: tally[EdgeOrigin], Odd: tally[EdgeOdd],
+	}
+	// Answered is the ones that carried this zone, not the ones that opened a
+	// socket. An address that answers for somebody else's site has answered
+	// nothing that matters here.
+	out.Answered = tally[EdgeOK]
+
+	if !out.OK {
+		// The same four causes EdgesFor tells apart, because "no way in" is
+		// four different problems and only one of them is the server.
+		switch {
+		case tally[EdgeOrigin] > 0:
+			out.Error = "the edges answer but the server behind them does not"
+		case tally[EdgeBlocked] == out.Tried:
+			out.Error = "every Cloudflare address is filtered on this line"
+		default:
+			out.Error = "no address carried " + domain + " from here"
+		}
+	}
+
+	b, err := json.Marshal(out)
+	if err != nil {
+		return `{"ok":false,"error":"could not describe the scan"}`
+	}
+	return string(b)
 }

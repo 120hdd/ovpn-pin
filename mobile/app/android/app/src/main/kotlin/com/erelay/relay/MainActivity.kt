@@ -7,16 +7,20 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.net.VpnService
+import android.os.Handler
+import android.os.Looper
+import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
+import io.flutter.FlutterInjector
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import org.json.JSONArray
 import org.json.JSONObject
+import relay.Client
 import relay.Relay
-import java.io.File
 
 /**
  * The Kotlin end of the bridge that lets `app/ui` run unchanged.
@@ -42,8 +46,14 @@ class MainActivity : FlutterActivity() {
     }
 
     private var statusSink: EventChannel.EventSink? = null
-    private var pendingConnect: MethodChannel.Result? = null
     private var pendingCountry = "auto"
+
+    /**
+     * Flutter answers a MethodChannel on the main thread and throws if it is
+     * answered anywhere else, so every deferred reply comes back through
+     * here. One handler, made once, rather than a Looper lookup per answer.
+     */
+    private val main = Handler(Looper.getMainLooper())
 
     private val prefs: SharedPreferences by lazy {
         getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -56,6 +66,10 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
+        // Before anything can ask for a list. Both this and the service call
+        // it, because either may be the first thing alive.
+        AppFiles.announce(applicationContext)
+
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CONTROL)
             .setMethodCallHandler { call, result ->
                 if (call.method != "call") {
@@ -64,13 +78,7 @@ class MainActivity : FlutterActivity() {
                 }
                 val name = call.argument<String>("name").orEmpty()
                 val args = call.argument<List<Any?>>("args") ?: emptyList()
-                try {
-                    result.success(Bridge.call(this, name, args))
-                } catch (e: Bridge.NotHere) {
-                    result.error("not-here", e.message, null)
-                } catch (e: Exception) {
-                    result.error("failed", e.message ?: e.toString(), null)
-                }
+                answer(name, args, result)
             }
 
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, STATUS)
@@ -84,6 +92,43 @@ class MainActivity : FlutterActivity() {
                     statusSink = null
                 }
             })
+    }
+
+    /**
+     * One page call, answered now or later.
+     *
+     * A [Bridge.Later] holds the result open while the work runs off the main
+     * thread and settles it when there is something true to settle it with.
+     * Exactly one of the two callbacks fires, which is what Flutter requires
+     * of a Result and what [Bridge.work] guarantees.
+     */
+    private fun answer(name: String, args: List<Any?>, result: MethodChannel.Result) {
+        try {
+            when (val out = Bridge.call(this, name, args)) {
+                is Bridge.Later -> out.start(
+                    { json -> main.post { result.success(json) } },
+                    { e -> main.post { refuse(result, e) } })
+                else -> result.success(out as String?)
+            }
+        } catch (e: Throwable) {
+            refuse(result, e)
+        }
+    }
+
+    /**
+     * A refusal the page can print.
+     *
+     * "not-here" is the code Dart turns into a rejected promise carrying the
+     * sentence; the page shows that sentence. Anything else is a fault rather
+     * than an answer and says so.
+     */
+    private fun refuse(result: MethodChannel.Result, e: Throwable) {
+        if (e is Bridge.NotHere) {
+            result.error("not-here", e.message, null)
+        } else {
+            Log.w(RelayVpnService.TAG, "bridge", e)
+            result.error("failed", e.message ?: e.toString(), null)
+        }
     }
 
     override fun onStart() {
@@ -110,7 +155,7 @@ class MainActivity : FlutterActivity() {
     // should be spending its battery carrying traffic, not counting it for
     // nobody.
 
-    private val meter = android.os.Handler(android.os.Looper.getMainLooper())
+    private val meter = Handler(Looper.getMainLooper())
     private val tick = object : Runnable {
         override fun run() {
             if (statusSink != null) push("Traffic", traffic())
@@ -125,13 +170,80 @@ class MainActivity : FlutterActivity() {
 
     private fun stopMeter() = meter.removeCallbacks(tick)
 
+    // -- the list this window is looking at ------------------------------------
+    //
+    // One catalogue, built once and kept, rather than a fresh scan per call.
+    //
+    // Every question the page asks about the list - what countries are there,
+    // what is in this one, how big is that pool - used to build a Client and
+    // rescan the folder for itself. Four hundred files read to open a country.
+    // Worse, a scan cannot hold a narrowing, so "Starred" had nowhere to live.
+
+    private var cat: Client? = null
+
+    private fun catalogue(): Client {
+        cat?.let { return it }
+        val c = Relay.newClient("", "")
+        try {
+            c.load()
+        } catch (e: Exception) {
+            // An empty folder is not an error - it is a phone nobody has put
+            // configs on yet, and the window has a whole screen for saying so.
+            Log.i(RelayVpnService.TAG, "nothing to read yet: ${e.message}")
+        }
+        narrow(c)
+        cat = c
+        return c
+    }
+
+    /** After anything that changes which files are there or what is known. */
+    private fun reload() {
+        cat = null
+    }
+
+    /**
+     * Which pool this window is connecting out of.
+     *
+     * Only two on a phone. Everything is the folder; Starred is a handful of
+     * exits picked out by hand, which is a set of filenames rather than a
+     * folder - so it is a narrowing rather than a different place to read.
+     */
+    private fun source(): String = prefs.getString("source", "all") ?: "all"
+
+    private fun narrow(c: Client) {
+        if (source() != "starred") return
+        val files = starredFiles(c)
+        if (files.isEmpty()) return
+        try {
+            c.setOnly(files)
+        } catch (e: Exception) {
+            Log.w(RelayVpnService.TAG, "starred: ${e.message}")
+        }
+    }
+
+    /** The filenames behind every starred place, one per line. */
+    private fun starredFiles(c: Client): String {
+        val out = StringBuilder()
+        for (code in favouriteSet()) {
+            val names = try {
+                c.poolFiles(code)
+            } catch (e: Exception) {
+                ""
+            }
+            if (names.isNotBlank()) {
+                if (out.isNotEmpty()) out.append('\n')
+                out.append(names)
+            }
+        }
+        return out.toString()
+    }
+
     // -- where the files are ---------------------------------------------------
 
-    private fun pinnedDir() = File(getExternalFilesDir(null), "pinned")
-    private fun authFile() = File(getExternalFilesDir(null), "auth")
+    private fun pinnedDir() = AppFiles.pinned(applicationContext)
+    private fun authFile() = AppFiles.auth(applicationContext)
 
-    private fun configCount() =
-        pinnedDir().listFiles { f -> f.name.endsWith(".ovpn") }?.size ?: 0
+    private fun configCount() = AppFiles.count(pinnedDir())
 
     // -- what the page asks for ------------------------------------------------
 
@@ -145,28 +257,19 @@ class MainActivity : FlutterActivity() {
      * !== false` and friends, and a missing key is not the same as a false one.
      */
     fun describe(): String {
+        val c = catalogue()
         val countries = try {
-            Relay.newClient("", "").let { c ->
-                c.scanFolder(pinnedDir().absolutePath)
-                c.countriesJSON()
-            }
+            c.countriesJSON()
         } catch (e: Exception) {
             "[]"
         }
 
         val o = JSONObject()
-        o.put("serverCount", configCount())
+        o.put("serverCount", c.count().toInt())
         o.put("folder", pinnedDir().absolutePath)
         o.put("folders", JSONArray().put(pinnedDir().absolutePath))
         o.put("providers", JSONArray().put("surfshark").put("windscribe"))
-        o.put("providerState", JSONObject().apply {
-            put("surfshark", JSONObject().apply {
-                put("servers", configCount()); put("account", hasAuth()); put("usable", hasAuth())
-            })
-            put("windscribe", JSONObject().apply {
-                put("servers", 0); put("account", false); put("usable", false)
-            })
-        })
+        o.put("providerState", providerState())
         // There is no system proxy on a phone and no port to choose: the tun
         // carries everything. Said as false rather than omitted so the page
         // draws the control off rather than defaulting it on.
@@ -189,16 +292,62 @@ class MainActivity : FlutterActivity() {
         o.put("tunnel", JSONObject(tunnelPlan()))
         o.put("username", credentials()?.first ?: "")
         o.put("about", "Relay  -  ${pinnedDir().absolutePath}")
+        // What boot() reads to decide whether to draw a live connection. The
+        // desktop sends `on`; anything else is off, and the page checks for
+        // that exact word.
+        o.put("status", JSONObject(statusMap()))
+        o.put("recovered", false)
 
-        // Spliced rather than parsed: it is already the JSON the page wants,
-        // and decoding it here only to encode it again would be two parses of
-        // a hundred kilobytes for no change to a single byte.
-        return o.toString().dropLast(1) + ",\"countries\":$countries}"
+        // Spliced rather than parsed: both of these are already the JSON the
+        // page wants, and decoding them here only to encode them again would
+        // be two parses of a hundred kilobytes for no change to a single byte.
+        return o.toString().dropLast(1) +
+            ",\"sources\":${sources()}" +
+            ",\"countries\":$countries}"
+    }
+
+    /**
+     * What each provider is worth here: how many exits it has, whether there
+     * is an account for it, and how many configs are waiting to be pinned.
+     *
+     * The page's cards read all three - `provStep` asks for a sign-in, a
+     * fetch, a pin or an update in that order - so a phone that answered only
+     * the first two would show "Get servers" forever over a folder of configs
+     * that had already been fetched.
+     */
+    private fun providerState(): JSONObject {
+        val ctx = applicationContext
+        var surfshark = 0
+        var windscribe = 0
+        for (name in pinnedDir().list() ?: emptyArray<String>()) {
+            if (!name.endsWith(".ovpn")) continue
+            if (name.contains(".ws.")) windscribe++ else surfshark++
+        }
+        val ssAccount = hasAuth()
+        val wsAccount = AppFiles.windscribeAuth(ctx).isFile
+
+        return JSONObject().apply {
+            put("surfshark", JSONObject().apply {
+                put("servers", surfshark)
+                put("account", ssAccount)
+                put("waiting", AppFiles.waiting(AppFiles.configs(ctx), ".prod."))
+                put("usable", surfshark > 0 && ssAccount)
+            })
+            put("windscribe", JSONObject().apply {
+                put("servers", windscribe)
+                put("account", wsAccount)
+                put("waiting", AppFiles.waiting(AppFiles.windscribe(ctx), ".ws."))
+                put("usable", windscribe > 0 && wsAccount)
+            })
+        }
     }
 
     fun statusMap(): String = JSONObject().apply {
         val up = RelayVpnService.exitAddress.isNotEmpty()
-        put("state", if (up) "connected" else if (RelayVpnService.total > 0) "working" else "idle")
+        // Two words for the same thing, because two readers want different
+        // ones: the status sheet reads `state`, and boot() checks for the
+        // desktop's own "on".
+        put("state", if (up) "on" else if (RelayVpnService.total > 0) "working" else "off")
         put("connected", up)
         put("exit", RelayVpnService.exitAddress)
         put("country", RelayVpnService.exitName)
@@ -216,8 +365,8 @@ class MainActivity : FlutterActivity() {
      */
     fun whoami(): String {
         Thread {
-            val json = Relay.whereAmIJSON(8000)
-            runOnUiThread { push("RealIp", json) }
+            val json = Relay.whereAmIJSON(8000L)
+            main.post { push("RealIp", json) }
         }.start()
         return "{}"
     }
@@ -238,8 +387,8 @@ class MainActivity : FlutterActivity() {
         if (addr.isEmpty() || creds == null) return "{}"
 
         Thread {
-            val seen = Relay.seenAsJSON(addr, name, creds.first, creds.second, 15000)
-            runOnUiThread { pushConnected(seen) }
+            val seen = Relay.seenAsJSON(addr, name, creds.first, creds.second, 15000L)
+            main.post { pushConnected(seen) }
         }.start()
         return "{}"
     }
@@ -306,14 +455,22 @@ class MainActivity : FlutterActivity() {
     /** What went where, pulled while the log sheet is open. */
     fun hosts(): String = RelayVpnService.hostsJSON()
 
-    fun exitsIn(country: String): String {
-        return try {
-            val c = Relay.newClient("", "")
-            c.scanFolder(pinnedDir().absolutePath)
-            c.countriesJSON()
-        } catch (e: Exception) {
-            "[]"
-        }
+    /**
+     * The individual exits behind one row of the list, with what is known
+     * about each.
+     *
+     * The page sends the row's country - which may carry a city, as `fr/par`
+     * - and its provider separately, because that is the shape main.py takes.
+     * Joined back into one code here, because the core has one parser for it
+     * and two would drift.
+     *
+     * This used to ignore both arguments and hand back the country list
+     * instead. The page read `r.exits`, found nothing, and drew an empty
+     * panel under every country on the phone.
+     */
+    fun exitsIn(country: String, provider: String?): String {
+        val code = if (provider.isNullOrEmpty()) country else "$country:$provider"
+        return catalogue().exitsInJSON(code)
     }
 
     // -- the connection --------------------------------------------------------
@@ -336,7 +493,7 @@ class MainActivity : FlutterActivity() {
             // to "Connect" while Android is still asking.
             return """{"ok":true}"""
         }
-        startService(country)
+        startService(pendingCountry)
         return """{"ok":true}"""
     }
 
@@ -374,6 +531,13 @@ class MainActivity : FlutterActivity() {
                 .putExtra(RelayVpnService.EXTRA_PASSWORD, creds.second)
                 .putExtra(RelayVpnService.EXTRA_CONFIG_DIR, pinnedDir().absolutePath)
                 .putExtra(RelayVpnService.EXTRA_COUNTRY, country)
+            // Starred is a set of filenames rather than a folder, so the
+            // service is handed the names. Sent even when empty, because the
+            // absence of the extra and an empty one mean the same thing and
+            // the service reads it that way.
+            if (source() == "starred") {
+                intent.putExtra(RelayVpnService.EXTRA_ONLY, starredFiles(catalogue()))
+            }
         } else {
             val domain = prefs.getString("tunnelDomain", "").orEmpty()
             val password = prefs.getString("tunnelPassword", "").orEmpty()
@@ -402,42 +566,179 @@ class MainActivity : FlutterActivity() {
 
     fun cancelRace(): String = stopTunnel()
 
+    // -- which pool to connect out of ------------------------------------------
+
+    /**
+     * The pools worth offering, with what each one holds.
+     *
+     * Two on a phone. The desktop has more because it has more folders - one
+     * per site it swept, one for what it verified - and a phone has one
+     * folder and a set of stars. A row is only offered when something is
+     * actually in it: a source with nothing behind it is a way to empty the
+     * list and then wonder why.
+     */
+    fun sources(): String {
+        val c = catalogue()
+        val rows = JSONArray()
+
+        val all = counts(c, "")
+        if (all.optInt("exits") > 0) {
+            rows.put(JSONObject().apply {
+                put("key", "all")
+                put("name", "Everything")
+                put("note", "${all.optInt("exits")} exits · every folder the app reads")
+                put("count", all.optInt("places"))
+                put("exits", all.optInt("exits"))
+            })
+        }
+
+        val starred = counts(c, starredFiles(c))
+        if (favouriteSet().isNotEmpty() && starred.optInt("exits") > 0) {
+            rows.put(JSONObject().apply {
+                put("key", "starred")
+                put("name", "Starred")
+                put("note", "${starred.optInt("exits")} exits · only the places you picked out")
+                put("count", starred.optInt("places"))
+                put("exits", starred.optInt("exits"))
+            })
+        }
+
+        // A source whose exits have since gone reads as Everything rather than
+        // as a name with nothing behind it.
+        var here = source()
+        var known = false
+        for (i in 0 until rows.length()) {
+            if (rows.getJSONObject(i).optString("key") == here) known = true
+        }
+        if (!known) here = "all"
+
+        return JSONObject().apply {
+            put("ok", true)
+            put("rows", rows)
+            put("source", here)
+        }.toString()
+    }
+
+    private fun counts(c: Client, files: String): JSONObject = try {
+        JSONObject(c.countsJSON(files))
+    } catch (e: Exception) {
+        JSONObject()
+    }
+
+    /** Connect out of this pool from now on. */
+    fun setSource(source: String?): String {
+        val key = source ?: "all"
+        if (key != "all" && key != "starred") {
+            return refusal("There is nothing in that one.")
+        }
+        if (key == "starred" && starredFiles(catalogue()).isBlank()) {
+            return refusal("There is nothing in that one.")
+        }
+        prefs.edit().putString("source", key).apply()
+        reload()
+
+        val c = catalogue()
+        val o = JSONObject().apply {
+            put("ok", true)
+            put("source", key)
+            put("folder", pinnedDir().absolutePath)
+            put("folders", JSONArray().put(pinnedDir().absolutePath))
+            put("serverCount", c.count().toInt())
+        }
+        return o.toString().dropLast(1) + ",\"countries\":${c.countriesJSON()}}"
+    }
+
+    /** Back to reading everything, which is the only folder there is. */
+    fun resetFolder(): String {
+        prefs.edit().putString("source", "all").apply()
+        reload()
+        return JSONObject().apply {
+            put("ok", true)
+            put("folder", pinnedDir().absolutePath)
+            put("source", "all")
+            put("folders", JSONArray().put(pinnedDir().absolutePath))
+        }.toString()
+    }
+
+    /**
+     * What would be set aside, and what already has been.
+     *
+     * Nothing yet: until the phone can test its own exits there is no verdict
+     * to act on, and a sheet offering to move files on the strength of a test
+     * that never ran would be worse than no sheet. Answered rather than
+     * refused because the page asks for this on the way up and hides its
+     * header mark when both counts are zero - a refusal would leave the mark
+     * drawn over nothing.
+     */
+    fun deadExits(): String = JSONObject().apply {
+        put("ok", true)
+        put("folders", JSONArray())
+        put("exits", JSONArray())
+        put("shelved", JSONArray())
+        put("dead", 0)
+        put("aside", 0)
+    }.toString()
+
     // -- the small remembered things -------------------------------------------
 
     private fun favouriteSet(): MutableSet<String> =
         prefs.getStringSet("favourites", emptySet())!!.toMutableSet()
 
-    fun favourites(): String = JSONArray(favouriteSet().toList()).toString()
+    /** The page reads `r.ok` and `r.codes`, so a bare array is a TypeError. */
+    fun favourites(): String = JSONObject().apply {
+        put("ok", true)
+        put("codes", JSONArray(favouriteSet().toList()))
+    }.toString()
 
     fun toggleFavourite(code: String): String {
         val set = favouriteSet()
-        if (!set.remove(code)) set.add(code)
+        val on = !set.remove(code)
+        if (on) set.add(code)
         prefs.edit().putStringSet("favourites", set).apply()
-        return favourites()
+        // Starring changes what Starred holds, and it may empty it entirely.
+        if (source() == "starred") reload()
+        return JSONObject().apply {
+            put("ok", true)
+            put("codes", JSONArray(set.toList()))
+            put("on", on)
+        }.toString()
     }
 
-    fun setSort(kind: String?): String? {
-        prefs.edit().putString("sortBy", kind ?: "ping").apply()
-        return null
+    fun setSort(kind: String?): String {
+        val sortBy = kind ?: "ping"
+        prefs.edit().putString("sortBy", sortBy).apply()
+        return JSONObject().apply {
+            put("ok", true)
+            put("sortBy", sortBy)
+        }.toString()
     }
 
-    fun remember(code: String): String? {
+    fun remember(code: String): String {
         prefs.edit().putString("picked", code).apply()
-        return null
+        return JSONObject().put("ok", true).toString()
     }
 
-    fun accountsList(): String = JSONArray().apply {
+    /** The page reads `r.accounts`, so this is an object and not an array. */
+    fun accountsList(): String {
+        val accounts = JSONArray()
         credentials()?.let { (user, _) ->
-            put(JSONObject().apply {
+            accounts.put(JSONObject().apply {
                 put("id", "surfshark")
                 put("provider", "surfshark")
+                put("providerName", "Surfshark")
                 put("label", user)
                 put("username", user)
                 put("signedIn", true)
+                put("hasPassword", true)
                 put("active", true)
+                put("added", 0)
             })
         }
-    }.toString()
+        return JSONObject().apply {
+            put("ok", true)
+            put("accounts", accounts)
+        }.toString()
+    }
 
     private fun credentials() = Bridge.credentials(authFile())
     private fun hasAuth() = credentials() != null
@@ -526,27 +827,35 @@ class MainActivity : FlutterActivity() {
     /**
      * rescanEdges(): look for a way in now, whatever state the tunnel is in.
      *
-     * Off the main thread - fifty-six TLS handshakes, about five seconds -
-     * and the answer arrives as an event rather than as a return, because the
-     * page redraws the settings pane from a fresh plan either way.
+     * Deferred rather than answered at once. This is fifty-six TLS handshakes
+     * and about five seconds, and the page does `const r = await
+     * api.rescanEdges()` and then reads `r.edges[0]` - so an immediate
+     * `{ok:true}` was a TypeError one line later, and the real answer went out
+     * as an event the page has no handler for and dropped in silence.
      */
-    fun rescanEdges(): String {
+    fun rescanEdges(): Bridge.Later {
         val domain = prefs.getString("tunnelDomain", "").orEmpty()
         if (domain.isEmpty()) throw Bridge.NotHere("no server domain saved yet")
 
-        Thread {
-            val found = try {
-                Relay.scanEdges(domain, 40000)
-            } catch (e: Exception) {
-                // Not FlutterActivity's TAG, which is private and shadows
-                // ours from inside this class.
-                Log.w(RelayVpnService.TAG, "edge scan: ${e.message}")
-                ""
+        return Bridge.work {
+            val found = JSONObject(Relay.scanEdgesJSON(domain, 40000L))
+            val edges = found.optJSONArray("edges") ?: JSONArray()
+
+            val keep = StringBuilder()
+            for (i in 0 until edges.length()) {
+                if (i > 0) keep.append('\n')
+                keep.append(edges.getString(i))
             }
-            prefs.edit().putString("tunnelEdges", found).apply()
-            runOnUiThread { push("Tunnel", tunnelPlan()) }
-        }.start()
-        return JSONObject().put("ok", true).toString()
+            // Kept, so the next connect does not pay for it again - and only
+            // when something was found, because writing an empty list over a
+            // working one would turn a bad minute into a broken setting.
+            if (keep.isNotEmpty()) {
+                prefs.edit().putString("tunnelEdges", keep.toString()).apply()
+            }
+
+            found.put("running", RelayVpnService.exitAddress.isNotEmpty())
+            found.toString()
+        }
     }
 
     /**
@@ -555,37 +864,161 @@ class MainActivity : FlutterActivity() {
      * Three answers in one, the same three the desktop wants: the way in is
      * reachable, the server takes the password, and traffic actually comes
      * out the far side. The last is the one a reachability check misses.
+     *
+     * And one repair, once. The failure this cannot tell apart from a dead
+     * server is a way in that has been filtered since it was measured - both
+     * are a timeout from here - so a failure is followed by a scan, and if
+     * that finds a different address the question is asked again through it.
+     * Once, and then it is reported: a Test button that retries forever is a
+     * Test button that never finishes.
      */
-    fun testTunnel(): String {
+    fun testTunnel(): Bridge.Later {
         val domain = prefs.getString("tunnelDomain", "").orEmpty()
         val password = prefs.getString("tunnelPassword", "").orEmpty()
-        // surfshark is not a tunnel mode. Testing the tunnel while the strip
-        // says "Provider" should still test something, and single is the
-        // plainest thing to test.
-        val mode = prefs.getString("mode", "single").let {
-            if (it == "surfshark") "single" else it
-        }
         if (domain.isEmpty() || password.isEmpty()) {
             throw Bridge.NotHere("set the domain and password first")
         }
+        // surfshark is not a tunnel mode. Testing the tunnel while the strip
+        // says "Provider" should still test something, and single is the
+        // plainest thing to test.
+        val mode = (prefs.getString("mode", "single") ?: "single").let {
+            if (it == "surfshark") "single" else it
+        }
 
-        Thread {
+        return Bridge.work {
             val cfg = Relay.newServerConfig()
             cfg.domain = domain
             cfg.password = password
             cfg.mode = mode
             cfg.edges = prefs.getString("tunnelEdges", "").orEmpty()
 
-            val out = JSONObject()
+            val running = RelayVpnService.exitAddress.isNotEmpty()
             try {
-                out.put("ok", true).put("seen", JSONObject(Relay.testServer(cfg, 20000)))
-            } catch (e: Exception) {
-                out.put("ok", false).put("error", e.message ?: e.toString())
+                askThrough(cfg, domain, mode, running, JSONArray())
+            } catch (first: Exception) {
+                val scan = JSONObject(Relay.scanEdgesJSON(domain, 40000L))
+                val found = scan.optJSONArray("edges") ?: JSONArray()
+                if (found.length() == 0) {
+                    JSONObject().apply {
+                        put("ok", false)
+                        put("verdict", "no-way-in")
+                        put("restarted", true)
+                        put("running", running)
+                        put("error", scan.optString("error").ifEmpty {
+                            first.message ?: first.toString()
+                        })
+                    }.toString()
+                } else {
+                    val keep = StringBuilder()
+                    for (i in 0 until found.length()) {
+                        if (i > 0) keep.append('\n')
+                        keep.append(found.getString(i))
+                    }
+                    prefs.edit().putString("tunnelEdges", keep.toString()).apply()
+                    cfg.edges = keep.toString()
+                    try {
+                        askThrough(cfg, domain, mode, running, found)
+                    } catch (second: Exception) {
+                        JSONObject().apply {
+                            put("ok", false)
+                            put("verdict", "still-down")
+                            put("repaired", found)
+                            put("restarted", true)
+                            put("running", running)
+                            put("error", "found a way in at ${found.getString(0)} " +
+                                "and the tunnel still will not carry anything: " +
+                                (second.message ?: second.toString()).take(120))
+                        }.toString()
+                    }
+                }
             }
-            runOnUiThread { push("Tunnel", out.toString()) }
-        }.start()
-        return JSONObject().put("ok", true).put("testing", true).toString()
+        }
     }
+
+    /**
+     * One question through the tunnel, and what came back.
+     *
+     * `seen` goes back as the address alone rather than as the object the
+     * core answers with, because the page prints it into a sentence: "it
+     * comes out at 164.92.225.16".
+     */
+    private fun askThrough(
+        cfg: relay.ServerConfig, domain: String, mode: String,
+        running: Boolean, repaired: JSONArray,
+    ): String {
+        val seen = JSONObject(Relay.testServer(cfg, 20000L))
+        return JSONObject().apply {
+            put("ok", true)
+            put("seen", seen.optString("ip"))
+            put("exit", when (mode) {
+                "multi" -> "$domain (server + exit)"
+                else -> "$domain (your server)"
+            })
+            put("restarted", false)
+            put("repaired", repaired)
+            put("edges", JSONArray(edgeList()))
+            put("running", running)
+        }.toString()
+    }
+
+    /**
+     * One line that puts the installer on the server and runs it.
+     *
+     * The pane used to show `./install-server.sh ...`, which quietly assumed
+     * the script was already on the server - and it never is. Nothing hosts
+     * it, so the script travels inside the command: base64 in a single line,
+     * which an SSH session takes as one paste.
+     *
+     * On a phone it also travels inside the APK. The desktop reads it off the
+     * disk beside itself, and a phone has no disk beside itself, so
+     * sync-ui.sh copies it into the assets and this reads it back out.
+     *
+     * The Surfshark credentials are left as placeholders rather than filled
+     * in. They would otherwise sit in a clipboard and, on most machines, in a
+     * shell history file on a server, to save somebody two words.
+     */
+    fun installCommand(domain: String?, user: String?, password: String?): String {
+        val key = FlutterInjector.instance().flutterLoader()
+            .getLookupKeyForAsset("assets/install-server.sh")
+        val blob = try {
+            assets.open(key).use { Base64.encodeToString(it.readBytes(), Base64.NO_WRAP) }
+        } catch (e: Exception) {
+            return refusal("the installer is missing: ${e.message}")
+        }
+        val host = (domain ?: "").trim().ifEmpty { "yourdomain.com" }
+        return JSONObject().apply {
+            put("ok", true)
+            put("command",
+                "mkdir -p /opt/relay && echo '" + blob + "' | base64 -d " +
+                "> /opt/relay/install-server.sh && bash " +
+                "/opt/relay/install-server.sh $host " +
+                (user.orEmpty().ifEmpty { "<surfshark-user>" }) + " " +
+                (password.orEmpty().ifEmpty { "<surfshark-pass>" }))
+        }.toString()
+    }
+
+    /**
+     * The clipboard, for a page that cannot reach its own.
+     *
+     * `navigator.clipboard` needs a secure context and this page is loaded
+     * out of the APK, so it is never available here - the page catches that
+     * and falls back to this. Returning null, as this did, meant Copy on the
+     * install command marked itself as copied and put nothing anywhere.
+     *
+     * On the main thread, which is where the bridge already runs:
+     * ClipboardManager wants a Looper.
+     */
+    fun copy(text: String?): String {
+        val clip = getSystemService(android.content.ClipboardManager::class.java)
+            ?: return refusal("This phone has no clipboard service.")
+        clip.setPrimaryClip(
+            android.content.ClipData.newPlainText("Relay", text.orEmpty()))
+        return JSONObject().put("ok", true).toString()
+    }
+
+    /** A refusal in the shape the page reads: `if (!r.ok) say(r.error)`. */
+    private fun refusal(why: String): String =
+        JSONObject().put("ok", false).put("error", why).toString()
 
     // -- pushing ---------------------------------------------------------------
 

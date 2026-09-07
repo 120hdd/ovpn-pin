@@ -67,6 +67,12 @@ class RelayVpnService : VpnService() {
         const val EXTRA_CONFIG_DIR = "configDir"
         const val EXTRA_COUNTRY = "country"
 
+        // Which files, when the window is connecting out of Starred rather
+        // than out of everything. A set of names rather than a folder,
+        // because that is what Starred is - a handful of exits spread across
+        // every country, and no folder holds exactly them.
+        const val EXTRA_ONLY = "only"
+
         // Which way out. "surfshark" races the pinned provider exits; the
         // rest go through the user's own server and differ only in the path
         // they ask it for.
@@ -127,6 +133,10 @@ class RelayVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Before the core is asked for anything. Cheap, idempotent, and the
+        // service may well be running with no window to have done it.
+        AppFiles.announce(applicationContext)
+
         if (intent?.action == ACTION_STOP) {
             stopTunnel()
             stopSelf()
@@ -153,6 +163,7 @@ class RelayVpnService : VpnService() {
         val password = intent?.getStringExtra(EXTRA_PASSWORD).orEmpty()
         val configDir = intent?.getStringExtra(EXTRA_CONFIG_DIR).orEmpty()
         val country = intent?.getStringExtra(EXTRA_COUNTRY) ?: "auto"
+        val only = intent?.getStringExtra(EXTRA_ONLY).orEmpty()
         val provider = intent?.getStringExtra(EXTRA_PROVIDER) ?: "surfshark"
         val domain = intent?.getStringExtra(EXTRA_DOMAIN).orEmpty()
         val tunnelPassword = intent?.getStringExtra(EXTRA_TUNNEL_PASSWORD).orEmpty()
@@ -160,7 +171,7 @@ class RelayVpnService : VpnService() {
 
         scope.launch {
             if (provider == "surfshark") {
-                connect(user, password, configDir, country)
+                connect(user, password, configDir, country, only)
             } else {
                 connectServer(provider, domain, tunnelPassword, edges)
             }
@@ -260,7 +271,7 @@ class RelayVpnService : VpnService() {
             if (edges.isBlank()) {
                 say("finding a way in")
                 cfg.edges = try {
-                    Relay.scanEdges(domain, 30000)
+                    Relay.scanEdges(domain, 30000L)
                 } catch (e: Exception) {
                     // Not fatal. The name may still carry the tunnel on a line
                     // that is only lying about the addresses.
@@ -314,7 +325,10 @@ class RelayVpnService : VpnService() {
         }
     }
 
-    private fun connect(user: String, password: String, configDir: String, country: String) {
+    private fun connect(
+        user: String, password: String, configDir: String, country: String,
+        only: String,
+    ) {
         try {
             // Before anything dials. See the class comment.
             Relay.setProtector(object : Protector {
@@ -334,6 +348,10 @@ class RelayVpnService : VpnService() {
             // and the same scan is what the window's country list came from -
             // so a country the page offers is a country the race can run in.
             c.scanFolder(configDir)
+            // The same narrowing the window is showing. Without it, pressing
+            // Connect from a Starred list would race the whole folder and
+            // come back through an exit that is not in the list on screen.
+            if (only.isNotBlank()) c.setOnly(only)
             if (c.count() == 0L) {
                 fail("no pinned configs in $configDir")
                 return

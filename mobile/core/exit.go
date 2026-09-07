@@ -224,7 +224,7 @@ func (e *Exit) connect(conn *tls.Conn, target string) ([]byte, error) {
 		// Said plainly rather than as a status. On these exits it does not
 		// mean the password is wrong - it means the account has no proxy on
 		// it, which is a different thing to go and fix.
-		return nil, errors.New("no proxy for this account")
+		return nil, errors.New(REFUSED)
 	case !strings.HasPrefix(code, "2"):
 		return nil, fmt.Errorf("CONNECT refused: %s", strings.TrimSpace(status))
 	}

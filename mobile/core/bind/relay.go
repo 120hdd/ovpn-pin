@@ -97,6 +97,12 @@ func (c *Client) ScanFolder(folder string) error {
 	if err != nil {
 		return err
 	}
+	// What was measured and what was published, read here rather than by the
+	// caller: a catalogue without them can only be alphabetised, and every
+	// caller wanted them. Both are empty on a phone that has never tested or
+	// fetched anything, which is a state the list already draws.
+	cat.Attach(core.LoadReach(), core.LoadWindscribeMeta())
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.cat = cat
@@ -429,4 +435,4 @@ func WhereAmIJSON(timeoutMs int) string {
 
 // Version is here so a phone build can prove which core it is carrying
 // without a debugger.
-func Version() string { return "relay-core 0.1" }
+func Version() string { return "relay-core 0.2" }
