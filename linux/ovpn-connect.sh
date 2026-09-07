@@ -102,7 +102,10 @@ usage() {
         --pick-landlord    list the companies behind these configs and sweep
                            only the ones you choose
         --retest           sweep the success folder instead of the pinned one:
-                           re-test what worked, and drop what no longer does
+                           re-test what worked. Measures; keeps everything
+        --prune            with --retest, also take out what no longer
+                           connects. Off by default: a run that measures
+                           should not delete unless you said so
         --success-dir DIR  where the ones that connect are kept. Default
                            success/, with a landlord/ folder inside it
         --sitetest-dir DIR where the per-site folders go. Default sitetest/:
@@ -1015,9 +1018,13 @@ drop_from() {
 # one that no longer connects should not keep sitting in a folder that claims
 # otherwise. Only ever the copies - the original in the pinned folder is left
 # alone, and a later sweep can put it back.
+#
+# And only ever with --prune. This used to follow from where the sweep was
+# pointed, which made a run meant to measure delete things as a side effect of
+# its own arguments; the Windows half has the same switch for the same reason.
 drop_successful() {
     local name=$1 why=$2 base d f gone=0
-    [ "$RETESTING" -eq 1 ] || return 0
+    [ "$RETESTING" -eq 1 ] && [ "$PRUNE" -eq 1 ] || return 0
     base=$(base_config_name "$name")
     # Every folder that says this config works, the per-site ones included: a
     # config that no longer connects cannot be serving anybody's site either,
@@ -1313,7 +1320,8 @@ do_sweep() {
     info 'Each one gets connected, judged, and dropped again. Nothing here'
     info 'waits on a clock - every step moves on the moment it is done - so'
     info "reckon on half a minute each, ${#idxs[@]} to go."
-    [ "$RETESTING" -eq 1 ] && info 'Re-testing what worked: anything that has stopped connecting is dropped from it.'
+    [ "$RETESTING" -eq 1 ] && [ "$PRUNE" -eq 1 ] &&
+        info 'Re-testing what worked: anything that has stopped connecting is dropped from it.'
     warn_if_pruned_folder
 
     if running_pid >/dev/null; then
@@ -1650,6 +1658,7 @@ ONE_PER_LANDLORD_LOC=0
 FIRST=0
 NO_OWNER=0
 RETEST=0
+PRUNE=0
 CLI_SUCCESS=''
 CLI_SITETEST=''
 
@@ -1674,6 +1683,7 @@ while [ $# -gt 0 ]; do
         --first)           FIRST=${2:?--first needs a number}; shift 2 ;;
         --no-owner)        NO_OWNER=1; shift ;;
         --retest)          RETEST=1; shift ;;
+        --prune)           PRUNE=1; shift ;;
         --success-dir)     CLI_SUCCESS=${2:?--success-dir needs a path}; shift 2 ;;
         --sitetest-dir)    CLI_SITETEST=${2:?--sitetest-dir needs a path}; shift 2 ;;
         --fallback)        CLI_FALLBACK=${2:?--fallback needs a mode}; shift 2 ;;
@@ -1728,9 +1738,9 @@ case $SITETEST_DIR in /*) ;; *) SITETEST_DIR=$ROOT/${SITETEST_DIR#./} ;; esac
 case $AUTH_FILE in /*) ;; *) AUTH_FILE=$ROOT/${AUTH_FILE#./} ;; esac
 
 # --retest sweeps what worked last time rather than everything. It is the same
-# sweep pointed at a different folder, and it behaves in one way differently:
-# a config that no longer connects is taken out of that folder, because a
-# folder that says these all work should not be quietly wrong.
+# sweep pointed at a different folder. Taking a config that no longer connects
+# out of that folder is --prune's job and nobody else's - being pointed at
+# success/ is not consent to be emptied of it.
 [ "$RETEST" -eq 1 ] && OUT_DIR=$SUCCESS_DIR
 RETESTING=0
 [ "${OUT_DIR%/}" = "${SUCCESS_DIR%/}" ] && RETESTING=1
