@@ -54,11 +54,19 @@ var (
 // flight. The probes it leaves behind are goroutines holding one socket each
 // and they end on their own deadline, which is what the desktop's
 // shutdown(wait=False) amounts to.
-func Race(ctx context.Context, servers []Server, user, password string,
+func Race(ctx context.Context, servers []Server, logins Logins,
 	timeout time.Duration, width int, progress Progress) (Winner, error) {
 
 	if len(servers) == 0 {
 		return Winner{}, ErrNoServers
+	}
+	// Before the race rather than inside it, so "you are not signed in to
+	// that" is an answer that arrives at once instead of after eighty
+	// timeouts - and so a folder holding both providers still races the half
+	// there is a credential for.
+	servers, err := logins.Keep(servers)
+	if err != nil {
+		return Winner{}, err
 	}
 	if width <= 0 {
 		width = RaceWidth
@@ -88,7 +96,11 @@ func Race(ctx context.Context, servers []Server, user, password string,
 				if ctx.Err() != nil {
 					return
 				}
-				took, err := Ask(NewExit(s.Addr, s.Name, user, password), timeout)
+				login, ok := logins.For(s)
+				if !ok {
+					continue
+				}
+				took, err := AskExit(s, login, timeout)
 
 				n := atomic.AddInt64(&done, 1)
 				// Every fourth, and the last. One call per probe would be

@@ -64,6 +64,13 @@ class RelayVpnService : VpnService() {
         const val ACTION_STOP = "com.erelay.relay.STOP"
         const val EXTRA_USER = "user"
         const val EXTRA_PASSWORD = "password"
+
+        // Windscribe's, which is a different account entirely. A folder can
+        // hold both providers' exits, and an exit asked with the other one's
+        // credential is refused - which reads on screen as "blocked here"
+        // rather than as "wrong question".
+        const val EXTRA_WS_USER = "wsUser"
+        const val EXTRA_WS_PASSWORD = "wsPassword"
         const val EXTRA_CONFIG_DIR = "configDir"
         const val EXTRA_COUNTRY = "country"
 
@@ -97,6 +104,18 @@ class RelayVpnService : VpnService() {
         @Volatile var exitAddress: String = ""
             private set
         @Volatile var exitName: String = ""
+            private set
+
+        /**
+         * Which config is carrying, and whose.
+         *
+         * Read by the window when it asks where the traffic is coming out:
+         * that check goes through the exit, so it has to be opened with the
+         * same provider's credential the race used.
+         */
+        @Volatile var exitFile: String = ""
+            private set
+        @Volatile var exitProvider: String = ""
             private set
         @Volatile var asked: Int = 0
             private set
@@ -161,6 +180,8 @@ class RelayVpnService : VpnService() {
 
         val user = intent?.getStringExtra(EXTRA_USER).orEmpty()
         val password = intent?.getStringExtra(EXTRA_PASSWORD).orEmpty()
+        val wsUser = intent?.getStringExtra(EXTRA_WS_USER).orEmpty()
+        val wsPassword = intent?.getStringExtra(EXTRA_WS_PASSWORD).orEmpty()
         val configDir = intent?.getStringExtra(EXTRA_CONFIG_DIR).orEmpty()
         val country = intent?.getStringExtra(EXTRA_COUNTRY) ?: "auto"
         val only = intent?.getStringExtra(EXTRA_ONLY).orEmpty()
@@ -171,7 +192,7 @@ class RelayVpnService : VpnService() {
 
         scope.launch {
             if (provider == "surfshark") {
-                connect(user, password, configDir, country, only)
+                connect(user, password, wsUser, wsPassword, configDir, country, only)
             } else {
                 connectServer(provider, domain, tunnelPassword, edges)
             }
@@ -312,6 +333,8 @@ class RelayVpnService : VpnService() {
             tunFd = fd
 
             exitAddress = domain
+            exitFile = ""
+            exitProvider = ""
             exitName = when (mode) {
                 "multi" -> "$domain (server + exit)"
                 "bulk" -> "$domain (bulk)"
@@ -326,8 +349,8 @@ class RelayVpnService : VpnService() {
     }
 
     private fun connect(
-        user: String, password: String, configDir: String, country: String,
-        only: String,
+        user: String, password: String, wsUser: String, wsPassword: String,
+        configDir: String, country: String, only: String,
     ) {
         try {
             // Before anything dials. See the class comment.
@@ -341,6 +364,11 @@ class RelayVpnService : VpnService() {
             Relay.setNamer(AppNamer(applicationContext))
 
             val c = Relay.newClient(user, password)
+            // Both, when both are signed in. A pool holding one provider the
+            // phone has no credential for still races the other half rather
+            // than refusing outright - core.Logins.Keep decides that, and it
+            // needs to have been told.
+            c.setCredentials("windscribe", wsUser, wsPassword)
             client = c
             live = c
 
@@ -383,7 +411,8 @@ class RelayVpnService : VpnService() {
             // descriptor is what fdsan kills the process for.
             val fd = pfd.detachFd()
             try {
-                c.startTunnel(fd.toLong(), Relay.tunMTU(), winner.addr, winner.name)
+                c.startTunnel(fd.toLong(), Relay.tunMTU(), winner.addr, winner.name,
+                    winner.provider)
             } catch (e: Exception) {
                 // Nobody owns it now, so adopt it back only to close it.
                 ParcelFileDescriptor.adoptFd(fd).close()
@@ -393,6 +422,8 @@ class RelayVpnService : VpnService() {
 
             exitAddress = winner.addr
             exitName = winner.name
+            exitFile = winner.file
+            exitProvider = winner.provider
             tookMs = winner.tookMs.toInt()
             since = System.currentTimeMillis() / 1000
             say("connected via ${winner.name} (${winner.addr}), ${winner.tookMs} ms")
@@ -410,12 +441,30 @@ class RelayVpnService : VpnService() {
         }
         client = null
         live = null
+
+        // Handed back, because it belongs to a service that is about to stop
+        // being able to answer. VpnService.protect() on a dead service
+        // returns false, and a false there is not a warning - core turns it
+        // into a dial error, so every socket the window opens afterwards
+        // fails with "the socket to the exit could not be kept out of the
+        // tunnel" about a tunnel that is not there.
+        //
+        // The namer goes with it: it holds a Context and has nothing to
+        // answer about once nothing is being carried.
+        try {
+            Relay.setProtector(null)
+            Relay.setNamer(null)
+        } catch (e: Exception) {
+            Log.w(TAG, "letting go of the platform hooks", e)
+        }
         // Nothing closes the descriptor here. stopTunnel() above ends the
         // stack, and the stack owns it - which is the whole point of handing
         // it over with detachFd().
         tunFd = -1
         exitAddress = ""
         exitName = ""
+        exitFile = ""
+        exitProvider = ""
         asked = 0
         total = 0
         tookMs = 0

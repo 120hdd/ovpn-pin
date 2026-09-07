@@ -42,6 +42,7 @@ class MainActivity : FlutterActivity() {
         private const val CONTROL = "relay/control"
         private const val STATUS = "relay/status"
         private const val VPN_REQUEST = 1
+        private const val PICK_FOLDER = 2
         private const val PREFS = "relay"
     }
 
@@ -131,6 +132,38 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    // -- pickers ---------------------------------------------------------------
+    //
+    // A folder picker is the same shape as a slow network call - the answer
+    // is not ready when the page asks - except that what it waits for is a
+    // person rather than a socket. So it reuses Bridge.Later, with the result
+    // held here until Android comes back with a URI.
+
+    private class Picker(
+        val answer: (String?) -> Unit,
+        val fail: (Throwable) -> Unit,
+        val done: (android.net.Uri?) -> String,
+    )
+
+    private val pickers = HashMap<Int, Picker>()
+
+    private fun pick(
+        code: Int, intent: Intent, done: (android.net.Uri?) -> String,
+    ): Bridge.Later = Bridge.Later { answer, fail ->
+        if (pickers.containsKey(code)) {
+            // Two pickers at once is one of them silently losing its result.
+            fail(Bridge.NotHere("a picker is already open"))
+        } else {
+            pickers[code] = Picker(answer, fail, done)
+            try {
+                startActivityForResult(intent, code)
+            } catch (e: Exception) {
+                pickers.remove(code)
+                fail(e)
+            }
+        }
+    }
+
     override fun onStart() {
         super.onStart()
         ContextCompat.registerReceiver(
@@ -181,6 +214,7 @@ class MainActivity : FlutterActivity() {
 
     private var cat: Client? = null
 
+    @Synchronized
     private fun catalogue(): Client {
         cat?.let { return it }
         val c = Relay.newClient("", "")
@@ -197,6 +231,7 @@ class MainActivity : FlutterActivity() {
     }
 
     /** After anything that changes which files are there or what is known. */
+    @Synchronized
     private fun reload() {
         cat = null
     }
@@ -323,8 +358,20 @@ class MainActivity : FlutterActivity() {
             if (!name.endsWith(".ovpn")) continue
             if (name.contains(".ws.")) windscribe++ else surfshark++
         }
-        val ssAccount = hasAuth()
-        val wsAccount = AppFiles.windscribeAuth(ctx).isFile
+        // Signed in, rather than "a file exists". The roster is what the
+        // account pane draws, and the cards have to agree with it.
+        var ssAccount = false
+        var wsAccount = false
+        val roster = Accounts.listing(ctx)
+        for (i in 0 until roster.length()) {
+            val a = roster.getJSONObject(i)
+            if (!a.optBoolean("signedIn")) continue
+            if (a.optString("provider") == Accounts.WINDSCRIBE) {
+                wsAccount = true
+            } else {
+                ssAccount = true
+            }
+        }
 
         return JSONObject().apply {
             put("surfshark", JSONObject().apply {
@@ -383,7 +430,13 @@ class MainActivity : FlutterActivity() {
     fun seenAs(): String {
         val addr = RelayVpnService.exitAddress
         val name = RelayVpnService.exitName
-        val creds = credentials()
+        // Asked with the winning exit's own provider credential. The other
+        // one is refused, and a refusal here reads on screen as a tunnel
+        // that cannot say where it comes out.
+        val creds = when (RelayVpnService.exitProvider) {
+            Accounts.WINDSCRIBE -> windscribeCredentials()
+            else -> credentials()
+        }
         if (addr.isEmpty() || creds == null) return "{}"
 
         Thread {
@@ -500,6 +553,16 @@ class MainActivity : FlutterActivity() {
     @Deprecated("startActivityForResult, kept because VpnService.prepare uses it")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+
+        pickers.remove(requestCode)?.let { picker ->
+            val uri = if (resultCode == Activity.RESULT_OK) data?.data else null
+            // Off the main thread: copying four hundred configs through a
+            // content resolver is not something to do while the window is
+            // trying to draw the dialog closing.
+            Bridge.work { picker.done(uri) }.start(picker.answer, picker.fail)
+            return
+        }
+
         if (requestCode != VPN_REQUEST) return
         if (resultCode == Activity.RESULT_OK) {
             startService(pendingCountry)
@@ -521,9 +584,13 @@ class MainActivity : FlutterActivity() {
             if (configCount() == 0) throw Bridge.NotHere(
                 "nothing pinned. Push configs to ${pinnedDir().absolutePath}"
             )
-            val creds = credentials() ?: throw Bridge.NotHere(
-                "no credentials. ${authFile().absolutePath} wants a username on " +
-                    "one line and a password on the next"
+            // One is enough to start. core.Logins.Keep drops the exits
+            // there is nothing to open and only refuses when that leaves
+            // nothing at all, so a phone signed into one provider still
+            // connects through the half it has.
+            val creds = credentials() ?: windscribeCredentials() ?: throw Bridge.NotHere(
+                "no credentials. Add an account in Settings, or put a username on " +
+                    "one line and a password on the next in " + authFile().absolutePath
             )
             intent
                 .putExtra(RelayVpnService.EXTRA_PROVIDER, "surfshark")
@@ -531,6 +598,12 @@ class MainActivity : FlutterActivity() {
                 .putExtra(RelayVpnService.EXTRA_PASSWORD, creds.second)
                 .putExtra(RelayVpnService.EXTRA_CONFIG_DIR, pinnedDir().absolutePath)
                 .putExtra(RelayVpnService.EXTRA_COUNTRY, country)
+            // The other provider's, when there is one. A folder holding both
+            // races both; a folder holding only Surfshark ignores this.
+            windscribeCredentials()?.let { (wsUser, wsPassword) ->
+                intent.putExtra(RelayVpnService.EXTRA_WS_USER, wsUser)
+                    .putExtra(RelayVpnService.EXTRA_WS_PASSWORD, wsPassword)
+            }
             // Starred is a set of filenames rather than a folder, so the
             // service is handed the names. Sent even when empty, because the
             // absence of the extra and an empty one mean the same thing and
@@ -627,7 +700,13 @@ class MainActivity : FlutterActivity() {
 
     /** Connect out of this pool from now on. */
     fun setSource(source: String?): String {
-        val key = source ?: "all"
+        // The source sheet's Browse button imports a folder and then asks for
+        // `folder:<path>`. On a phone there is one folder and everything is
+        // already in it, so that is Everything under another name - and
+        // refusing it would mean an import that worked and a sheet that said
+        // it had not.
+        var key = source ?: "all"
+        if (key.startsWith("folder:")) key = "all"
         if (key != "all" && key != "starred") {
             return refusal("There is nothing in that one.")
         }
@@ -646,6 +725,46 @@ class MainActivity : FlutterActivity() {
             put("serverCount", c.count().toInt())
         }
         return o.toString().dropLast(1) + ",\"countries\":${c.countriesJSON()}}"
+    }
+
+    /**
+     * Configs, in from a folder somebody picked.
+     *
+     * The desktop points itself at a folder and reads it where it stands. A
+     * phone cannot: a picked folder is a content URI rather than a path, and
+     * the Go core has to be handed a path. So they are copied in, and the app
+     * goes on reading its own folder.
+     *
+     * This is the call that makes a cable optional. Everything else about
+     * setting the phone up can be done from the window; before this, the
+     * configs could only arrive by `adb push`.
+     */
+    fun chooseFolder(): Bridge.Later {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+        return pick(PICK_FOLDER, intent) { uri ->
+            if (uri == null) {
+                // Cancelled. The page checks r.ok and says nothing when there
+                // is no error to say, which is right - a person who closed
+                // the picker knows they closed it.
+                """{"ok":false}"""
+            } else {
+                val got = Import.fromTree(applicationContext, uri)
+                reload()
+                if (got.seen == 0) {
+                    refusal("No .ovpn files in that folder, so it was not used.")
+                } else {
+                    JSONObject().apply {
+                        put("ok", true)
+                        put("folder", pinnedDir().absolutePath)
+                        put("count", configCount())
+                        put("copied", got.copied)
+                        put("skipped", got.skipped)
+                    }.toString()
+                }
+            }
+        }
     }
 
     /** Back to reading everything, which is the only folder there is. */
@@ -718,29 +837,98 @@ class MainActivity : FlutterActivity() {
         return JSONObject().put("ok", true).toString()
     }
 
-    /** The page reads `r.accounts`, so this is an object and not an array. */
-    fun accountsList(): String {
-        val accounts = JSONArray()
-        credentials()?.let { (user, _) ->
-            accounts.put(JSONObject().apply {
-                put("id", "surfshark")
-                put("provider", "surfshark")
-                put("providerName", "Surfshark")
-                put("label", user)
-                put("username", user)
-                put("signedIn", true)
-                put("hasPassword", true)
-                put("active", true)
-                put("added", 0)
-            })
-        }
-        return JSONObject().apply {
+    /**
+     * The roster. The page reads `r.accounts`, so this is an object and not
+     * an array - it was an array, and the account pane was always empty.
+     *
+     * Deferred: reading it opens the secret store, which builds a keyset
+     * through the Android keystore on its first call and is slow enough to
+     * be felt if it happens while the sheet is animating in.
+     */
+    fun accountsList(): Bridge.Later = Bridge.work {
+        JSONObject().apply {
             put("ok", true)
-            put("accounts", accounts)
+            put("accounts", Accounts.listing(applicationContext))
         }.toString()
     }
 
-    private fun credentials() = Bridge.credentials(authFile())
+    /**
+     * Add an account, or correct one that is already there.
+     *
+     * Surfshark has no sign-in to do: its cluster list is public, and the
+     * account is a service username and password that the exits themselves
+     * check. So this is a validation and two writes. Windscribe has a login
+     * and a puzzle, and is not built here yet.
+     */
+    fun accountAdd(provider: String?, label: String?, user: String?, password: String?): Any {
+        val who = provider.orEmpty()
+        val username = user.orEmpty().trim()
+        val secret = password.orEmpty()
+
+        if (who != Accounts.SURFSHARK && who != Accounts.WINDSCRIBE) {
+            return refusal("Unknown provider.")
+        }
+        if (username.isEmpty()) return refusal("Enter the username.")
+        if (secret.isEmpty()) return refusal("Enter the password.")
+        if (who == Accounts.WINDSCRIBE) {
+            throw Bridge.NotHere("Signing in from the phone is not built yet.")
+        }
+        // An address in this field is wrong often enough to be worth naming.
+        // Surfshark issues a separate service username for manual setups, and
+        // the login email is refused by every exit with the same silence as a
+        // wrong password - which reads as "no server accepted just now" and
+        // sends people looking at their servers folder.
+        if (username.contains("@")) {
+            return refusal("That looks like your login email. Surfshark issues a " +
+                "separate service username for manual setups - it is on the same " +
+                "page as the config files.")
+        }
+
+        return Bridge.work {
+            val account = Accounts.put(applicationContext, Accounts.SURFSHARK,
+                label.orEmpty().trim(), username, password = secret)
+            JSONObject().apply {
+                put("ok", true)
+                put("id", account.optString("id"))
+                put("label", account.optString("label"))
+            }.toString()
+        }
+    }
+
+    /** Make one the account in use for its provider. */
+    fun accountUse(id: String?): Bridge.Later = Bridge.work {
+        val account = Accounts.activate(applicationContext, id.orEmpty())
+        if (account == null) refusal("No such account.")
+        else JSONObject().apply {
+            put("ok", true)
+            put("label", account.optString("label"))
+            put("provider", account.optString("provider"))
+        }.toString()
+    }
+
+    /**
+     * Remove one. The configs stay - they are files, they cost nothing, and
+     * they are worth having if the account comes back.
+     */
+    fun accountRemove(id: String?): Bridge.Later = Bridge.work {
+        val gone = Accounts.remove(applicationContext, id.orEmpty())
+        if (gone == null) refusal("No such account.")
+        else {
+            val left = JSONArray()
+            for (name in listOf(Accounts.SURFSHARK, Accounts.WINDSCRIBE)) {
+                if (Accounts.credentials(applicationContext, name) != null) left.put(name)
+            }
+            JSONObject().apply {
+                put("ok", true)
+                put("label", gone.optString("label"))
+                put("providers", left)
+            }.toString()
+        }
+    }
+
+    private fun credentials() = Accounts.credentials(applicationContext, Accounts.SURFSHARK)
+    private fun windscribeCredentials() =
+        Accounts.credentials(applicationContext, Accounts.WINDSCRIBE)
     private fun hasAuth() = credentials() != null
 
     // -- the user's own server -------------------------------------------------

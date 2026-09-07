@@ -72,4 +72,10 @@ dependencies {
     // without a Thread of its own.
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+
+    // Where account passwords live. Private preferences are already out of
+    // reach of other applications, but this build is debuggable - which is
+    // what makes setup-phone.sh's run-as trick work - and run-as reads
+    // shared_prefs. A key held by the keystore does not come out that way.
+    implementation("androidx.security:security-crypto:1.0.0")
 }

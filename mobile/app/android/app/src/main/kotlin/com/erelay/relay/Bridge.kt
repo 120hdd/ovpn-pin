@@ -79,7 +79,10 @@ object Bridge {
 
         // -- what the window reads on the way up ------------------------------
 
-        "boot", "info" -> ctx.describe()
+        // Deferred: describe() scans the folder and opens the secret
+        // store. Hundreds of file reads and a keystore keyset is not
+        // main-thread work, and it is the very first thing the page asks for.
+        "boot", "info" -> work { ctx.describe() }
         "status" -> ctx.statusMap()
         "whoami" -> ctx.whoami()
         "seenAs" -> ctx.seenAs()
@@ -120,9 +123,10 @@ object Bridge {
 
         // -- the list ---------------------------------------------------------
 
-        "exitsIn" -> ctx.exitsIn(
-            args.getOrNull(0) as? String ?: "",
-            args.getOrNull(1) as? String)
+        "exitsIn" -> work {
+            ctx.exitsIn(args.getOrNull(0) as? String ?: "",
+                args.getOrNull(1) as? String)
+        }
         "favourites" -> ctx.favourites()
         "toggleFavourite" -> ctx.toggleFavourite(args.getOrNull(0) as? String ?: "")
         "setSort" -> ctx.setSort(args.getOrNull(0) as? String)
@@ -130,17 +134,32 @@ object Bridge {
 
         // -- which pool to connect out of --------------------------------------
 
-        "sources" -> ctx.sources()
-        "setSource" -> ctx.setSource(args.getOrNull(0) as? String)
-        "resetFolder" -> ctx.resetFolder()
+        "sources" -> work { ctx.sources() }
+        "setSource" -> work { ctx.setSource(args.getOrNull(0) as? String) }
+        "resetFolder" -> work { ctx.resetFolder() }
 
         // -- the ones that stopped answering -----------------------------------
 
-        "deadExits" -> ctx.deadExits()
+        "deadExits" -> work { ctx.deadExits() }
 
         // -- accounts ---------------------------------------------------------
 
         "accountsList" -> ctx.accountsList()
+        "accountAdd" -> ctx.accountAdd(
+            args.getOrNull(0) as? String,
+            args.getOrNull(1) as? String,
+            args.getOrNull(2) as? String,
+            args.getOrNull(3) as? String)
+        "accountUse" -> ctx.accountUse(args.getOrNull(0) as? String)
+        "accountRemove" -> ctx.accountRemove(args.getOrNull(0) as? String)
+
+        // -- getting the configs onto the phone --------------------------------
+        //
+        // The one call that makes a cable optional. A picked folder arrives as
+        // a content URI rather than a path, so the configs are copied into the
+        // app folder rather than read where they stand.
+
+        "chooseFolder" -> ctx.chooseFolder()
 
         // -- everything the desktop can do and a phone cannot ------------------
         //
@@ -148,9 +167,9 @@ object Bridge {
         // method to the page and forgetting it here is a distinguishable
         // failure ("unknown") rather than a confident wrong answer.
 
-        "chooseFolder", "chooseSweepFolder", "choosePinFolder", "choosePinOut" ->
-            notHere("There is no folder picker on a phone. Configs are read from " +
-                "the app's own folder.")
+        "chooseSweepFolder", "choosePinFolder", "choosePinOut" ->
+            notHere("There is nothing to point at yet. Configs come in through " +
+                "the folder picker in Settings.")
         "setSystemProxy" -> notHere("There is no system proxy on a phone - the " +
             "tunnel carries everything.")
         "minimise" -> notHere("There is no window to minimise.")
@@ -167,8 +186,8 @@ object Bridge {
         "dropExits", "restoreDropped" ->
             notHere("Nothing has been set aside on this phone.")
         "windscribeFinish", "windscribeRefresh", "windscribeServers",
-        "surfsharkServers", "accountAdd", "accountUse", "accountRemove" ->
-            notHere("Signing in from the phone is not built yet.")
+        "surfsharkServers" ->
+            notHere("Fetching a server list from the phone is not built yet.")
         "setProviders", "setKeepOnClose" -> null
 
         else -> throw NotHere("the page asked for '$name', which nothing here answers")

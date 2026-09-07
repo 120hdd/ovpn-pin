@@ -37,6 +37,13 @@ type Result struct {
 	Name   string
 	Path   string
 	TookMs int
+
+	// Which config won, and whose it is. Both are needed after the race
+	// rather than during it: the tunnel has to be opened with the same
+	// provider's credential the probe used, and a folder holding two
+	// providers is the ordinary case.
+	File     string
+	Provider string
 }
 
 // Client holds the candidates and the credentials for one run.
@@ -44,13 +51,16 @@ type Result struct {
 // Built up by calling Add rather than handed a list, because a slice of
 // structs is exactly what gomobile cannot carry across.
 type Client struct {
-	mu       sync.Mutex
-	servers  []core.Server
-	user     string
-	password string
-	cancel   context.CancelFunc
-	tunnel   *core.Tunnel
-	cat      *core.Catalogue
+	mu      sync.Mutex
+	servers []core.Server
+	cancel  context.CancelFunc
+	tunnel  *core.Tunnel
+	cat     *core.Catalogue
+
+	// One credential per provider. A Windscribe exit asked with a Surfshark
+	// credential is refused, and a refusal reads on screen as "this exit is
+	// blocked here" - which is the wrong thing to have learned.
+	logins core.Logins
 
 	// The multiplexed session, when the way out is the user's own server.
 	// Held apart from the tunnel because it outlives a single connection and
@@ -61,7 +71,37 @@ type Client struct {
 var errTunnelUp = errors.New("a tunnel is already up - stop it before starting another")
 
 func NewClient(user, password string) *Client {
-	return &Client{user: user, password: password}
+	c := &Client{logins: core.Logins{}}
+	if user != "" || password != "" {
+		c.logins["surfshark"] = core.Login{User: user, Password: password}
+	}
+	return c
+}
+
+// SetCredentials hands over one provider's sign-in.
+//
+// Called once per provider that has one, before anything is raced. Two
+// providers is the ordinary case here and they are not one account, which is
+// the whole reason this is not the pair NewClient takes.
+func (c *Client) SetCredentials(provider, user, password string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.logins == nil {
+		c.logins = core.Logins{}
+	}
+	if user == "" || password == "" {
+		delete(c.logins, provider)
+		return
+	}
+	c.logins[provider] = core.Login{User: user, Password: password}
+}
+
+// login is one provider's credential, or the empty one.
+func (c *Client) login(provider string) core.Login {
+	if provider == "" {
+		provider = "surfshark"
+	}
+	return c.logins[provider]
 }
 
 // Add offers one pinned exit. The name is what its certificate has to serve;
@@ -166,7 +206,10 @@ func (c *Client) Race(timeoutMs int, width int, p Progress) (*Result, error) {
 
 func (c *Client) race(servers []core.Server, timeoutMs int, width int, p Progress) (*Result, error) {
 	c.mu.Lock()
-	user, password := c.user, c.password
+	logins := core.Logins{}
+	for k, v := range c.logins {
+		logins[k] = v
+	}
 	c.mu.Unlock()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -180,16 +223,18 @@ func (c *Client) race(servers []core.Server, timeoutMs int, width int, p Progres
 		progress = p.OnProgress
 	}
 
-	w, err := core.Race(ctx, servers, user, password,
+	w, err := core.Race(ctx, servers, logins,
 		time.Duration(timeoutMs)*time.Millisecond, width, progress)
 	if err != nil {
 		return nil, err
 	}
 	return &Result{
-		Addr:   w.Server.Addr,
-		Name:   w.Server.Name,
-		Path:   w.Server.Path,
-		TookMs: int(w.Took.Milliseconds()),
+		Addr:     w.Server.Addr,
+		Name:     w.Server.Name,
+		Path:     w.Server.Path,
+		TookMs:   int(w.Took.Milliseconds()),
+		File:     w.Server.File,
+		Provider: w.Server.Provider,
 	}, nil
 }
 
@@ -224,9 +269,27 @@ func (c *Client) Stop() {
 
 // Ask is one exit on its own: whether it takes the credentials, in
 // milliseconds. What a "test this server" row calls.
-func (c *Client) Ask(addr, name string, timeoutMs int) (int, error) {
-	took, err := core.Ask(core.NewExit(addr, name, c.user, c.password),
-		time.Duration(timeoutMs)*time.Millisecond)
+//
+// By filename rather than by address, because the filename is what says whose
+// exit it is - and asking a Windscribe exit the Surfshark question gets a 200
+// from a proxy that will forward nothing.
+func (c *Client) Ask(file string, timeoutMs int) (int, error) {
+	c.mu.Lock()
+	cat := c.cat
+	c.mu.Unlock()
+	if cat == nil {
+		return 0, errors.New("nothing has been scanned yet")
+	}
+	pool := cat.Pool("file:" + file)
+	if len(pool) == 0 {
+		return 0, errors.New(file + " is not in the folder")
+	}
+	s := pool[0]
+	login, ok := c.logins.For(s)
+	if !ok {
+		return 0, errors.New("no credentials for " + s.Provider)
+	}
+	took, err := core.AskExit(s, login, time.Duration(timeoutMs)*time.Millisecond)
 	if err != nil {
 		return 0, err
 	}
@@ -325,13 +388,18 @@ func SetProtector(p Protector) {
 // than taking a Result, because a Result that came back from a previous run
 // and an exit that is still up are two different things and only the caller
 // knows which it has.
-func (c *Client) StartTunnel(fd int, mtu int, addr, name string) error {
+func (c *Client) StartTunnel(fd int, mtu int, addr, name, provider string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.tunnel != nil {
 		return errTunnelUp
 	}
-	t, err := core.StartTunnel(fd, mtu, core.NewExit(addr, name, c.user, c.password))
+	// The winner's own provider, carried back from the race. Opening the
+	// tunnel with the other one's credential is a connection that races
+	// successfully and then carries nothing.
+	login := c.login(provider)
+	t, err := core.StartTunnel(fd, mtu,
+		core.NewExit(addr, name, login.User, login.Password))
 	if err != nil {
 		return err
 	}
