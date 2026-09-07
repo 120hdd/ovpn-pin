@@ -17,8 +17,11 @@ FILES="/sdcard/Android/data/$APP_ID/files"
 
 [ -f "$APK" ] || {
     echo "build it first:" >&2
+    echo "    ./sync-ui.sh                # the window, out of app/ui" >&2
     echo "    ./build-android.sh          # the Go core" >&2
     echo "    cd app && flutter build apk --debug" >&2
+    echo >&2
+    echo "or take the one a push already built, off the run in Actions." >&2
     exit 1
 }
 
