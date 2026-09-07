@@ -615,6 +615,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   --work: #ffc761;
   --fail: #ff8f9b;
   --fail-bg: rgba(101, 29, 44, 0.5);
+  --alarm: #ff2740;
   --focus: #74e4c2;
   --r-card: 20px;
   --r-ctl: 12px;
@@ -4818,26 +4819,40 @@ canvas.blob__body {
    dot because "something is moving" has no number, and this one is nothing
    but a number - twenty exits and two are different messages. */
 .icon--dead { position: relative; }
+
+/* The number, and nothing holding it.
+   It was a pill: a filled capsule with a ring around it, in the app's soft
+   salmon. That is the badge every framework ships with, and at 13px it is
+   mostly outline - the border was doing more work on screen than the digit
+   inside it. There is nothing to draw a box around here. The count is the
+   whole message, so the count is the whole of it. */
 .icon--dead::after {
   content: attr(data-n);
   position: absolute;
-  top: -1px;
-  right: -2px;
-  min-width: 13px;
-  padding: 0 3px;
-  border-radius: 999px;
-  background: var(--fail-bg);
-  box-shadow: 0 0 0 1px rgba(255, 143, 155, 0.28);
-  color: var(--fail);
+  /* Clear of the box's lid. At 9px and a pixel down, "151" sat across the
+     top stroke of the icon and the two read as one shape. */
+  top: -3px;
+  right: -3px;
+  color: var(--alarm);
   font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
-  font-size: 8.5px;
-  line-height: 13px;
+  font-size: 8px;
+  line-height: 10px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
-  text-align: center;
+  letter-spacing: -0.02em;
   pointer-events: none;
+  /* The blur behind it, and the whole of what the pill was for: enough red
+     spilling out to lift the digits off whatever the icon draws underneath.
+     Wide and weak rather than tight and bright - a small hard glow is a
+     neon sign, and this is a number in the corner of a toolbar. The near
+     ring is the ground colour, softly, so a digit landing on a stroke of
+     the box still has an edge; it is a blur too, not an outline. */
+  text-shadow:
+    0 0 3px rgba(9, 9, 14, 0.9),
+    0 0 6px rgba(255, 39, 64, 0.55),
+    0 0 12px rgba(255, 39, 64, 0.3);
 }
-/* Three digits and up, the pill has to widen rather than crop. Nothing else
-   in the bar moves when it does - the count sits outside the button's box. */
+
 .icon--dead[data-n='0']::after { display: none; }
 
 /* The lede. Set wider than a pane's own note and given room under it, because

@@ -244,6 +244,23 @@ def _shut_log(p):
     p.do("document.getElementById('log').close()")
 
 
+def _dead_mark(p):
+    """The header with the count on it.
+
+    Its own state because the mark is only ever there on a bad day, and a
+    thing nobody photographs is a thing that drifts. Three digits rather than
+    one: the count sits outside the button's box and has to be able to grow
+    without moving anything in the bar.
+    """
+    p.do("(() => { const b = document.getElementById('dropOpen');"
+         " b.hidden = false; b.dataset.n = '151'; })()", 0.5)
+
+
+def _no_dead_mark(p):
+    p.do("(() => { const b = document.getElementById('dropOpen');"
+         " b.hidden = true; b.dataset.n = '0'; })()")
+
+
 def _source(p):
     """The pools to connect out of, opened off the head of the list.
 
@@ -310,6 +327,7 @@ def _shut_dropped(p):
 
 SCENES = [
     ('main', None, None),
+    ('main-dead', _dead_mark, _no_dead_mark),
     ('main-busy', _busy, _idle),
     ('main-on', _connected, _idle),
     ('main-on-details', lambda p: (_connected(p), _details(p)),
