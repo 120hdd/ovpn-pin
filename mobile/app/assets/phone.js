@@ -63,6 +63,48 @@
     hint('DNS is re-asked over HTTPS. UDP does not cross this tunnel.');
   });
 
+  /* ------------------------------------------------------- pinning here */
+
+  /* "Through a proxy" and a box for 127.0.0.1:10808.
+
+     On a phone there is no local port and nothing listening on one. The
+     choice is still real - a lookup can go through whatever is carrying
+     traffic, or straight out - so the row is reworded rather than hidden, and
+     the port box goes, because a field that cannot be filled in usefully is
+     worse than no field. */
+  function relabelRoute() {
+    var seg = document.getElementById('pinRoute');
+    if (!seg) return false;
+
+    var opts = seg.querySelectorAll('.seg__opt');
+    for (var i = 0; i < opts.length; i++) {
+      if (opts[i].dataset.route === 'proxy') opts[i].textContent = 'Through the tunnel';
+      if (opts[i].dataset.route === 'direct') opts[i].textContent = 'Straight out';
+    }
+
+    var port = document.getElementById('pinPortWrap');
+    if (port) port.hidden = true;
+
+    var cap = seg.closest('.flow__step');
+    var note = cap && cap.querySelector('#pinRouteSaid');
+    if (note && !note.textContent) {
+      note.textContent =
+        'Through the tunnel asks the resolver from wherever this phone is '
+        + 'already coming out. Straight out asks from here.';
+    }
+    return true;
+  }
+
+  /* The desktop names a port in this sentence. There is not one here. */
+  wrap('onPin', function (p) {
+    if (!p || p.phase !== 'starting') return;
+    var el = document.getElementById('pinSaid');
+    if (!el) return;
+    el.textContent = p.route === 'proxy'
+      ? 'Asking through the tunnel…'
+      : 'Asking directly…';
+  });
+
   /* ------------------------------------------------- the local network */
 
   /* "Route all of Windows" is the one row in Settings that cannot mean
@@ -125,13 +167,16 @@
 
   /* The settings screen is built once, but not necessarily before this file
      runs. Try now, and if the row is not there yet, watch for it - once. */
-  if (!replaceProxyRow()) {
+  var wanted = [replaceProxyRow, relabelRoute];
+  var todo = wanted.filter(function (f) { return !f(); });
+  if (todo.length) {
     var seen = new MutationObserver(function () {
-      if (replaceProxyRow()) seen.disconnect();
+      todo = todo.filter(function (f) { return !f(); });
+      if (!todo.length) seen.disconnect();
     });
     seen.observe(document.body, { childList: true, subtree: true });
-    // A page that never grows the row should not leave an observer running
-    // for the life of the app.
+    // A page that never grows these should not leave an observer running for
+    // the life of the app.
     setTimeout(function () { seen.disconnect(); }, 30000);
   }
 })();

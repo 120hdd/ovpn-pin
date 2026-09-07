@@ -157,6 +157,36 @@ object Bridge {
         "accountUse" -> ctx.accountUse(args.getOrNull(0) as? String)
         "accountRemove" -> ctx.accountRemove(args.getOrNull(0) as? String)
 
+        // -- getting the exits onto the phone ----------------------------------
+        //
+        // Fetch a provider list, pin what it holds, and the phone has a list
+        // of its own. Everything here used to be answered with "not built
+        // yet", which meant a desktop and a cable for every first run.
+
+        "surfsharkServers" -> ctx.surfsharkServers()
+        "windscribeServers" -> ctx.windscribeServers(
+            args.getOrNull(0) as? Boolean ?: false)
+        "windscribeFinish" -> ctx.windscribeFinish(
+            args.getOrNull(0) as? String,
+            when (val answer = args.getOrNull(1)) {
+                is Number -> answer.toInt().toString()
+                else -> answer as? String
+            },
+            args.getOrNull(2) as? List<*>,
+            args.getOrNull(3) as? List<*>,
+            args.getOrNull(4) as? String)
+        "windscribeRefresh" -> ctx.windscribeRefresh()
+
+        "pinPlan" -> ctx.pinPlan()
+        "setPinRoute" -> ctx.setPinRoute(
+            args.getOrNull(0) as? String,
+            (args.getOrNull(2) as? Number)?.toInt(),
+            args.getOrNull(3) as? Boolean)
+        "pinForProvider" -> ctx.pinForProvider(args.getOrNull(0) as? String)
+        "startPin" -> work { ctx.startPin() }
+        "cancelPin" -> ctx.cancelPin()
+        "usePinnedFolder" -> ctx.usePinnedFolder()
+
         // -- getting the configs onto the phone --------------------------------
         //
         // The one call that makes a cable optional. A picked folder arrives as
@@ -171,9 +201,12 @@ object Bridge {
         // method to the page and forgetting it here is a distinguishable
         // failure ("unknown") rather than a confident wrong answer.
 
-        "chooseSweepFolder", "choosePinFolder", "choosePinOut" ->
-            notHere("There is nothing to point at yet. Configs come in through " +
-                "the folder picker in Settings.")
+        "chooseSweepFolder" ->
+            notHere("Sweeping is a desktop job.")
+        "choosePinFolder", "choosePinOut" ->
+            notHere("A phone has one folder for each of these. Configs come in " +
+                "through the folder picker in Settings, and pinned copies go " +
+                "where the app reads them.")
         "setSystemProxy" -> notHere("There is no system proxy on a phone - the " +
             "tunnel carries everything.")
         "minimise" -> notHere("There is no window to minimise.")
@@ -182,12 +215,6 @@ object Bridge {
         "saveSites", "useSiteFolder", "lookUpOwners" ->
             notHere("Sweeping is a desktop job. The phone connects; the desktop " +
                 "works out what to connect to.")
-        "startPin", "cancelPin", "pinPlan", "setPinRoute", "usePinnedFolder",
-        "pinForProvider" ->
-            notHere("The desktop pins. The phone carries what was pinned.")
-        "windscribeFinish", "windscribeRefresh", "windscribeServers",
-        "surfsharkServers" ->
-            notHere("Fetching a server list from the phone is not built yet.")
         "setProviders", "setKeepOnClose" -> null
 
         else -> throw NotHere("the page asked for '$name', which nothing here answers")

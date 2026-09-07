@@ -966,7 +966,16 @@ class MainActivity : FlutterActivity() {
         if (username.isEmpty()) return refusal("Enter the username.")
         if (secret.isEmpty()) return refusal("Enter the password.")
         if (who == Accounts.WINDSCRIBE) {
-            throw Bridge.NotHere("Signing in from the phone is not built yet.")
+            // Windscribe has a login and a puzzle in front of it, so this
+            // only fetches the puzzle. The account is written when the login
+            // lands, which is a second call away.
+            return Bridge.work {
+                val begun = Providers.begin(username, secret)
+                if (begun.optBoolean("ok")) {
+                    pending = Signin(username, secret, label.orEmpty().trim())
+                }
+                begun.toString()
+            }
         }
         // An address in this field is wrong often enough to be worth naming.
         // Surfshark issues a separate service username for manual setups, and
@@ -1021,6 +1030,132 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    // -- providers -------------------------------------------------------------
+
+    /**
+     * What crossed the bridge on the way to a Windscribe login, waiting for
+     * the second half of it.
+     *
+     * The page never sends the password back with the solved puzzle - it does
+     * not have it any more - so it is held here between the two calls and
+     * dropped either way when they are over.
+     */
+    private class Signin(val username: String, val password: String, val label: String)
+
+    @Volatile private var pending: Signin? = null
+
+    /**
+     * Fetch Surfshark's published fleet and write what is missing.
+     *
+     * No sign-in involved: the cluster list is public, and the account is a
+     * service credential the exits themselves check.
+     */
+    fun surfsharkServers(): Bridge.Later = Bridge.work {
+        val got = Providers.surfshark()
+        if (got.optBoolean("ok")) {
+            Pin.rememberInbox(applicationContext, AppFiles.configs(applicationContext))
+            reload()
+        }
+        got.toString()
+    }
+
+    /** The same for Windscribe, into its own inbox. */
+    fun windscribeServers(freeOnly: Boolean): Bridge.Later = Bridge.work {
+        val got = Providers.windscribe(freeOnly)
+        if (got.optBoolean("ok")) {
+            val folder = AppFiles.windscribe(applicationContext)
+            Pin.rememberInbox(applicationContext, folder)
+            reload()
+            // The page reads this to point its pin pane at the right pile.
+            got.put("pinFolder", folder.absolutePath)
+        }
+        got.toString()
+    }
+
+    /**
+     * Half two of a Windscribe sign-in, sent the moment the puzzle is
+     * released.
+     *
+     * One attempt. A token is spent whether or not the answer was right, and
+     * asking again with the same one is how an account gets rate-limited for
+     * a mistake it has already made - so the pending sign-in is dropped
+     * either way.
+     */
+    fun windscribeFinish(
+        token: String?, solution: String?, trailX: List<*>?, trailY: List<*>?,
+        code2fa: String?,
+    ): Bridge.Later {
+        val waiting = pending
+            ?: throw Bridge.NotHere("Start the sign-in again - the first half of " +
+                "it has been forgotten.")
+        return Bridge.work {
+            try {
+                val out = Providers.signIn(
+                    applicationContext, waiting.username, waiting.password,
+                    waiting.label, token.orEmpty(), solution.orEmpty(),
+                    Providers.trail(trailX), Providers.trail(trailY),
+                    code2fa.orEmpty())
+                if (out.optBoolean("ok")) reload()
+                out.toString()
+            } finally {
+                pending = null
+            }
+        }
+    }
+
+    /** A fresh proxy credential from the session already held. */
+    fun windscribeRefresh(): Bridge.Later = Bridge.work {
+        Providers.refresh(applicationContext).toString()
+    }
+
+    // -- pinning ---------------------------------------------------------------
+
+    /** What a pin run would cost, and what would stop it. */
+    fun pinPlan(): Bridge.Later = Bridge.work {
+        Pin.plan(applicationContext).toString()
+    }
+
+    /**
+     * One pin option at a time. `port` is taken and ignored: there is no
+     * local port on a phone for anything to listen on, and the page sends the
+     * argument because the desktop has one.
+     */
+    fun setPinRoute(route: String?, maxIPs: Int?, test: Boolean?): Bridge.Later =
+        Bridge.work {
+            Pin.setRoute(applicationContext, route, maxIPs, test).toString()
+        }
+
+    /** Point the inbox at one provider pile and say what is in it. */
+    fun pinForProvider(provider: String?): Bridge.Later = Bridge.work {
+        Pin.forProvider(applicationContext, provider.orEmpty()).toString()
+    }
+
+    /**
+     * Start a run. Everything after this arrives as events, because the page
+     * draws each result on the row it belongs to as it lands - and a run over
+     * four hundred configs is minutes of them.
+     */
+    fun startPin(): String {
+        val out = Pin.start(applicationContext) { payload ->
+            main.post { push("Pin", payload) }
+            // The folder the app reads is being written into as this runs, so
+            // the list is stale from the first file onwards.
+            if (payload.contains("\"phase\":\"finished\"")) {
+                main.post { reload() }
+            }
+        }
+        return out.toString()
+    }
+
+    fun cancelPin(): String = Pin.cancel().toString()
+
+    /** The run landed in the folder the app already reads, so nothing narrows. */
+    fun usePinnedFolder(): Bridge.Later = Bridge.work {
+        reload()
+        Pin.usePinned(applicationContext, catalogue().count().toInt()).toString()
+    }
+
+    /** Back to the account list. */
     private fun credentials() = Accounts.credentials(applicationContext, Accounts.SURFSHARK)
     private fun windscribeCredentials() =
         Accounts.credentials(applicationContext, Accounts.WINDSCRIBE)

@@ -398,12 +398,17 @@ func (c *Client) StartTunnel(fd int, mtu int, addr, name, provider string) error
 	// tunnel with the other one's credential is a connection that races
 	// successfully and then carries nothing.
 	login := c.login(provider)
-	t, err := core.StartTunnel(fd, mtu,
-		core.NewExit(addr, name, login.User, login.Password))
+	exit := core.NewExit(addr, name, login.User, login.Password)
+	t, err := core.StartTunnel(fd, mtu, exit)
 	if err != nil {
 		return err
 	}
 	c.tunnel = t
+	// So that anything this app fetches for itself - a provider server list,
+	// a sign-in - goes through the tunnel rather than around it. It would
+	// otherwise go around: the app excludes itself from its own VPN, which is
+	// right for the socket that dials the exit and wrong for everything else.
+	core.SetLive(exit)
 	return nil
 }
 
@@ -434,6 +439,7 @@ func (c *Client) StartServerTunnel(fd int, mtu int, cfg *ServerConfig) error {
 	}
 	c.tunnel = t
 	c.server = srv
+	core.SetLive(srv)
 	return nil
 }
 
@@ -442,6 +448,10 @@ func (c *Client) StopTunnel() error {
 	t, srv := c.tunnel, c.server
 	c.tunnel, c.server = nil, nil
 	c.mu.Unlock()
+
+	// Before either is closed, so nothing starts a fetch through a way out
+	// that is halfway shut.
+	core.SetLive(nil)
 
 	// The session first, then the stack. A smux session left open holds a
 	// websocket open, and a websocket left open holds the phone's radio awake
