@@ -14,6 +14,9 @@ on:
 jobs:
   build:
     uses: ./.github/workflows/android.yml
+    with:
+      release: true
+    secrets: inherit
 
   publish:
     needs: build
@@ -25,22 +28,24 @@ jobs:
       # be picked up rather than fetched across runs.
       - uses: actions/download-artifact@v4
         with:
-          name: relay-debug-apk
+          name: relay-apk
           path: apk
 
       # Named for the tag. Four downloads deep in a phone's folder, three
       # files called app-debug.apk are three files nobody can tell apart.
       - name: name it after the tag
-        run: mv apk/app-debug.apk "relay-${GITHUB_REF_NAME}.apk"
+        run: mv apk/*.apk "relay-${GITHUB_REF_NAME}.apk"
 
       - uses: softprops/action-gh-release@v2
         with:
           files: relay-${{ github.ref_name }}.apk
           body: |
-            Debug build, signed with the debug key - Android will ask twice
-            before installing it, and an upgrade over a differently-signed
-            copy has to be uninstalled first.
-
             On the phone: download, allow this browser to install unknown
             apps, open it. Configs and the sign-in go in from inside the app;
             no cable is needed.
+
+            Signed with the release key when one is configured for this
+            repository, and with the debug key otherwise - the build log says
+            which. A build signed with a different key cannot be installed
+            over this one; it has to be uninstalled first, and that takes the
+            pinned folder with it.

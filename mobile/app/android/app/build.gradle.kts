@@ -40,14 +40,42 @@ android {
         versionName = flutter.versionName
     }
 
+    // The release key, when there is one.
+    //
+    // Android identifies an application by the key that signed it, so this is
+    // the difference between an update that installs over the last one and an
+    // update that has to uninstall it first - taking the pinned folder with
+    // it, because Android/data goes with the app.
+    //
+    // Read from the environment rather than from a file in the repo: a
+    // signing key in version control is a signing key everybody has. CI
+    // writes it out of a secret; a desk sets the same four variables.
+    // Without them the debug key is used, so a checkout still builds.
+    val keystore = System.getenv("RELAY_KEYSTORE")
+    val keystorePassword = System.getenv("RELAY_KEYSTORE_PASSWORD")
+    val signed = !keystore.isNullOrEmpty() && !keystorePassword.isNullOrEmpty() &&
+        file(keystore).exists()
+
+    signingConfigs {
+        if (signed) {
+            create("release") {
+                storeFile = file(keystore!!)
+                storePassword = keystorePassword
+                // PKCS12, which is the JVM default store type since JDK 9, so
+                // nothing has to say so. One password for the store and the
+                // key, because that is what PKCS12 has.
+                keyAlias = System.getenv("RELAY_KEY_ALIAS") ?: "relay"
+                keyPassword = System.getenv("RELAY_KEY_PASSWORD") ?: keystorePassword
+            }
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
         }
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (signed) "release" else "debug")
         }
     }
 }

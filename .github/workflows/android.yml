@@ -30,7 +30,25 @@ on:
       - 'tunnel/install-server.sh'
       - '.github/workflows/android.yml'
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Build the signed release variant rather than the debug one'
+        type: boolean
+        default: false
   workflow_call:
+    inputs:
+      release:
+        description: >-
+          Build the release variant and sign it. Needs RELAY_KEYSTORE_B64 and
+          RELAY_KEYSTORE_PASSWORD; without them it still builds, signed with
+          the debug key, and says so.
+        type: boolean
+        default: false
+    secrets:
+      RELAY_KEYSTORE_B64:
+        required: false
+      RELAY_KEYSTORE_PASSWORD:
+        required: false
 
 env:
   NDK_VERSION: '27.3.13750724'
@@ -116,14 +134,51 @@ jobs:
           mkdir -p ~/.gradle
           echo 'org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g' >> ~/.gradle/gradle.properties
 
+      # Written out of a secret and never into the repo, because a signing key
+      # in version control is a signing key everybody has. Outside the working
+      # tree as well, so no `git add -A` anywhere can pick it up.
+      #
+      # If the secret is not set the step does nothing and the build falls
+      # back to the debug key, which installs fine and cannot be upgraded
+      # over.
+      - name: unpack the signing key
+        if: inputs.release
+        env:
+          KEYSTORE_B64: ${{ secrets.RELAY_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.RELAY_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::warning::no signing key configured - this build is signed with the debug key"
+            exit 0
+          fi
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/relay-release.p12"
+          echo "RELAY_KEYSTORE=$RUNNER_TEMP/relay-release.p12" >> "$GITHUB_ENV"
+          echo "RELAY_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "RELAY_KEY_ALIAS=relay" >> "$GITHUB_ENV"
+
       - name: build the APK
         working-directory: mobile/app
         run: |
           flutter pub get
-          flutter build apk --debug --target-platform android-arm64
+          if [ "${{ inputs.release }}" = "true" ]; then
+            flutter build apk --release --target-platform android-arm64
+          else
+            flutter build apk --debug --target-platform android-arm64
+          fi
+
+      # One name for both, because what changes between them is the build
+      # type rather than what the thing is.
+      - name: name it
+        id: apk
+        run: |
+          if [ "${{ inputs.release }}" = "true" ]; then
+            echo "path=mobile/app/build/app/outputs/flutter-apk/app-release.apk" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=mobile/app/build/app/outputs/flutter-apk/app-debug.apk" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: relay-debug-apk
-          path: mobile/app/build/app/outputs/flutter-apk/app-debug.apk
+          name: relay-apk
+          path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
