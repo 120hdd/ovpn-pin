@@ -3143,7 +3143,7 @@ canvas.blob__body {
 .pane .btn--quiet:hover .ico { color: var(--ok); }
 
 /* The tower blinks while it is asking. */
-#lookUpOwners[data-busy='true'] .ico { animation: flicker 1.1s linear infinite; }
+#lookUpOwners[data-busy='1'] .ico { animation: flicker 1.1s linear infinite; }
 
 /* The path and the verb that changes it, on one line. */
 .pane__source { display: flex; gap: 8px; align-items: stretch; margin-top: 11px; }
@@ -4416,9 +4416,19 @@ canvas.blob__body {
 
 /* The auto row is one line like the rest of them. Three lines of prose about
    racing every location was the tallest thing in a list whose whole job is
-   to be scanned. */
+   to be scanned.
+
+   And in the sans face, not the mono one it inherits. Every other .row__sub
+   in this list is a code and a count - "AL - 31 relays" - which is what the
+   mono is there to line up. This one is a sentence, and a sentence set in
+   mono with letter-spacing on it reads as a machine's output rather than as
+   the explanation of the row above it. It was also the widest thing in the
+   sheet: mono at that tracking ran the line off the end into an ellipsis. */
 .row--auto .row__sub {
-  font-size: 10.5px;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 15px;
+  letter-spacing: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -4504,3 +4514,458 @@ canvas.blob__body {
 /* clip rather than hidden: a `hidden` box is still a scroll container and
    still moves when something sets scrollLeft, it just does not offer a bar
    to do it with. clip is the one that means it cannot happen. */
+
+/* ============================================================================
+   WORK IN PROGRESS
+
+   Every button in this sheet that goes off and asks something used to answer
+   a press by dropping to 45% and sitting there. That is the same thing the
+   page does to a control you are not allowed to press - so Test on a sleeping
+   tunnel, which is four seconds of a real round trip, read as a button that
+   had just broken rather than as one that was working.
+
+   The press is answered where it was made. The button keeps its label, takes
+   the amber the rest of the app already uses for work in progress, and turns
+   a short arc around its own rim until the answer is back. Nothing is added
+   to the row and the width does not change, so the sentence beside it stays
+   where it was - the only new thing on screen is the movement, which is the
+   only new thing there is to say.
+   ========================================================================= */
+
+@property --arc {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.btn[data-busy='1'],
+.prov__do[data-busy='1'] { position: relative; }
+/* Beats .btn:disabled, which is still set: the button really is unpressable,
+   it just has a better reason than "unavailable" to give for it. */
+.btn[data-busy='1']:disabled,
+.prov__do[data-busy='1']:disabled {
+  opacity: 1;
+  color: var(--work);
+  border-color: rgba(255, 202, 22, 0.28);
+  cursor: progress;
+  transform: none;
+}
+.btn[data-busy='1'] .ico { color: var(--work); }
+
+/* One arc, on the rim, drawn by masking a conic gradient down to the border.
+   Not a spinner beside the label: a 13px disc appearing in a row of buttons
+   moves the label, moves the button's edge and moves the note beside it, and
+   three things moving is a worse answer than one thing turning. */
+.btn[data-busy='1']::after,
+.prov__do[data-busy='1']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.25px;
+  /* A rim that is lit all the way round, and a head running round it. The
+     head alone was honest and easy to miss - at any given frame it is a
+     third of the perimeter of a 62px button, which on a still screenshot
+     reads as a scuff. The base ring is what says the control is live; the
+     head is what says something is still coming. */
+  background: conic-gradient(from var(--arc),
+      rgba(255, 202, 22, 0.12) 0deg,
+      rgba(255, 202, 22, 0.12) 200deg,
+      rgba(255, 202, 22, 0.45) 302deg,
+      var(--work) 352deg,
+      rgba(255, 202, 22, 0.12) 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: arc-turn 1.05s linear infinite;
+  pointer-events: none;
+}
+@keyframes arc-turn { to { --arc: 360deg; } }
+
+/* The line under the button, while the button is turning. It already said
+   "Asking..." and an ellipsis that does not move is a full stop with three
+   dots on it. The sentence itself carries the light instead - a slow pass
+   left to right, at the speed of something arriving rather than something
+   flashing, and no new furniture on the row to do it with. */
+.note.is-work {
+  color: transparent;
+  background-image: linear-gradient(96deg,
+      var(--text-off) 0%, var(--text-off) 40%,
+      #DCDFE4 50%, var(--text-off) 60%, var(--text-off) 100%);
+  background-size: 260% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: note-sweep 2.2s linear infinite;
+}
+@keyframes note-sweep {
+  from { background-position: 130% 0; }
+  to   { background-position: -130% 0; }
+}
+
+/* The pane's own state word, for as long as the answer is out. It is the one
+   thing in the head of a pane that is allowed to be wrong for a second, so it
+   says so rather than holding up the last true answer as though it still
+   applied. */
+.pill[data-state='work'] {
+  color: var(--work);
+  background: rgba(255, 202, 22, 0.11);
+  animation: pill-breathe 1.7s ease-in-out infinite;
+}
+@keyframes pill-breathe { 50% { opacity: 0.55; } }
+
+/* Route all of Windows is a registry write and a broadcast to every window on
+   the machine, and it used to flip instantly and hope. The knob holds the
+   amber until Windows has answered - and slides back where it came from if
+   the answer is no, which is the only honest thing a switch that lied for
+   half a second can do afterwards. */
+.toggle[data-busy='1'] { cursor: progress; }
+.toggle[data-busy='1'] span {
+  background: var(--work);
+  animation: knob-breathe 950ms ease-in-out infinite;
+}
+@keyframes knob-breathe { 50% { opacity: 0.45; } }
+
+/* Four rows and a chevron each. The chevron is the part that says where the
+   row goes, so it is the part that moves - a nudge in the direction it is
+   already pointing, which is the direction you are about to travel. */
+.menu__chev {
+  transition: transform 220ms var(--ease), color 220ms var(--ease);
+}
+.menu__row:hover .menu__chev {
+  transform: rotate(-90deg) translateY(3px);
+  color: var(--text-muted);
+}
+.menu__row:active { background: var(--control-active); }
+
+/* Except on the one with no rim to run round. --bare is a line of text with a
+   refresh glyph on the front of it, and an arc drawn where its border would be
+   is an arc drawn around nothing. The glyph turns instead, which is the
+   drawing it already is. */
+.btn--bare[data-busy='1']::after { display: none; }
+.btn--bare[data-busy='1'] .ico { animation: prov-spin 900ms linear infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .btn[data-busy='1']::after,
+  .prov__do[data-busy='1']::after { animation: none; background: var(--work); }
+  .btn--bare[data-busy='1'] .ico { animation: none; }
+  .note.is-work {
+    animation: none;
+    background: none;
+    color: var(--text-muted);
+    -webkit-text-fill-color: currentColor;
+  }
+  .pill[data-state='work'],
+  .toggle[data-busy='1'] span { animation: none; }
+  .menu__row:hover .menu__chev { transform: rotate(-90deg); }
+}
+
+/* ============================================================================
+   THE FLOOR
+
+   The settings menu is four rows and then two thirds of a window with nothing
+   in it. Every other screen in this app fills its height; that one reads as
+   unfinished rather than as roomy, and there is nothing to put in it - a
+   fifth row invented to fill the space would be worse than the space.
+
+   So it gets a floor rather than a fifth row: a field of characters at the
+   weight of a watermark, faded out well before it reaches the row above it.
+   Nothing in it is readable and nothing in it is meant to be. It is there to
+   give the bottom of the sheet an edge to sit on.
+
+   It is not decoration alone. A sweep or a pin runs for minutes and you can
+   walk back out to this menu while it does; a button pressed anywhere in the
+   sheet is a round trip you can also leave. While any of that is in flight
+   the field quickens and turns amber - so the one screen with nothing on it
+   is the screen that tells you the app is busy.
+   ========================================================================= */
+
+/* No position: relative on the dialog itself, however much the floor looks
+   like it wants one. showModal() makes a dialog position: fixed, which is
+   already a containing block for anything absolute inside it - and saying
+   relative here overrides that, drops the sheet back into the flow of the
+   body and leaves it nine pixels taller than the window it is supposed to
+   be exactly the size of. Both sheets went off the bottom of the screen for
+   the sake of a line that was doing nothing.
+
+   Above the floor, both of them: the floor is the only thing in this dialog
+   that is allowed to be underneath anything. */
+.sheet--prefs .sheet__top,
+.sheet--prefs .sheet__body { position: relative; z-index: 1; }
+
+.floor {
+  /* Weights, and they are the whole of whether this exists. The first pass
+     of these was a third of what is here and the field was, correctly,
+     reported as not being on the screen at all: a tenth of an alpha of grey
+     on a #0c0c12 ground is two percent of luminance, which is a thing you
+     can only find if you already know it is there. */
+  --glyph-rest: rgba(184, 191, 201, 0.3);
+  --glyph-mid: rgba(214, 221, 231, 0.62);
+  --glyph-peak: rgba(76, 240, 191, 0.96);
+  --glyph-halo: rgba(31, 216, 164, 0.55);
+  --glyph-beat: 1;
+
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 64%;
+  z-index: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(26px, 1fr));
+  grid-auto-rows: 26px;
+  align-content: end;
+  padding: 0 6px 12px;
+
+  font-family: 'Cascadia Mono', Consolas, 'Yu Gothic UI', ui-monospace, monospace;
+  font-size: 17px;
+  line-height: 26px;
+  text-align: center;
+  color: var(--glyph-rest);
+
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+
+  opacity: 0;
+  transition: opacity 480ms var(--ease);
+
+  /* Two masks, intersected. The vertical one is the important one and it is
+     measured against the menu rather than chosen: nothing at all until below
+     the last row, a long ramp through the empty half of that row, and its
+     full weight only in the band underneath. Four lines of type sitting on a
+     field of characters is the version of this that looks like a screensaver
+     somebody forgot to turn off. The horizontal one keeps it off the
+     scrollbar and off the frame. */
+  -webkit-mask-image:
+    linear-gradient(to bottom, transparent 0%, transparent 20%, #000 42%),
+    linear-gradient(to right, transparent 0%, #000 10%, #000 90%, transparent 100%);
+  mask-image:
+    linear-gradient(to bottom, transparent 0%, transparent 20%, #000 42%),
+    linear-gradient(to right, transparent 0%, #000 13%, #000 87%, transparent 100%);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+}
+
+/* Only on the top level. The screens behind the menu are full of panes, and a
+   field of characters behind those is texture nobody asked for. */
+.sheet--prefs[data-floor='1'] .floor { opacity: 1; }
+.floor > span { display: block; animation-play-state: paused; }
+.sheet--prefs[data-floor='1'] .floor > span { animation-play-state: running; }
+
+/* One glyph coming up and going back down. Never a whole row and never a
+   column: the periods below are coprime with each other and with the width of
+   the grid, so nothing that lights lands beside the last thing that did, and
+   the field never settles into a rhythm you can get tired of. */
+@keyframes glyph-lift {
+  0%, 100% { color: var(--glyph-rest); text-shadow: none; }
+  30%      { color: var(--glyph-mid); text-shadow: none; }
+  52%      { color: var(--glyph-peak); text-shadow: 0 0 13px var(--glyph-halo); }
+  74%      { color: var(--glyph-mid); text-shadow: none; }
+}
+
+/* One rule's worth that goes past the accent to white. It is the beat the
+   reference field is built on and it is worth exactly one rule: a handful of
+   characters a minute that go further than the rest is what stops the whole
+   thing reading as a single colour breathing in unison. */
+@keyframes glyph-flare {
+  0%, 100% { color: var(--glyph-rest); text-shadow: none; }
+  28%      { color: var(--glyph-mid); text-shadow: none; }
+  46%      { color: var(--glyph-peak); text-shadow: 0 0 13px var(--glyph-halo); }
+  60%      { color: #FFFFFF; text-shadow: 0 0 10px rgba(255, 255, 255, 0.75),
+                                          0 0 20px rgba(255, 255, 255, 0.35); }
+  78%      { color: var(--glyph-mid); text-shadow: none; }
+}
+
+.floor > span:nth-child(19n + 2)  { animation: glyph-lift calc(6.1s * var(--glyph-beat)) ease-in-out infinite 0.2s; }
+.floor > span:nth-child(23n + 11) { animation: glyph-lift calc(7.3s * var(--glyph-beat)) ease-in-out infinite 1.1s; }
+.floor > span:nth-child(29n + 5)  { animation: glyph-lift calc(5.4s * var(--glyph-beat)) ease-in-out infinite 0.7s; }
+.floor > span:nth-child(37n + 20) { animation: glyph-lift calc(8.2s * var(--glyph-beat)) ease-in-out infinite 1.6s; }
+.floor > span:nth-child(41n + 31) { animation: glyph-lift calc(6.7s * var(--glyph-beat)) ease-in-out infinite 0.4s; }
+.floor > span:nth-child(53n + 24) { animation: glyph-flare calc(9.1s * var(--glyph-beat)) ease-in-out infinite 2.3s; }
+.floor > span:nth-child(31n + 14) { animation: glyph-flare calc(11.3s * var(--glyph-beat)) ease-in-out infinite 0.9s; }
+/* A handful that sit a shade above the rest without ever moving, so the field
+   still has grain in it at the instant nothing happens to be lit. */
+.floor > span:nth-child(13n + 7) { color: rgba(184, 191, 201, 0.46); }
+
+/* Something is in flight. Twice the speed, and the app's own amber - the same
+   amber the button that started it is turning. */
+.sheet--prefs[data-work='1'] .floor {
+  --glyph-beat: 0.55;
+  --glyph-peak: rgba(255, 202, 22, 0.95);
+  --glyph-halo: rgba(255, 202, 22, 0.45);
+  --glyph-mid: rgba(255, 214, 92, 0.4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .floor > span { animation: none !important; }
+  .sheet--prefs[data-work='1'] .floor { color: rgba(255, 202, 22, 0.34); }
+}
+
+/* ============================================================================
+   THE ONES THAT STOPPED ANSWERING
+
+   The sweep used to take these out by itself, from every folder that claimed
+   they worked, on any run that happened to be pointed at its own folder -
+   which is every run the window starts. Nothing said so and nothing undid it.
+
+   What replaced it is three pieces of interface, and the shape of them is the
+   argument: a mark in the header that only exists when there is something to
+   say, a sheet that shows what would go before anything goes, and a shelf to
+   take them off again. None of it is a bin.
+   ========================================================================= */
+
+/* The header mark. A count and not a dot: the log button next to it uses a
+   dot because "something is moving" has no number, and this one is nothing
+   but a number - twenty exits and two are different messages. */
+.icon--dead { position: relative; }
+.icon--dead::after {
+  content: attr(data-n);
+  position: absolute;
+  top: -1px;
+  right: -2px;
+  min-width: 13px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--fail-bg);
+  box-shadow: 0 0 0 1px rgba(255, 143, 155, 0.28);
+  color: var(--fail);
+  font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+  font-size: 8.5px;
+  line-height: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  pointer-events: none;
+}
+/* Three digits and up, the pill has to widen rather than crop. Nothing else
+   in the bar moves when it does - the count sits outside the button's box. */
+.icon--dead[data-n='0']::after { display: none; }
+
+/* The lede. Set wider than a pane's own note and given room under it, because
+   it is the one paragraph in the app that is arguing against acting hastily
+   and a reader who skims it has been told nothing. */
+.drop__lede {
+  padding: 14px 18px 4px;
+  max-width: 52ch;
+  font-size: 11.5px;
+  line-height: 17px;
+}
+.drop__lede b { color: var(--text-muted); font-weight: 600; }
+
+/* What would go. A list rather than a count, because a count cannot be
+   disagreed with - and the whole failure this replaces was a number nobody
+   was shown. Scrolls on its own so the buttons under it never leave. */
+.drop__list {
+  max-height: 34vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 11px 0 2px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+.drop__row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 7px 11px;
+}
+.drop__row + .drop__row { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04); }
+.drop__where { font-size: 11.5px; color: var(--text); }
+.drop__ip {
+  font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--text-off);
+}
+/* The reason, and it is the row's whole justification for being in this list.
+   Spanning both columns so a long one wraps under the name rather than
+   squeezing the address off the end. */
+.drop__why {
+  grid-column: 1 / -1;
+  font-size: 10.5px;
+  line-height: 15px;
+  color: var(--text-off);
+}
+.drop__empty {
+  padding: 16px 12px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-off);
+}
+/* Ticking pinned\ is a different act from ticking success\ - one folder says
+   these connected once, the other is the only copy there is. The chip says
+   which it is rather than the sheet explaining it in a sentence nobody reads
+   twice. */
+.chip__note { color: var(--fail); font-size: 9.5px; letter-spacing: 0.04em; }
+
+/* ------------------------------------------------------ where exits come from */
+
+/* The head of the list, which was a caption and is now the control. It keeps
+   the caption's own metrics exactly - same padding, same baseline row, same
+   uppercase tracking - so the list does not shift by a pixel for having
+   gained a button, and nothing new appears above the rows. */
+.listhead--pick {
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-off);
+  cursor: pointer;
+  text-align: left;
+  transition: color 160ms var(--ease);
+}
+.listhead--pick:hover { color: var(--text-muted); }
+.listhead--pick:hover .listhead__chev { opacity: 0.8; }
+.listhead--pick .listhead__n { margin-left: auto; }
+.listhead__chev {
+  width: 11px;
+  height: 11px;
+  align-self: center;
+  opacity: 0.4;
+  transition: opacity 160ms var(--ease);
+}
+/* Anything but Everything is a filter that is on, and a filter that is on has
+   to look on - this is the line that stops "where did the other three hundred
+   go" from being a mystery. */
+.listhead--pick[data-narrow='1'] { color: var(--ok); }
+.listhead--pick[data-narrow='1'] .listhead__n { color: var(--ok); opacity: 0.75; }
+.listhead--pick[data-narrow='1'] .listhead__chev { opacity: 0.7; }
+
+/* The source rows reuse the settings menu's shape, which is already the app's
+   way of saying "a list of places to go". The count sits where the chevron
+   does there, since these go nowhere - they are the choice itself. */
+/* A column, not a number that happens to be last. Right-aligned inside a
+   box wide enough for the longest count there can be: with the box shrunk to
+   the digits, 1601 and 37 started in two different places and the eye read a
+   ragged left edge down a list of five rows. tabular-nums is what makes the
+   width predictable enough to reserve. */
+.menu__row .menu__n {
+  margin-left: auto;
+  flex: none;
+  min-width: 5ch;
+  text-align: right;
+  font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0;
+  color: var(--text-off);
+  font-variant-numeric: tabular-nums;
+}
+.menu__row[aria-current='true'] .menu__name { color: var(--ok); }
+.menu__row[aria-current='true'] .menu__n { color: var(--ok); opacity: 0.7; }
+/* Reserved on every row, drawn on one. See paintSourceRows. */
+.menu__tick { flex: none; width: 13px; height: 13px; color: var(--ok); }
+.menu__tick.is-off { visibility: hidden; }
+
+/* The button that acts, in a sheet whose whole point is that it does not act
+   until you say so. Not red: nothing is destroyed here, and red for a move to
+   a folder you can empty back is a promise the code does not keep. It takes
+   the app's amber - the colour already meaning "this is the consequential
+   one" - and only on hover, so at rest the sheet is two ordinary buttons and
+   the page is not shouting at somebody who came to read. */
+.btn--take:hover:not(:disabled) {
+  border-color: rgba(255, 199, 97, 0.3);
+  color: var(--work);
+}

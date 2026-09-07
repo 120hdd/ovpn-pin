@@ -66,6 +66,10 @@
   <symbol id="i-star" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z" /></symbol>
   <symbol id="i-arrow" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 1.8v8.4" /> <path d="M2.6 6.8 6 10.2l3.4-3.4" /></symbol>
   <symbol id="i-az" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 16 4 4 4-4" /> <path d="M7 4v16" /> <path d="M15 4h5l-5 6h5" /> <path d="M15 20v-3.5a2.5 2.5 0 0 1 5 0V20" /> <path d="M20 18h-5" /></symbol>
+  <!-- A box with a lid, not a bin. What the button does is put an exit on a
+       shelf it can be taken off again; a bin would promise something the
+       code deliberately does not do. -->
+  <symbol id="i-archive" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1" /> <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" /> <path d="M10 12h4" /></symbol>
   <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" /> <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" /> <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" /></symbol>
 </svg>
 
@@ -88,6 +92,16 @@
       <button class="icon icon--log" id="logOpen" type="button"
               data-live="false" aria-label="What is using the connection">
         <svg class="ico" aria-hidden="true"><use href="#i-activity"/></svg>
+      </button>
+      <!-- Only there when there is something to say. The sweep used to take
+           these out on its own and never mention it; the button is what that
+           became, and on a copy where every exit answers it is nothing at
+           all rather than a control that does nothing. The number is the
+           point of it - "twenty of these stopped answering" is the whole
+           message, and the sheet behind it is where it gets explained. -->
+      <button class="icon icon--dead" id="dropOpen" type="button" hidden
+              data-n="0" aria-label="Exits that stopped answering">
+        <svg class="ico" aria-hidden="true"><use href="#i-archive"/></svg>
       </button>
       <button class="icon" id="settings" type="button" aria-label="Settings">
         <svg class="ico" aria-hidden="true"><use href="#i-settings"/></svg>
@@ -222,7 +236,7 @@
         </span>
         <span class="pick__copy">
           <span class="pick__cap">EXIT LOCATION</span>
-          <span class="btn__label" id="pickLabel">Fastest available</span>
+          <span class="btn__label" id="pickLabel">Whichever answers first</span>
         </span>
         <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" class="btn__chev">
           <path d="M4.5 2.5 L8 6 L4.5 9.5" fill="none" stroke="currentColor"
@@ -326,12 +340,104 @@
   </div>
   <p class="note reach__said" id="reachSaid">Times are from the last test.</p>
 
-  <p class="listhead"><span>All locations</span>
-    <span class="listhead__n" id="listCount">—</span></p>
+  <!-- The line that was already counting the list now says what the list is
+       drawn from as well. Two facts about one thing, on the line that was
+       there for the first of them - rather than a row of chips under the
+       search box, which is a permanent piece of furniture for a setting
+       almost nobody changes twice. -->
+  <button class="listhead listhead--pick" id="sourcePick" type="button"
+          aria-haspopup="dialog">
+    <span id="sourceName">All locations</span>
+    <svg class="listhead__chev ico ico--sm" aria-hidden="true"><use href="#i-chev-down"/></svg>
+    <span class="listhead__n" id="listCount">—</span>
+  </button>
   <div class="sheet__list" id="list"></div>
 </dialog>
 
-<dialog class="sheet sheet--prefs" id="prefs">
+<!-- Where the exits come from. Opened off the head of the list, because that
+     is the line already answering "what am I looking at" - and closed again
+     the moment one is chosen, since the answer is visible behind it. -->
+<dialog class="sheet sheet--source" id="srcDlg">
+  <header class="sheet__top">
+    <span class="sheet__heading">
+      <span class="sheet__kicker">CONNECT FROM</span>
+      <span class="sheet__title">Which exits to offer</span>
+    </span>
+    <button class="icon" id="srcClose" type="button" aria-label="Close">
+      <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
+    </button>
+  </header>
+  <div class="sheet__body">
+    <nav class="menu" id="srcRows"></nav>
+    <!-- The same shape as the Server folder pane in Settings, which is the
+         other place in the app that names a folder and offers to change it.
+         A head, the sentence, then the row of controls. -->
+    <section class="pane pane--strip" style="--i:1">
+      <div class="pane__head">
+        <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg></span>
+        <h3 class="pane__title">A folder of your own</h3>
+      </div>
+      <p class="pane__why">Any folder of .ovpn files — a set you keep by hand,
+        or one somebody sent you. Nothing else is offered while it is on.</p>
+      <div class="pane__row">
+        <button class="btn btn--quiet btn--auto" id="srcBrowse" type="button">Choose…</button>
+        <p class="note" id="srcSaid"></p>
+      </div>
+    </section>
+  </div>
+</dialog>
+
+<!-- What stopped answering, and what to do about it.
+     Nothing here removes anything until the last button in it is pressed:
+     opening this sheet is how you find out what would go, which is the half
+     the sweep never had. -->
+<dialog class="sheet sheet--confirm" id="dropDlg">
+  <header class="sheet__top">
+    <span class="sheet__heading">
+      <span class="sheet__kicker">SET ASIDE</span>
+      <span class="sheet__title">Exits that stopped answering</span>
+    </span>
+    <button class="icon" id="dropClose" type="button" aria-label="Close">
+      <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
+    </button>
+  </header>
+  <div class="sheet__body">
+    <p class="pane__why drop__lede" id="dropLede"></p>
+
+    <section class="pane pane--major" style="--i:0">
+      <span class="pane__copy">
+        <h3 class="pane__title">Which folders to take them out of</h3>
+        <p class="pane__why">The same exit can sit in more than one folder,
+          and they do not mean the same thing. Nothing is ticked to begin
+          with.</p>
+      </span>
+      <ul class="chips" id="dropFolders"></ul>
+      <div class="drop__list" id="dropList"></div>
+      <div class="pane__row">
+        <button class="btn btn--quiet btn--auto btn--take" id="dropGo"
+                type="button" disabled>Set aside</button>
+        <button class="btn btn--quiet btn--auto" id="dropKeep" type="button">Keep them</button>
+        <p class="note" id="dropSaid"></p>
+      </div>
+    </section>
+
+    <section class="pane pane--strip" id="dropBack" style="--i:1" hidden>
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title">Put back what was set aside</h3>
+        <p class="pane__why" id="dropBackWhy"></p>
+      </span>
+      <button class="btn btn--quiet btn--auto" id="dropRestore" type="button">Put back</button>
+    </section>
+  </div>
+</dialog>
+
+<dialog class="sheet sheet--prefs" id="prefs" data-floor="0" data-work="0">
+  <!-- The bottom two thirds of the top-level menu, which is otherwise empty.
+       Filled by the page rather than written out here: it is a hundred and
+       fifty characters of nothing, and a hundred and fifty spans in the
+       markup would be the largest thing in this file and mean the least. -->
+  <div class="floor" id="prefsFloor" aria-hidden="true"></div>
   <header class="sheet__top">
     <span class="sheet__heading">
       <span class="sheet__kicker">THIS COPY</span>
@@ -584,11 +690,12 @@
             twice, it leaves other sites on the box alone, and it prints the
             two passwords when it finishes.</p>
           <div class="pane__row pane__row--code">
-            <code class="path path--flush mono" id="tunnelCmd">install-server.sh yourdomain.com &lt;surfshark-user&gt; &lt;surfshark-pass&gt;</code>
+            <code class="path path--flush mono" id="tunnelCmd">install-server.sh &lt;domain.com&gt; &lt;surfshark-user&gt; &lt;surfshark-pass&gt;</code>
             <button class="btn btn--quiet btn--auto" id="tunnelCopy" type="button">Copy</button>
           </div>
-          <p class="note" id="tunnelCmdNote">Put your Surfshark username and
-            password where the brackets are.</p>
+          <p class="note" id="tunnelCmdNote">Copy fills the domain in from
+            the field below. Put your Surfshark username and password where
+            the brackets are.</p>
         </div>
 
         <div class="step">
