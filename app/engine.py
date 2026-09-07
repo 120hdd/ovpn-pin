@@ -177,6 +177,11 @@ class Engine:
         # Which providers to offer. None is all of them, which is what an app
         # that has only ever had one provider should keep doing.
         self.providers = None
+        # A set of filenames to keep, or None for no such limit. What a
+        # folder cannot express: "the places I starred" is a handful of exits
+        # from every folder at once, and copying them into a folder of their
+        # own to say so would go stale the moment one was re-pinned.
+        self.only_files = None
         self.auth_file = auth_file or paths.AUTH_FILE
         # Where it listens. Settable because 8877 is only free until it is
         # not - a second copy of this, a proxy the person already runs, a
@@ -208,7 +213,8 @@ class Engine:
     def servers(self):
         """The exits on offer: everything found, less what is filtered out."""
         return [s for s in self.scan()
-                if self.providers is None or s.provider in self.providers]
+                if (self.providers is None or s.provider in self.providers)
+                and (self.only_files is None or s.file in self.only_files)]
 
     def counts_by_provider(self):
         """How many exits each provider has, whatever is selected.

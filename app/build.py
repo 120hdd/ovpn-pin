@@ -85,8 +85,12 @@ KEEP = (
     '.state/tunnel',               # which CDN addresses answered, and when
     '.windscribe-auth',            # what opens Windscribe's exits
     '.ovpn-auth',                  # fallback only - see restore_user_data
+    '.state/dropped.json',         # where each set-aside exit came from
     'pinned',                      # what a pin run resolved - minutes of it
     'success',                     # and what a sweep measured
+    'dropped',                     # taken out by hand, and still restorable -
+                                   # a rebuild that lost these would make the
+                                   # undo the one button that does not work
     'windscribe',                  # the fetched fleet, waiting to be pinned
     'configs',                     # whatever was dropped in the inbox by hand
     'servers',                     # the shipped set, plus anything added to it
