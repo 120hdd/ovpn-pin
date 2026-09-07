@@ -4242,19 +4242,41 @@ window.onReachDone = (r) => {
   // is the only thing that says which. "30 of 37 answered" over a list of
   // ninety countries is a sentence about nothing in particular.
   const where = r.code ? ` in ${nameOf(r.code)}` : '';
-  // A run where the exits all turned the account away is not a run about the
+  // A run where the exits turned the account away is not a run about the
   // exits, and "0 of 37 answered" reads as thirty-seven broken servers. The
   // same account is at every one of those addresses, so the count is one
   // fact repeated - which is worth saying out loud, because the thing to fix
   // is somewhere else entirely.
-  const allRefused = !r.ok && r.refused >= 3 && r.refused > r.tested / 2;
+  //
+  // Measured on this machine: 27 of 37 Surfshark exits refused, every one of
+  // them a 407, because the file the proxy reads held an older credential
+  // than the account the window was showing as signed in. The app said
+  // nothing about credentials for any of it - see the note in main.py about
+  // `answered`, which is why this could not fire.
+  const answered = r.answered || 0;
+  const refused = r.refused || 0;
+  // The same test the connect race uses, so the two cannot disagree about
+  // whether a run was about the account: enough of them to be evidence, and
+  // most of what was asked. A handful of 407s is ordinary.
+  const mostRefused = refused >= 3 && refused > r.tested / 2;
+  const advice = ' — that is the account, not the servers. The service '
+    + "username and password are on the provider's manual-setup page, and "
+    + 'are not the email you log in with.';
   said($('reachSaid'),
-    r.cancelled ? `Stopped after ${r.tested}${where}. ${r.ok} answered.`
-      : allRefused
-        ? `${r.refused} of ${r.tested}${where} turned these credentials away `
-          + '— that is the account, not the servers.'
-        : `${r.ok} of ${r.tested} answered${where}.`,
-    r.ok ? 'good' : 'bad');
+    r.cancelled
+      ? `Stopped after ${r.tested}${where}. ${answered} answered.`
+      : mostRefused
+        ? `${refused} of ${r.tested}${where} turned these credentials away`
+          + advice
+        // Some refused and some did not. Worth saying, because it is the
+        // difference between an account that is wrong and a fleet where a
+        // few exits happen not to run a proxy for it - and the second is
+        // ordinary enough that hiding it would make the first look normal.
+        : refused
+          ? `${answered} of ${r.tested} answered${where}. `
+            + `${refused} turned these credentials away.`
+          : `${answered} of ${r.tested} answered${where}.`,
+    answered ? 'good' : 'bad');
   // The list is rebuilt rather than patched: every row's order can change,
   // because answering ones sort above blocked ones.
   $('list').dataset.key = '';

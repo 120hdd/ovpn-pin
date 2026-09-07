@@ -257,15 +257,43 @@ def run_selftest():
         # diagnostic - the status, which is the part anyone actually wants -
         # down with it. A self-test that stops at the first missing thing
         # reports the first missing thing and nothing else.
+        #
+        # Whether the file matches the account, and not only whether it has
+        # two lines in it. Those are different questions and the second one
+        # was the only one being asked: a credential file holding an older
+        # account than the roster reads as a healthy True here, while every
+        # exit answers 407 and the window blames the fleet. That happened -
+        # 27 of 37 Surfshark exits refused, and this line said the
+        # credentials were fine throughout.
+        #
+        # The username only. It is not a secret - it is in the roster in
+        # clear and on the provider's own setup page - and this file is
+        # written to be pasted into a chat window when something is wrong.
         out['credentials'] = {}
+        try:
+            active = accounts.load().get('active') or {}
+        except Exception:
+            active = {}
         for name, path in ((accounts.SURFSHARK, paths.AUTH_FILE),
                            (accounts.WINDSCRIBE, windscribe.AUTH_FILE)):
+            got = {'file': False, 'user': None,
+                   'activeAccount': None, 'matches': None}
             try:
                 with open(path, encoding='utf-8') as f:
                     lines = [line.strip() for line in f if line.strip()]
-                out['credentials'][name] = len(lines) >= 2
+                got['file'] = len(lines) >= 2
+                got['user'] = lines[0] if lines else None
             except OSError:
-                out['credentials'][name] = False
+                pass
+            account = accounts.find(active.get(name) or '')
+            if account:
+                secrets = accounts.secrets(account['id']) or {}
+                want = (secrets.get('username') if name == accounts.SURFSHARK
+                        else (secrets.get('proxy') or ('', ''))[0])
+                got['activeAccount'] = want or None
+                if want and got['user']:
+                    got['matches'] = got['user'] == want
+            out['credentials'][name] = got
         out['status'] = e.status()
     except Exception as exc:
         out['engineError'] = repr(exc)
@@ -397,6 +425,8 @@ class Api:
         self._pin = pin.Pin()
         self._apply_sources()
         self._sync_providers()
+        # Before anything can be dialled with the wrong one.
+        self._reconcile_credentials()
         # Spans the two halves of a Windscribe sign-in - the name and password
         # that fetched a puzzle, waiting for the puzzle to be let go of.
         self._ws_pending = None
@@ -500,6 +530,67 @@ class Api:
             self._settings['providers'] = chosen
             save_settings(self._settings)
         return chosen
+
+    def _reconcile_credentials(self):
+        """Make the file the proxy reads match the account said to be in use.
+
+        Nothing downstream knows about accounts - the engine opens
+        .ovpn-auth, the sweep scripts read .env - so activating an account
+        means writing those files, and _write_active is the only thing that
+        does it. It runs when an account is added or switched to, and never
+        again. That is one write against a file three other things also
+        touch, and they drift:
+
+          the build copies a fresh .ovpn-auth out of the repo and carries
+          accounts.json across separately, so a rebuild can pair a new
+          roster with an old credential;
+
+          .env is edited by hand and by the shell half, and it wins - the
+          next sweep rewrites .ovpn-auth from it.
+
+        Measured, on this machine: the roster's Surfshark account was
+        accepted by 11 of 11 exits and the one in .ovpn-auth by 0 of 11, 407
+        every time. The window showed the working account as active and
+        dialled with the other, so every exit read as "no proxy for this
+        account" - a sentence about the fleet, printed because of a file.
+
+        Checked rather than rewritten. Writing the credential out at every
+        start would touch .env on machines where nothing is wrong, and the
+        comparison costs one line of one file.
+        """
+        fixed = []
+        try:
+            active = accounts.load().get('active') or {}
+        except Exception:
+            return fixed
+
+        for provider, path in ((accounts.SURFSHARK, paths.AUTH_FILE),
+                               (accounts.WINDSCRIBE, windscribe.AUTH_FILE)):
+            account = accounts.find(active.get(provider) or '')
+            if not account:
+                continue
+            got = accounts.secrets(account['id']) or {}
+            # Both files are two lines, username first - windscribe writes
+            # its proxy credential in .ovpn-auth's shape precisely so that
+            # one reader does for both.
+            want = (got.get('username') if provider == accounts.SURFSHARK
+                    else (got.get('proxy') or ('', ''))[0])
+            if not want:
+                continue
+            try:
+                with open(path, encoding='utf-8') as f:
+                    on_disk = f.readline().strip()
+            except OSError:
+                on_disk = ''
+            if on_disk == want:
+                continue
+            # _write_active rather than a write here: for Surfshark it goes
+            # through the engine's own writer, which is what keeps .env in
+            # step - and .env is the copy that would otherwise undo this on
+            # the next sweep.
+            if not self._write_active(account):
+                fixed.append(provider)
+        return fixed
 
     def _forget_provider(self, provider):
         """Take away what the app was using to sign in as that provider.
@@ -1669,6 +1760,12 @@ class Api:
             try:
                 out = self._engine.test_reach(
                     lambda p: self._emit('Reach', p), only=only)
+                # Moved out of the way of `ok`, which every call in this
+                # class uses for "the call worked" and which was being set
+                # over the top of it here - so the count reached the page as
+                # `true`, printed itself as "true of 37 answered", and left
+                # the test that names a credential problem reading !true.
+                out['answered'] = out.pop('ok', 0)
                 out['ok'] = True
                 out['code'] = code
                 out['countries'] = self._engine.catalogue()
