@@ -102,13 +102,13 @@ func direct(timeout time.Duration) *http.Client {
 	}
 }
 
-// at dials one address while still calling the site by its name.
+// viaAddress dials one address while still calling the site by its name.
 //
 // The certificate is checked against the hostname and the handshake announces
 // it, so this is an ordinary HTTPS request that has simply been told where to
 // go. What it works around is a resolver that lies, not a certificate that
 // does not match.
-func at(host, address string, timeout time.Duration) *http.Client {
+func viaAddress(host, address string, timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
@@ -147,7 +147,7 @@ func Routes(ctx context.Context, host string, timeout time.Duration) []Route {
 		for _, a := range addrs {
 			out = append(out, Route{
 				How:    "pinned " + a.String(),
-				Client: at(host, a.String(), timeout),
+				Client: viaAddress(host, a.String(), timeout),
 			})
 		}
 	}
