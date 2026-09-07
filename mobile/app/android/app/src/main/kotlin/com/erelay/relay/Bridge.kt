@@ -140,7 +140,11 @@ object Bridge {
 
         // -- the ones that stopped answering -----------------------------------
 
+        "testReach" -> work { ctx.testReach(args.getOrNull(0) as? String) }
+        "cancelReach" -> ctx.cancelReach()
         "deadExits" -> work { ctx.deadExits() }
+        "dropExits" -> work { ctx.dropExits(args.getOrNull(0) as? List<*>) }
+        "restoreDropped" -> work { ctx.restoreDropped(args.getOrNull(0) as? List<*>) }
 
         // -- accounts ---------------------------------------------------------
 
@@ -181,10 +185,6 @@ object Bridge {
         "startPin", "cancelPin", "pinPlan", "setPinRoute", "usePinnedFolder",
         "pinForProvider" ->
             notHere("The desktop pins. The phone carries what was pinned.")
-        "testReach", "cancelReach" ->
-            notHere("The reachability sweep is a desktop job.")
-        "dropExits", "restoreDropped" ->
-            notHere("Nothing has been set aside on this phone.")
         "windscribeFinish", "windscribeRefresh", "windscribeServers",
         "surfsharkServers" ->
             notHere("Fetching a server list from the phone is not built yet.")

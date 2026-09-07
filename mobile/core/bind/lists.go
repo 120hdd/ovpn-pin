@@ -73,10 +73,8 @@ func (c *Client) SetOnly(files string) (err error) {
 	defer guard(&err)
 
 	only := map[string]bool{}
-	for _, line := range strings.Split(files, "\n") {
-		if s := strings.TrimSpace(line); s != "" {
-			only[s] = true
-		}
+	for _, name := range lines(files) {
+		only[name] = true
 	}
 
 	c.mu.Lock()
@@ -210,10 +208,8 @@ func (c *Client) CountsJSON(files string) (out string) {
 	defer said(&out)
 
 	only := map[string]bool{}
-	for _, line := range strings.Split(files, "\n") {
-		if s := strings.TrimSpace(line); s != "" {
-			only[s] = true
-		}
+	for _, name := range lines(files) {
+		only[name] = true
 	}
 
 	c.mu.Lock()

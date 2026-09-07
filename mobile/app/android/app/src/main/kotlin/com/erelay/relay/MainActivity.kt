@@ -20,6 +20,7 @@ import io.flutter.plugin.common.MethodChannel
 import org.json.JSONArray
 import org.json.JSONObject
 import relay.Client
+import relay.ReachProgress
 import relay.Relay
 
 /**
@@ -779,24 +780,118 @@ class MainActivity : FlutterActivity() {
         }.toString()
     }
 
+    // -- the ones that stopped answering ---------------------------------------
+
     /**
-     * What would be set aside, and what already has been.
+     * Ask the exits behind one row whether they answer, and keep the answer.
      *
-     * Nothing yet: until the phone can test its own exits there is no verdict
-     * to act on, and a sheet offering to move files on the strength of a test
-     * that never ran would be worse than no sheet. Answered rather than
-     * refused because the page asks for this on the way up and hides its
-     * header mark when both counts are zero - a refusal would leave the mark
-     * drawn over nothing.
+     * One row at a time. Asking all four hundred was a single button in the
+     * header and it was the wrong shape twice over: nobody wants to know
+     * about ninety countries, and a run that long is where the line starts
+     * dropping connections and the answers stop being about the exits.
+     *
+     * The count comes back at once and everything else arrives as events,
+     * because the page shows each result on its own row as it lands.
      */
-    fun deadExits(): String = JSONObject().apply {
-        put("ok", true)
-        put("folders", JSONArray())
-        put("exits", JSONArray())
-        put("shelved", JSONArray())
-        put("dead", 0)
-        put("aside", 0)
-    }.toString()
+    @Synchronized
+    fun testReach(code: String?): String {
+        val row = code.orEmpty()
+        if (testing != null) return refusal("busy")
+
+        val c = catalogue()
+        val pool = try {
+            c.poolFiles(row)
+        } catch (e: Exception) {
+            ""
+        }
+        if (pool.isBlank()) return refusal("Nothing to test.")
+        val total = pool.lines().count { it.isNotBlank() }
+
+        testing = row
+        Thread {
+            val answer = try {
+                JSONObject(c.testReach(row, 5000L, 12L, object : ReachProgress {
+                    override fun onReach(payload: String) {
+                        main.post { push("Reach", payload) }
+                    }
+                }))
+            } catch (e: Exception) {
+                JSONObject().put("ok", false).put("error", e.message ?: e.toString())
+            }
+            testing = null
+            // The verdicts are on disk now, so the list is a different list.
+            reload()
+            val countries = try {
+                catalogue().countriesJSON()
+            } catch (e: Exception) {
+                "[]"
+            }
+            answer.put("code", row)
+            val payload = answer.toString().dropLast(1) + ",\"countries\":$countries}"
+            main.post { push("ReachDone", payload) }
+        }.start()
+
+        return JSONObject().put("ok", true).put("total", total).toString()
+    }
+
+    /** Pressing the bolt again stops the run rather than queueing behind it. */
+    fun cancelReach(): String {
+        try {
+            catalogue().cancelReach()
+        } catch (e: Exception) {
+            Log.w(RelayVpnService.TAG, "cancel: ${e.message}")
+        }
+        return JSONObject().put("ok", true).toString()
+    }
+
+    /** Which row is being tested, or nothing. */
+    @Volatile private var testing: String? = null
+
+    /**
+     * What would be set aside, where from and why - without anything going.
+     *
+     * The page asks for this on the way up and hides its header mark when
+     * both counts are zero, so it is answered rather than refused: a refusal
+     * would leave the mark drawn over nothing.
+     */
+    fun deadExits(): String = catalogue().deadExitsJSON()
+
+    /**
+     * Move the dead ones out of the folders that were ticked.
+     *
+     * The page sends the paths it was offered. The core checks them against
+     * what it just offered rather than trusting them - this is the one call
+     * that moves somebody configs about.
+     */
+    fun dropExits(folders: List<*>?): String {
+        val picked = (folders ?: emptyList<Any?>())
+            .mapNotNull { it as? String }.joinToString("\n")
+        return withList(catalogue().dropExits(picked))
+    }
+
+    /** Put them back where they came from. */
+    fun restoreDropped(tags: List<*>?): String {
+        val picked = (tags ?: emptyList<Any?>())
+            .mapNotNull { it as? String }.joinToString("\n")
+        return withList(catalogue().restoreDropped(picked))
+    }
+
+    /**
+     * A folder-changing answer, with the list spliced back in.
+     *
+     * The page hands both of these to afterPoolChange, which redraws off
+     * `countries`. Without it the picker goes on showing exits that are not
+     * there any more - the list memoises on a key that does not mention the
+     * server set.
+     */
+    private fun withList(answer: String): String {
+        val o = JSONObject(answer)
+        if (!o.optBoolean("ok")) return answer
+        reload()
+        val c = catalogue()
+        o.put("serverCount", c.count().toInt())
+        return o.toString().dropLast(1) + ",\"countries\":${c.countriesJSON()}}"
+    }
 
     // -- the small remembered things -------------------------------------------
 
