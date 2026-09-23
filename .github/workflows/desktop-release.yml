@@ -92,6 +92,21 @@ jobs:
           $starters = @(Get-ChildItem -LiteralPath (Join-Path $out 'servers') -File -Filter '*.ovpn')
           if ($starters.Count -ne 10) { throw "Expected 10 public starters, found $($starters.Count)" }
 
+          # Launch the frozen program itself. Source-level tests cannot catch a
+          # module omitted by PyInstaller from a dynamically loaded data file.
+          $process = Start-Process -FilePath (Join-Path $out 'Relay.exe') `
+            -ArgumentList '--selftest' -PassThru -WindowStyle Hidden
+          try {
+            Wait-Process -Id $process.Id -Timeout 30 -ErrorAction Stop
+          } catch {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw 'Frozen Relay self-test did not exit within 30 seconds'
+          }
+          $process.Refresh()
+          if ($process.ExitCode -ne 0) {
+            throw "Frozen Relay self-test failed with exit code $($process.ExitCode)"
+          }
+
       - name: Check SignPath configuration
         shell: pwsh
         env:

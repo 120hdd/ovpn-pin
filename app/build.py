@@ -36,6 +36,7 @@ sys.stdout as None, which is why the proxy worker redirects its own output
 before it does anything else.
 """
 
+import ast
 import ipaddress
 import json
 import os
@@ -233,6 +234,27 @@ def public_configs():
             'tracked configs can be included.') from exc
     return [os.path.join(ROOT, line.strip().replace('/', os.sep))
             for line in found.splitlines() if line.strip()]
+
+
+def dynamic_imports(path):
+    """Imports PyInstaller cannot see inside a source file loaded at runtime.
+
+    engine.py loads core/ovpn-proxy.py from its filename because the dash means
+    it is not an importable module name.  PyInstaller therefore treats it as
+    data and never walks its imports.  Deriving the hidden-import list from the
+    file keeps a later standard-library import from producing another EXE that
+    builds successfully and crashes on launch.
+    """
+    with open(path, encoding='utf-8') as handle:
+        tree = ast.parse(handle.read(), filename=path)
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names)
+        elif (isinstance(node, ast.ImportFrom) and node.level == 0
+              and node.module):
+            found.add(node.module)
+    return sorted(found)
 
 
 def _tracked(path):
@@ -498,6 +520,7 @@ def main():
     version_file = write_version_file()
 
     sep = ';'          # PyInstaller's --add-data separator on Windows
+    proxy_source = os.path.join(ROOT, 'core', 'ovpn-proxy.py')
     args = [
         sys.executable, '-m', 'PyInstaller',
         '--noconfirm', '--clean',
@@ -512,7 +535,7 @@ def main():
         '--add-data', f'{os.path.join(HERE, "assets")}{sep}assets',
         # The proxy lives in core/ in the repo and at the top of the bundle
         # once frozen; paths.py knows the difference.
-        '--add-data', f'{os.path.join(ROOT, "core", "ovpn-proxy.py")}{sep}.',
+        '--add-data', f'{proxy_source}{sep}.',
         '--hidden-import', 'winproxy',
         '--hidden-import', 'windscribe',
         '--hidden-import', 'engine',
@@ -533,6 +556,12 @@ def main():
         '--hidden-import', 'pystray._win32',
         os.path.join(HERE, 'main.py'),
     ]
+
+    # ovpn-proxy.py is loaded dynamically from the bundled data path, so its
+    # imports have to be made explicit to PyInstaller.  This includes difflib,
+    # whose absence made the v0.2.0 executable fail before the window opened.
+    for module in dynamic_imports(proxy_source):
+        args[-1:-1] = ['--hidden-import', module]
 
     icon = os.path.join(HERE, 'assets', 'app.ico')
     if os.path.isfile(icon):
