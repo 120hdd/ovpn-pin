@@ -39,6 +39,15 @@ def test_public_starters():
                    for p in windscribe)
 
 
+def test_dynamic_proxy_imports():
+    proxy = os.path.join(os.path.dirname(HERE), 'core', 'ovpn-proxy.py')
+    imports = build.dynamic_imports(proxy)
+    assert 'difflib' in imports
+    assert 'concurrent.futures' in imports
+    assert 'urllib.request' in imports
+    assert len(imports) == len(set(imports))
+
+
 def test_version_file():
     old = os.environ.get('RELAY_VERSION')
     old_work = build.WORK
