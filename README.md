@@ -495,6 +495,16 @@ takes to connect. Everything else works without it.
 
 ---
 
+## Code signing policy
+
+Windows releases use SignPath Foundation signing. Free code signing is
+provided by SignPath.io, certificate by SignPath Foundation. See the full
+[code signing policy](CODE_SIGNING_POLICY.md), [privacy policy](PRIVACY.md),
+team roles, system-change disclosure, and uninstall instructions before
+downloading a release.
+
+---
+
 ## Where to read next
 
 | | |

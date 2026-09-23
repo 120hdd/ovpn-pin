@@ -7,6 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: write
 
 env:
@@ -50,12 +51,20 @@ jobs:
         run: |
           python -m compileall -q app core
           python app/engine-test.py
+          python app/build-test.py
           python app/pin-test.py
           python app/sweep-test.py
           python core/ovpn-proxy-test.py
 
       - name: Build the public desktop bundle
-        run: python app/build.py --public-release
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $env:RELAY_VERSION = $env:GITHUB_REF_NAME
+          } else {
+            $env:RELAY_VERSION = "0.0.0-dev.$env:GITHUB_RUN_NUMBER"
+          }
+          python app/build.py --public-release
 
       - name: Inspect and package the built app
         shell: pwsh
@@ -64,6 +73,8 @@ jobs:
           $required = @(
             'Relay.exe', 'gost.exe', 'install-server.sh', 'README.md',
             'Sweep-OvpnExits.ps1', 'Resolve-OvpnRemote.ps1',
+            'servers/lt-vno.prod.surfshark.com_tcp_62.197.149.105.ovpn',
+            'servers/tr-ist.ws.tr-022.totallyacdn.com_149.50.208.46.ovpn',
             '_internal/ui/index.html', '_internal/ui/app.js',
             '_internal/ui/app.css', '_internal/ovpn-proxy.py'
           )
@@ -78,13 +89,65 @@ jobs:
           $leaks = Get-ChildItem -LiteralPath $out -Recurse -Force | Where-Object { $forbidden -contains $_.Name }
           if ($leaks) { throw "Private/runtime files found: $($leaks.FullName -join ', ')" }
 
+          $starters = @(Get-ChildItem -LiteralPath (Join-Path $out 'servers') -File -Filter '*.ovpn')
+          if ($starters.Count -ne 10) { throw "Expected 10 public starters, found $($starters.Count)" }
+
+      - name: Check SignPath configuration
+        shell: pwsh
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+        run: |
+          $missing = @(
+            'SIGNPATH_API_TOKEN',
+            'SIGNPATH_ORGANIZATION_ID',
+            'SIGNPATH_PROJECT_SLUG',
+            'SIGNPATH_SIGNING_POLICY_SLUG',
+            'SIGNPATH_ARTIFACT_CONFIGURATION_SLUG'
+          ) | Where-Object { -not (Get-Item "env:$_" -ErrorAction SilentlyContinue).Value }
+          if ($missing) { throw "Missing SignPath secret/variables: $($missing -join ', ')" }
+
+      - name: Upload unsigned bundle for origin verification
+        id: upload-unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-windows-x64-unsigned
+          path: release-build/dist/Relay/*
+          if-no-files-found: error
+
+      - name: Submit SignPath signing request
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: release-build/signed
+
+      - name: Package the signed bundle
+        shell: pwsh
+        run: |
+          $exe = @(Get-ChildItem -LiteralPath 'release-build/signed' -Recurse -File -Filter 'Relay.exe')
+          if ($exe.Count -ne 1) { throw "Expected one signed Relay.exe, found $($exe.Count)" }
+          $signature = Get-AuthenticodeSignature -LiteralPath $exe[0].FullName
+          if ($signature.Status -ne 'Valid') {
+            throw "Relay.exe signature is not valid: $($signature.Status)"
+          }
+          $root = $exe[0].Directory.FullName
           $name = "Relay-windows-x64-$env:GITHUB_REF_NAME.zip"
-          Compress-Archive -Path "$out/*" -DestinationPath $name -CompressionLevel Optimal
+          Compress-Archive -Path "$root/*" -DestinationPath $name -CompressionLevel Optimal
           $hash = (Get-FileHash $name -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $name" | Set-Content -Encoding ascii "$name.sha256"
           "RELEASE_ZIP=$name" >> $env:GITHUB_ENV
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload signed release artifact
+        uses: actions/upload-artifact@v4
         with:
           name: relay-windows-x64
           path: |
@@ -103,4 +166,4 @@ jobs:
             "$env:RELEASE_ZIP.sha256" `
             --title "Relay $env:GITHUB_REF_NAME" `
             --generate-notes `
-            --notes "Windows x64 desktop build. Extract the ZIP, then run Relay.exe. Accounts and credentials are entered inside the app and are not included in this download. The executable is not code-signed yet, so Windows may show a SmartScreen warning. Verify the accompanying SHA-256 file before running it."
+            --notes "Windows x64 desktop build, signed by SignPath Foundation. Extract the whole ZIP, then run Relay.exe. The bundle includes credential-free starter servers for Surfshark and Windscribe; add your own provider account in the app. Accounts and credentials are not included in the download. Code signing policy: https://github.com/120hdd/ovpn-pin/blob/$env:GITHUB_REF_NAME/CODE_SIGNING_POLICY.md"

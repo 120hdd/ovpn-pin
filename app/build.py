@@ -36,7 +36,10 @@ sys.stdout as None, which is why the proxy worker redirects its own output
 before it does anything else.
 """
 
+import ipaddress
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -49,6 +52,7 @@ BUILD_ROOT = os.path.join(ROOT, 'release-build') if PUBLIC_RELEASE else ROOT
 DIST = os.path.join(BUILD_ROOT, 'dist')
 WORK = os.path.join(BUILD_ROOT, 'build')
 NAME = 'Relay'
+STARTERS = os.path.join(HERE, 'public-starters.json')
 
 # The stash the run in progress is holding, so the failure path at the
 # bottom of this file can hand it back. Module scope because main() is
@@ -231,13 +235,155 @@ def public_configs():
             for line in found.splitlines() if line.strip()]
 
 
+def _tracked(path):
+    """Require a public-build input to be committed, not merely on disk."""
+    rel = os.path.relpath(path, ROOT).replace(os.sep, '/')
+    try:
+        subprocess.run(
+            ['git', '-C', ROOT, 'ls-files', '--error-unmatch', '--', rel],
+            capture_output=True, check=True, text=True, timeout=30)
+    except Exception as exc:
+        raise RuntimeError(
+            f'Public release input is not tracked by git: {rel}') from exc
+
+
+def public_starters():
+    """Read and validate the small, credential-free first-run server set."""
+    _tracked(STARTERS)
+    with open(STARTERS, encoding='utf-8') as handle:
+        entries = json.load(handle)
+    if not isinstance(entries, list) or not entries:
+        raise RuntimeError('public-starters.json must contain a non-empty list')
+
+    out, names = [], set()
+    providers = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise RuntimeError('Every public starter must be an object')
+        if set(entry) != {'provider', 'name', 'hostname', 'address', 'port'}:
+            raise RuntimeError('A public starter has missing or unexpected fields')
+        provider = entry['provider']
+        name = entry['name']
+        hostname = entry['hostname']
+        address = entry['address']
+        port = entry['port']
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise RuntimeError(f'Invalid starter address: {address}') from exc
+        if ip.version != 4 or not ip.is_global:
+            raise RuntimeError(f'Starter address must be a public IPv4: {address}')
+        if provider == 'surfshark':
+            if not hostname.endswith('.prod.surfshark.com') or port != 1443:
+                raise RuntimeError(f'Invalid Surfshark starter: {name}')
+            source = os.path.join(ROOT, 'configs', f'{hostname}_tcp.ovpn')
+            _tracked(source)
+            entry = dict(entry, source=source)
+        elif provider == 'windscribe':
+            if not hostname.endswith('.totallyacdn.com') or port != 443:
+                raise RuntimeError(f'Invalid Windscribe starter: {name}')
+        else:
+            raise RuntimeError(f'Unknown starter provider: {provider}')
+        if (not re.fullmatch(r'[a-z]{2}-[a-z]{3}', name)
+                or name in names):
+            raise RuntimeError(f'Invalid or duplicate starter name: {name}')
+        names.add(name)
+        providers.add(provider)
+        out.append(entry)
+    if providers != {'surfshark', 'windscribe'}:
+        raise RuntimeError('Public starters must include both providers')
+    return out
+
+
+def write_public_starters(target):
+    """Render the reviewed manifest into the bundle's ready-to-use servers/."""
+    os.makedirs(target, exist_ok=True)
+    written = []
+    for entry in public_starters():
+        host = entry['hostname']
+        address = entry['address']
+        port = entry['port']
+        if entry['provider'] == 'surfshark':
+            with open(entry['source'], encoding='utf-8') as handle:
+                text = handle.read()
+            pattern = rf'(?m)^(\s*remote\s+){re.escape(host)}(\s+{port}\s*)$'
+            text, changed = re.subn(pattern, rf'\g<1>{address}\g<2>', text)
+            if changed != 1:
+                raise RuntimeError(
+                    f'Expected one matching remote line in {entry["source"]}')
+            filename = f'{entry["name"]}.prod.surfshark.com_tcp_{address}.ovpn'
+        else:
+            text = ('# Windscribe starter pinned by the Relay release build.\n'
+                    f'# {host} -> {address}\n'
+                    '# Used by Relay\'s HTTPS proxy path; not an OpenVPN profile.\n'
+                    'client\n'
+                    'dev tun\n'
+                    'proto tcp\n'
+                    f'remote {address} {port}\n')
+            filename = f'{entry["name"]}.ws.{host}_{address}.ovpn'
+        header = ('# Public starter: contains no account credentials.\n'
+                  f'# Refresh source: {host}\n')
+        path = os.path.join(target, filename)
+        with open(path, 'w', encoding='utf-8', newline='\n') as handle:
+            handle.write(header + text)
+        written.append(path)
+    return written
+
+
+def _safe_public_server(path):
+    """Reject credential-bearing constructs in a rendered starter config."""
+    with open(path, encoding='utf-8') as handle:
+        text = handle.read()
+    if re.search(r'(?im)^\s*<(?:auth-user-pass|key|cert)>', text):
+        return False
+    for line in text.splitlines():
+        words = line.strip().split()
+        if words and words[0].lower() == 'auth-user-pass' and len(words) > 1:
+            return False
+        if words and words[0].lower() in {'username', 'password'}:
+            return False
+    return True
+
+
+def version_string():
+    """Product version used both in the PE metadata and by SignPath policy."""
+    value = os.environ.get('RELAY_VERSION', '0.0.0-dev').strip()
+    return value[1:] if value.lower().startswith('v') else value
+
+
+def write_version_file():
+    """Create PyInstaller version metadata from the release tag."""
+    version = version_string()
+    numbers = [int(n) for n in re.findall(r'\d+', version)[:4]]
+    numbers += [0] * (4 - len(numbers))
+    fixed = tuple(numbers)
+    path = os.path.join(WORK, 'relay-version.txt')
+    os.makedirs(WORK, exist_ok=True)
+    body = f"""VSVersionInfo(
+  ffi=FixedFileInfo(filevers={fixed!r}, prodvers={fixed!r}, mask=0x3f,
+    flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),
+  kids=[StringFileInfo([StringTable('040904B0', [
+    StringStruct('CompanyName', 'Relay contributors'),
+    StringStruct('FileDescription', 'Relay desktop proxy'),
+    StringStruct('FileVersion', '{version}'),
+    StringStruct('InternalName', 'Relay'),
+    StringStruct('OriginalFilename', 'Relay.exe'),
+    StringStruct('ProductName', 'Relay'),
+    StringStruct('ProductVersion', '{version}')])]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])])
+"""
+    with open(path, 'w', encoding='utf-8', newline='\n') as handle:
+        handle.write(body)
+    return path
+
+
 def audit_public_output(out):
     """Stop before packaging if user data somehow crossed into the build."""
     forbidden = (
         '.env', '.ovpn-auth', '.windscribe-auth', '.state', 'accounts.json',
         'settings.json', 'windscribe.json', 'windscribe-meta.json',
         'surfshark-meta.json', 'owners.tsv', 'reach.json', 'dropped.json',
-        'pinned', 'success', 'dropped', 'windscribe', 'servers',
+        'pinned', 'success', 'dropped', 'windscribe',
     )
     found = []
     for root, dirs, files in os.walk(out):
@@ -250,6 +396,17 @@ def audit_public_output(out):
     if found:
         raise RuntimeError(
             'Public build contains private/runtime data: ' + ', '.join(found))
+    server_dir = os.path.join(out, 'servers')
+    expected = {os.path.basename(path) for path in
+                write_public_starters(os.path.join(out, '.starter-audit'))}
+    shutil.rmtree(os.path.join(out, '.starter-audit'), ignore_errors=True)
+    actual = set(os.listdir(server_dir)) if os.path.isdir(server_dir) else set()
+    if actual != expected:
+        raise RuntimeError('Public starter set differs from the reviewed manifest')
+    unsafe = [name for name in actual
+              if not _safe_public_server(os.path.join(server_dir, name))]
+    if unsafe:
+        raise RuntimeError('Public starter contains credentials: ' + ', '.join(unsafe))
 
 
 def make_shortcut(target, folder, name, icon=None):
@@ -338,6 +495,7 @@ def main():
 
     for path in (DIST, WORK):
         shutil.rmtree(path, ignore_errors=True)
+    version_file = write_version_file()
 
     sep = ';'          # PyInstaller's --add-data separator on Windows
     args = [
@@ -345,6 +503,7 @@ def main():
         '--noconfirm', '--clean',
         '--onedir', '--noconsole',
         '--name', NAME,
+        '--version-file', version_file,
         '--distpath', DIST,
         '--workpath', WORK,
         '--specpath', WORK,
@@ -391,8 +550,14 @@ def main():
 
     # -- make it actually runnable ----------------------------------------
 
-    servers = None if PUBLIC_RELEASE else find_servers()
-    if servers:
+    if PUBLIC_RELEASE:
+        target = os.path.join(out, 'servers')
+        server_files = write_public_starters(target)
+        print(f'servers: {len(server_files)} public starters rendered '
+              '(Surfshark + Windscribe)')
+    else:
+        servers = find_servers()
+    if not PUBLIC_RELEASE and servers:
         target = os.path.join(out, 'servers')
         os.makedirs(target, exist_ok=True)
         n = 0
@@ -401,7 +566,7 @@ def main():
                 shutil.copy2(os.path.join(servers, f), os.path.join(target, f))
                 n += 1
         print(f'servers: {n} copied from {os.path.basename(servers)}/')
-    else:
+    elif not PUBLIC_RELEASE:
         print('servers: NONE FOUND - the app will have nothing to connect to')
 
     # Somewhere obvious to put the files you download from the provider, and

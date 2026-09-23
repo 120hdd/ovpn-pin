@@ -1,0 +1,72 @@
+[
+  {
+    "provider": "surfshark",
+    "name": "lt-vno",
+    "hostname": "lt-vno.prod.surfshark.com",
+    "address": "62.197.149.105",
+    "port": 1443
+  },
+  {
+    "provider": "surfshark",
+    "name": "be-anr",
+    "hostname": "be-anr.prod.surfshark.com",
+    "address": "188.95.54.55",
+    "port": 1443
+  },
+  {
+    "provider": "surfshark",
+    "name": "dk-cph",
+    "hostname": "dk-cph.prod.surfshark.com",
+    "address": "146.70.92.21",
+    "port": 1443
+  },
+  {
+    "provider": "surfshark",
+    "name": "tw-tai",
+    "hostname": "tw-tai.prod.surfshark.com",
+    "address": "82.140.187.25",
+    "port": 1443
+  },
+  {
+    "provider": "surfshark",
+    "name": "kr-seo",
+    "hostname": "kr-seo.prod.surfshark.com",
+    "address": "61.97.243.105",
+    "port": 1443
+  },
+  {
+    "provider": "windscribe",
+    "name": "tr-ist",
+    "hostname": "tr-022.totallyacdn.com",
+    "address": "149.50.208.46",
+    "port": 443
+  },
+  {
+    "provider": "windscribe",
+    "name": "fr-par",
+    "hostname": "fr-031.totallyacdn.com",
+    "address": "146.70.253.162",
+    "port": 443
+  },
+  {
+    "provider": "windscribe",
+    "name": "de-fra",
+    "hostname": "de-031.totallyacdn.com",
+    "address": "149.36.50.1",
+    "port": 443
+  },
+  {
+    "provider": "windscribe",
+    "name": "nl-ams",
+    "hostname": "nl-048.totallyacdn.com",
+    "address": "185.212.171.130",
+    "port": 443
+  },
+  {
+    "provider": "windscribe",
+    "name": "us-bos",
+    "hostname": "us-east-051.totallyacdn.com",
+    "address": "199.217.105.226",
+    "port": 443
+  }
+]
