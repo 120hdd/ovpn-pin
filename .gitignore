@@ -3,6 +3,12 @@ success/
 sitetest/
 proxy-ok/
 
+# Local AI coding-agent configuration and generated indexes.
+.agents/
+.claude/
+.codex/
+.codebase-memory/
+
 # Exits taken out of the list by hand, kept so they can be put back. Same
 # contents as the folders above, and the same reason for staying out of git.
 dropped/
