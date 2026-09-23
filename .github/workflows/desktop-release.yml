@@ -1,6 +1,9 @@
 name: desktop release
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
     tags:
       - 'v*'
@@ -108,6 +111,7 @@ jobs:
           }
 
       - name: Check SignPath configuration
+        if: github.event_name != 'pull_request'
         shell: pwsh
         env:
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -126,6 +130,7 @@ jobs:
           if ($missing) { throw "Missing SignPath secret/variables: $($missing -join ', ')" }
 
       - name: Upload unsigned bundle for origin verification
+        if: github.event_name != 'pull_request'
         id: upload-unsigned
         uses: actions/upload-artifact@v4
         with:
@@ -134,6 +139,7 @@ jobs:
           if-no-files-found: error
 
       - name: Submit SignPath signing request
+        if: github.event_name != 'pull_request'
         uses: signpath/github-action-submit-signing-request@v3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -146,6 +152,7 @@ jobs:
           output-artifact-directory: release-build/signed
 
       - name: Package the signed bundle
+        if: github.event_name != 'pull_request'
         shell: pwsh
         run: |
           $exe = @(Get-ChildItem -LiteralPath 'release-build/signed' -Recurse -File -Filter 'Relay.exe')
@@ -162,6 +169,7 @@ jobs:
           "RELEASE_ZIP=$name" >> $env:GITHUB_ENV
 
       - name: Upload signed release artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: relay-windows-x64
