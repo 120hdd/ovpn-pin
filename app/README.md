@@ -14,6 +14,11 @@ the Desktop. It also copies in the servers, the credentials, the tunnel client
 and the sweep scripts, so what comes out is ready to run rather than ready to
 assemble.
 
+For a downloadable build, use `python app/build.py --public-release`. It writes
+to `release-build/dist/Relay`, includes only configs tracked by git, and refuses
+to finish if credentials, account data, sessions, or other runtime state enter
+the output. It does not disturb the personal build under `dist/`.
+
 ```
 dist/Relay/Relay.exe --selftest     what this copy can see, and where it looked
 ```

@@ -45,6 +45,7 @@ __pycache__/
 # built app, and PyInstaller working files
 dist/
 build/
+release-build/
 
 # The tunnel client binary. 48 MB of somebody else's release; the
 # installer and the build fetch it rather than the repo carrying it.
