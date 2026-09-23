@@ -495,13 +495,12 @@ takes to connect. Everything else works without it.
 
 ---
 
-## Code signing policy
+## Windows release integrity
 
-Windows releases use SignPath Foundation signing. Free code signing is
-provided by SignPath.io, certificate by SignPath Foundation. See the full
-[code signing policy](CODE_SIGNING_POLICY.md), [privacy policy](PRIVACY.md),
-team roles, system-change disclosure, and uninstall instructions before
-downloading a release.
+Windows releases are not code-signed, so SmartScreen may show a warning on the
+first run. Each release includes a SHA-256 checksum beside the ZIP; verify it
+before running the application. See the [privacy policy](PRIVACY.md) for the
+network services Relay contacts and the data it stores locally.
 
 ---
 

@@ -110,66 +110,22 @@ jobs:
             throw "Frozen Relay self-test failed with exit code $($process.ExitCode)"
           }
 
-      - name: Check SignPath configuration
-        if: github.event_name != 'pull_request'
-        shell: pwsh
-        env:
-          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
-        run: |
-          $missing = @(
-            'SIGNPATH_API_TOKEN',
-            'SIGNPATH_ORGANIZATION_ID',
-            'SIGNPATH_PROJECT_SLUG',
-            'SIGNPATH_SIGNING_POLICY_SLUG',
-            'SIGNPATH_ARTIFACT_CONFIGURATION_SLUG'
-          ) | Where-Object { -not (Get-Item "env:$_" -ErrorAction SilentlyContinue).Value }
-          if ($missing) { throw "Missing SignPath secret/variables: $($missing -join ', ')" }
-
-      - name: Upload unsigned bundle for origin verification
-        if: github.event_name != 'pull_request'
-        id: upload-unsigned
-        uses: actions/upload-artifact@v4
-        with:
-          name: relay-windows-x64-unsigned
-          path: release-build/dist/Relay/*
-          if-no-files-found: error
-
-      - name: Submit SignPath signing request
-        if: github.event_name != 'pull_request'
-        uses: signpath/github-action-submit-signing-request@v3
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
-          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: release-build/signed
-
-      - name: Package the signed bundle
-        if: github.event_name != 'pull_request'
+      - name: Package the release bundle
         shell: pwsh
         run: |
-          $exe = @(Get-ChildItem -LiteralPath 'release-build/signed' -Recurse -File -Filter 'Relay.exe')
-          if ($exe.Count -ne 1) { throw "Expected one signed Relay.exe, found $($exe.Count)" }
-          $signature = Get-AuthenticodeSignature -LiteralPath $exe[0].FullName
-          if ($signature.Status -ne 'Valid') {
-            throw "Relay.exe signature is not valid: $($signature.Status)"
+          $root = (Resolve-Path 'release-build/dist/Relay').Path
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $label = $env:GITHUB_REF_NAME
+          } else {
+            $label = "build-$env:GITHUB_RUN_NUMBER"
           }
-          $root = $exe[0].Directory.FullName
-          $name = "Relay-windows-x64-$env:GITHUB_REF_NAME.zip"
+          $name = "Relay-windows-x64-$label.zip"
           Compress-Archive -Path "$root/*" -DestinationPath $name -CompressionLevel Optimal
           $hash = (Get-FileHash $name -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $name" | Set-Content -Encoding ascii "$name.sha256"
           "RELEASE_ZIP=$name" >> $env:GITHUB_ENV
 
-      - name: Upload signed release artifact
-        if: github.event_name != 'pull_request'
+      - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
           name: relay-windows-x64
@@ -189,4 +145,4 @@ jobs:
             "$env:RELEASE_ZIP.sha256" `
             --title "Relay $env:GITHUB_REF_NAME" `
             --generate-notes `
-            --notes "Windows x64 desktop build, signed by SignPath Foundation. Extract the whole ZIP, then run Relay.exe. The bundle includes credential-free starter servers for Surfshark and Windscribe; add your own provider account in the app. Accounts and credentials are not included in the download. Code signing policy: https://github.com/120hdd/ovpn-pin/blob/$env:GITHUB_REF_NAME/CODE_SIGNING_POLICY.md"
+            --notes "Windows x64 desktop build. Extract the whole ZIP, then run Relay.exe. The bundle includes credential-free starter servers for Surfshark and Windscribe; add your own provider account in the app. Accounts and credentials are not included in the download. This executable is not code-signed, so Windows may show a SmartScreen warning. Verify the accompanying SHA-256 file before running it."
