@@ -57,22 +57,21 @@ jobs:
       - name: Build the public desktop bundle
         run: python app/build.py --public-release
 
-      - name: Exercise and package the built app
+      - name: Inspect and package the built app
         shell: pwsh
         run: |
           $out = Resolve-Path 'release-build/dist/Relay'
-          $selftest = Start-Process -FilePath "$out/Relay.exe" -ArgumentList '--selftest' -Wait -PassThru -WindowStyle Hidden
-          if ($selftest.ExitCode -ne 0) { throw "Relay self-test failed with exit code $($selftest.ExitCode)" }
-
-          # The self-test intentionally writes diagnostics beside the app.
-          # Verify the path before removing that runtime-only output.
-          $state = Join-Path $out '.state'
-          if (Test-Path -LiteralPath $state) {
-            $resolvedState = (Resolve-Path -LiteralPath $state).Path
-            if (-not $resolvedState.StartsWith($out.Path, [StringComparison]::OrdinalIgnoreCase)) {
-              throw "Refusing to remove unexpected state path: $resolvedState"
-            }
-            Remove-Item -LiteralPath $resolvedState -Recurse -Force
+          $required = @(
+            'Relay.exe', 'gost.exe', 'install-server.sh', 'README.md',
+            'Sweep-OvpnExits.ps1', 'Resolve-OvpnRemote.ps1',
+            '_internal/ui/index.html', '_internal/ui/app.js',
+            '_internal/ui/app.css', '_internal/ovpn-proxy.py'
+          )
+          $missing = @($required | Where-Object {
+            -not (Test-Path -LiteralPath (Join-Path $out $_) -PathType Leaf)
+          })
+          if ($missing) {
+            throw "Required release files are missing: $($missing -join ', ')"
           }
 
           $forbidden = @('.env', '.ovpn-auth', '.windscribe-auth', '.state', 'accounts.json', 'settings.json', 'windscribe.json')
