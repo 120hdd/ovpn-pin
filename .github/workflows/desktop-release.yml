@@ -1,0 +1,107 @@
+name: desktop release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PYTHON_VERSION: '3.12'
+  GOST_VERSION: '3.3.0'
+  GOST_ARCHIVE_SHA256: 'cc8ac946f86994a3aed47ef1f838cfb6b7649d9245c91fcb9899654b33d61170'
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-desktop-build.txt
+
+      - name: Install build dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-desktop-build.txt
+
+      - name: Fetch the pinned tunnel client
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'gost.zip'
+          $unpacked = Join-Path $env:RUNNER_TEMP 'gost'
+          $url = "https://github.com/go-gost/gost/releases/download/v$env:GOST_VERSION/gost_$env:GOST_VERSION`_windows_amd64.zip"
+          Invoke-WebRequest -UseBasicParsing $url -OutFile $archive
+          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:GOST_ARCHIVE_SHA256) {
+            throw "gost checksum mismatch: $actual"
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $unpacked
+          $exe = Get-ChildItem -LiteralPath $unpacked -Recurse -File -Filter gost.exe | Select-Object -First 1
+          if (-not $exe) { throw 'gost.exe was not present in the verified archive' }
+          Copy-Item -LiteralPath $exe.FullName -Destination tunnel/gost.exe
+
+      - name: Test
+        shell: pwsh
+        run: |
+          python -m compileall -q app core
+          python app/engine-test.py
+          python app/pin-test.py
+          python app/sweep-test.py
+          python core/ovpn-proxy-test.py
+
+      - name: Build the public desktop bundle
+        run: python app/build.py --public-release
+
+      - name: Exercise and package the built app
+        shell: pwsh
+        run: |
+          $out = Resolve-Path 'release-build/dist/Relay'
+          $selftest = Start-Process -FilePath "$out/Relay.exe" -ArgumentList '--selftest' -Wait -PassThru -WindowStyle Hidden
+          if ($selftest.ExitCode -ne 0) { throw "Relay self-test failed with exit code $($selftest.ExitCode)" }
+
+          # The self-test intentionally writes diagnostics beside the app.
+          # Verify the path before removing that runtime-only output.
+          $state = Join-Path $out '.state'
+          if (Test-Path -LiteralPath $state) {
+            $resolvedState = (Resolve-Path -LiteralPath $state).Path
+            if (-not $resolvedState.StartsWith($out.Path, [StringComparison]::OrdinalIgnoreCase)) {
+              throw "Refusing to remove unexpected state path: $resolvedState"
+            }
+            Remove-Item -LiteralPath $resolvedState -Recurse -Force
+          }
+
+          $forbidden = @('.env', '.ovpn-auth', '.windscribe-auth', '.state', 'accounts.json', 'settings.json', 'windscribe.json')
+          $leaks = Get-ChildItem -LiteralPath $out -Recurse -Force | Where-Object { $forbidden -contains $_.Name }
+          if ($leaks) { throw "Private/runtime files found: $($leaks.FullName -join ', ')" }
+
+          $name = "Relay-windows-x64-$env:GITHUB_REF_NAME.zip"
+          Compress-Archive -Path "$out/*" -DestinationPath $name -CompressionLevel Optimal
+          $hash = (Get-FileHash $name -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $name" | Set-Content -Encoding ascii "$name.sha256"
+          "RELEASE_ZIP=$name" >> $env:GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-windows-x64
+          path: |
+            Relay-windows-x64-*.zip
+            Relay-windows-x64-*.zip.sha256
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release create "$env:GITHUB_REF_NAME" `
+            "$env:RELEASE_ZIP" `
+            "$env:RELEASE_ZIP.sha256" `
+            --title "Relay $env:GITHUB_REF_NAME" `
+            --generate-notes `
+            --notes "Windows x64 desktop build. Extract the ZIP, then run Relay.exe. Accounts and credentials are entered inside the app and are not included in this download. The executable is not code-signed yet, so Windows may show a SmartScreen warning. Verify the accompanying SHA-256 file before running it."

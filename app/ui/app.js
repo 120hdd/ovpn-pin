@@ -33,6 +33,7 @@ const state = {
   openCities: new Set(),  // countries showing their cities
   openExits: null,      // which row has its individual exits showing
   exits: {},            // and those exits, once fetched, by that row's code
+  sources: null,        // which pools there are, and which one is in use
 };
 
 const flagUrl = (code) => `url("flags/${code}.svg")`;
@@ -270,7 +271,7 @@ function render() {
     : String(state.picked || '').split(/[:/]/)[0];
   const c = state.countries.find((x) => x.code === where);
   $('pickLabel').textContent = state.picked === 'auto'
-    ? 'Fastest available' : nameOf(state.picked);
+    ? 'Whichever answers first' : nameOf(state.picked);
   $('pickFlag').style.backgroundImage = c ? flagUrl(c.code) : '';
 }
 
@@ -283,6 +284,7 @@ function openPicker() {
   state.cursor = 0;
   drawList('');
   $('picker').showModal();
+  slideSort();
   setTimeout(() => $('search').focus(), 30);
   // What a stutter actually is: one frame that took far longer than the rest.
   // Timing this function measured the part that was never slow, and timing to
@@ -354,10 +356,10 @@ function drawList(query) {
     copy.className = 'row__copy';
     const name = document.createElement('span');
     name.className = 'row__name';
-    name.textContent = 'Fastest available';
+    name.textContent = 'Whichever answers first';
     const sub = document.createElement('span');
     sub.className = 'row__sub';
-    sub.textContent = 'Races every location and takes the first to answer';
+    sub.textContent = 'Races every location, takes the first to reply';
     copy.append(name, sub);
     auto.append(autoIcon, copy);
     list.append(auto);
@@ -686,7 +688,7 @@ window.onFailed = (err) => {
   const say = {
     'all-refused': state.picked === 'auto'
       ? 'No server accepted just now. That happens — wait a moment and try again.'
-      : `No ${nameOf(state.picked)} server accepted just now. Try again, or use Fastest available.`,
+      : `No ${nameOf(state.picked)} server accepted just now. Try again, or let it take whichever answers first.`,
     // Not the same failure as the one above, and the wrong advice for it.
     // A 407 is the account being turned away, and it is the same account at
     // every address - so every exit saying it is one fact repeated, not a
@@ -1503,9 +1505,6 @@ function paintTunnel(plan) {
   // it is, so the placeholder is the only thing that can say so.
   $('tunnelPass').placeholder = t.hasPassword ? 'saved' : 'not set';
   $('tunnelApi').placeholder = t.hasApiPassword ? 'saved' : 'not set';
-  $('tunnelCmd').textContent =
-    `install-server.sh ${t.domain || 'yourdomain.com'} `
-    + '<surfshark-user> <surfshark-pass>';
   paintWayIn(t.edges);
 }
 
@@ -1523,11 +1522,11 @@ function paintWayIn(edges) {
 
 async function saveTunnel() {
   const btn = $('tunnelSave');
-  btn.disabled = true;
-  said($('tunnelSaid'), 'Saving…');
+  busy(btn, true);
+  said($('tunnelSaid'), 'Saving…', 'work');
   const plan = await window.pywebview.api.saveTunnel(
     $('tunnelDomain').value.trim(), $('tunnelPass').value, $('tunnelApi').value);
-  btn.disabled = false;
+  busy(btn, false);
   // Out of the DOM as soon as they are on disk, for the same reason the
   // sign-in fields are.
   $('tunnelPass').value = '';
@@ -1539,10 +1538,17 @@ async function saveTunnel() {
 
 async function testTunnel() {
   const btn = $('tunnelTest');
-  btn.disabled = true;
-  said($('tunnelSaid'), 'Starting the client and asking the server…');
+  busy(btn, true);
+  // The pane's own word for where it stands, and for these few seconds it
+  // does not know. Holding up "running" or "ready" while the thing that
+  // decides which of those is true is still in the air is the one moment
+  // that pill is allowed to be honestly blank instead.
+  const pill = $('tunnelPill');
+  pill.dataset.state = 'work';
+  pill.textContent = 'asking';
+  said($('tunnelSaid'), 'Starting the client and asking the server…', 'work');
   const r = await window.pywebview.api.testTunnel();
-  btn.disabled = false;
+  busy(btn, false);
   if (!r.ok) {
     // Two failures worth telling apart: nothing to run, and nothing to
     // reach. The first is a missing file, the second is a wrong answer.
@@ -1570,10 +1576,11 @@ async function testTunnel() {
 
 async function rescanEdges() {
   const btn = $('tunnelScan');
-  btn.disabled = true;
-  said($('tunnelSaid'), 'Asking every Cloudflare address that might carry it…');
+  busy(btn, true);
+  said($('tunnelSaid'),
+       'Asking every Cloudflare address that might carry it…', 'work');
   const r = await window.pywebview.api.rescanEdges();
-  btn.disabled = false;
+  busy(btn, false);
   if (!r.ok) {
     const why = r.error === 'no-client'
       ? 'No tunnel client found. gost belongs beside the app, or in tunnel/.'
@@ -1703,6 +1710,47 @@ function said(el, text, kind) {
   el.textContent = text || '';
   el.classList.toggle('is-bad', kind === 'bad');
   el.classList.toggle('is-good', kind === 'good');
+  // 'work' is not a colour, it is a tense. The sentence is the same one it
+  // was going to be either way; while the answer is still out, the light
+  // passes along it.
+  el.classList.toggle('is-work', kind === 'work');
+}
+
+/* ------------------------------------------------------- while it is out */
+
+/* A button in this sheet that goes off and asks something used to say so by
+   disabling itself, which the page draws at 45% - the same thing it does to a
+   control you are not allowed to press. Test on a sleeping tunnel is four
+   seconds of a real round trip and it read as a button that had broken.
+
+   busy() is the whole of the answer: still unpressable, and now saying which
+   kind of unpressable it is. The rim turns, the label takes the amber this
+   app already uses for work in progress, and a screen reader is told the same
+   thing by aria-busy rather than left to infer it from a disabled attribute
+   that has meant "no" everywhere else.
+
+   It also counts. Anything in flight anywhere in the sheet lifts data-work on
+   the dialog, which is what the floor reads. */
+let inFlight = 0;
+
+function busy(el, on) {
+  if (el) {
+    el.disabled = on;
+    el.dataset.busy = on ? '1' : '0';
+    if (on) el.setAttribute('aria-busy', 'true');
+    else el.removeAttribute('aria-busy');
+  }
+  // Guarded rather than trusted. A handler that returns early on an error
+  // path and never releases would otherwise leave the field running amber
+  // for the rest of the session, and a floor that is always busy says
+  // nothing at all.
+  inFlight = Math.max(0, inFlight + (on ? 1 : -1));
+  paintWork();
+}
+
+function paintWork() {
+  $('prefs').dataset.work =
+    (inFlight || state.sweep || state.pinning) ? '1' : '0';
 }
 
 async function refreshPrefs() {
@@ -1842,6 +1890,7 @@ function drawPin(p) {
 
   if (p.phase === 'starting') {
     state.pinning = { total: p.total || 0, done: 0 };
+    paintWork();
     $('pinTally').replaceChildren();
     $('pinTally').hidden = false;
     $('pinUse').hidden = true;
@@ -1902,6 +1951,7 @@ function drawPin(p) {
 
   if (p.phase === 'finished') {
     state.pinning = null;
+    paintWork();
     $('pinGo').dataset.mode = 'idle';
     lockPin(false);
     meter.hidden = true;
@@ -2078,6 +2128,7 @@ function drawSweep(p) {
 
   if (p.phase === 'elevating') {
     state.sweep = { started: Date.now() / 1000, total: p.total || 0, done: 0 };
+    paintWork();
     tally.replaceChildren();
     tally.hidden = false;
     meter.hidden = false;
@@ -2142,6 +2193,7 @@ function drawSweep(p) {
 
   if (p.phase === 'finished') {
     state.sweep = null;
+    paintWork();
     $('sweepGo').dataset.mode = 'idle';
     $('sweepPick').disabled = false;
     $('sweepSites').disabled = false;
@@ -2467,6 +2519,11 @@ async function boot() {
   // Asked for once the window is already usable: it is a network round trip
   // and nothing on screen depends on it arriving.
   window.pywebview.api.whoami();
+  // Off what boot already carried, rather than a second round trip for
+  // something that was in the first one.
+  if (info.sources) state.sources = info.sources;
+  paintSourceHead();
+  refreshDead();
   warmFlags(state.countries.map((c) => c.code));
   // Built now, while nothing is waiting for it, rather than in the frame the
   // sheet is animating in. The dialog is closed, so none of this paints - it
@@ -2580,7 +2637,26 @@ window.addEventListener('keydown', (e) => {
 
 $('settings').addEventListener('click', async () => {
   await refreshPrefs();
+  // Back to the top level, unless something is still going in one of the
+  // screens. The sheet used to reopen wherever it was last left, which for
+  // anyone who uses the tunnel pane means never seeing the settings menu
+  // again after the first visit - a visit that ended is not a place to put
+  // somebody back into three levels deep. A sweep or a pin is the exception
+  // and the reason the old behaviour existed: those run for minutes, and
+  // looking in on one is most of why the sheet gets reopened while it runs.
+  if (!state.sweep && !state.pinning) showScreen(null);
   $('prefs').showModal();
+  // Once it is on screen and has a size, and once the sheet has finished
+  // arriving. A closed dialog is display:none and measures zero, so a field
+  // built before showModal would be one column wide however big the window
+  // was - and built in the same frame as the open, two hundred spans laid
+  // out cost the one frame of the one animation anybody watches. It is
+  // built once and never rebuilt, so this is a beat on the first visit and
+  // nothing on any after it.
+  setTimeout(() => {
+    fillFloor();
+    $('prefs').dataset.floor = state.screen ? '0' : '1';
+  }, 220);
   // After the sheet is up rather than before it. One shells out to PowerShell
   // to ask whether another VPN holds the default route and the other opens a
   // socket to the proxy; waiting on either to show a settings sheet would be
@@ -2614,14 +2690,22 @@ $('tunnelCopy').addEventListener('click', async (e) => {
   said($('tunnelSaid'), 'Copied — paste it into SSH as root.', 'good');
 });
 
+/* The picker is a Windows dialog and it is its own feedback while it is up.
+   What these are for is the part after it closes - reading a folder of two
+   thousand configs is not instant - and stopping a second picker being asked
+   for behind the first. */
 $('pinPick').addEventListener('click', async () => {
+  busy($('pinPick'), true);
   const r = await window.pywebview.api.choosePinFolder();
+  busy($('pinPick'), false);
   if (r && r.ok) { paintPinPlan(r); checkPinProxy(); }
   else if (r && r.error) said($('pinSaid'), r.error, 'bad');
 });
 
 $('pinOutPick').addEventListener('click', async () => {
+  busy($('pinOutPick'), true);
   const r = await window.pywebview.api.choosePinOut();
+  busy($('pinOutPick'), false);
   if (r && r.ok) { paintPinPlan(r); checkPinProxy(); }
   else if (r && r.error) said($('pinSaid'), r.error, 'bad');
 });
@@ -2695,7 +2779,9 @@ $('pinGo').addEventListener('click', async () => {
 });
 
 $('sweepPick').addEventListener('click', async () => {
+  busy($('sweepPick'), true);
   const r = await window.pywebview.api.chooseSweepFolder();
+  busy($('sweepPick'), false);
   if (r && r.ok) paintSweepPlan(r);
   else if (r && r.error) said($('sweepSaid'), r.error, 'bad');
 });
@@ -2781,11 +2867,13 @@ $('sweepFirstDown').addEventListener('click', () => stepFirst(-1));
 
 $('lookUpOwners').addEventListener('click', async () => {
   const btn = $('lookUpOwners');
-  btn.disabled = true;
-  said($('lordsSaid'), 'Asking who those addresses are rented from…');
-  btn.dataset.busy = 'true';
+  // data-busy was set here and never cleared, so the tower in this button
+  // flickered for the rest of the session after the first lookup. busy()
+  // owns both ends of it now.
+  busy(btn, true);
+  said($('lordsSaid'), 'Asking who those addresses are rented from…', 'work');
   const r = await window.pywebview.api.lookUpOwners($('sweepFolder').textContent);
-  btn.disabled = false;
+  busy(btn, false);
   if (!r || !r.ok) {
     said($('lordsSaid'), (r && r.error) || 'The lookup did not answer.', 'bad');
     return;
@@ -2828,10 +2916,29 @@ $('sweepGo').addEventListener('click', async () => {
   if (!r.ok) said($('sweepSaid'), r.error, 'bad');
 });
 
+/* The switch moves first and Windows catches up, because a switch that waits
+   for a registry write and a broadcast to every window on the machine before
+   it moves is a switch that feels broken. What it did not do was ever look
+   back: it flipped, fired, and believed itself whatever came back.
+
+   So it moves on the press and holds the amber until the machine has
+   answered - and if the answer is no, it slides back to where it was and
+   says so. Half a second of a switch being optimistic is fine. A switch that
+   is still lying a minute later is not. */
 $('sysProxy').addEventListener('click', async () => {
-  state.systemProxy = !state.systemProxy;
-  $('sysProxy').setAttribute('aria-checked', String(state.systemProxy));
-  await window.pywebview.api.setSystemProxy(state.systemProxy);
+  const sw = $('sysProxy');
+  if (sw.dataset.busy === '1') return;
+  const was = state.systemProxy;
+  state.systemProxy = !was;
+  sw.setAttribute('aria-checked', String(state.systemProxy));
+  busy(sw, true);
+  const r = await window.pywebview.api.setSystemProxy(state.systemProxy);
+  busy(sw, false);
+  if (r && r.ok === false) {
+    state.systemProxy = was;
+    sw.setAttribute('aria-checked', String(was));
+    setHint(r.error || 'Windows would not take that.', true);
+  }
 });
 
 /* change, not input, and not blur either. Every other port box in this sheet
@@ -2847,18 +2954,22 @@ $('listenPort').addEventListener('keydown', (e) => {
 });
 
 $('chooseFolder').addEventListener('click', async () => {
+  busy($('chooseFolder'), true);
   const r = await window.pywebview.api.chooseFolder();
-  if (r && r.ok) {
-    await refreshPrefs();
-    setHint(`Now reading servers from ${r.folder}`);
-  } else if (r && r.error) {
-    setHint(r.error, true);
-  }
+  // Held over refreshPrefs as well as over the picker. Reading a folder of
+  // two thousand configs and repainting the sheet off it is most of what
+  // this press costs, and it all happens after the dialog has gone.
+  if (r && r.ok) await refreshPrefs();
+  busy($('chooseFolder'), false);
+  if (r && r.ok) setHint(`Now reading servers from ${r.folder}`);
+  else if (r && r.error) setHint(r.error, true);
 });
 
 $('resetFolder').addEventListener('click', async () => {
+  busy($('resetFolder'), true);
   await window.pywebview.api.resetFolder();
   await refreshPrefs();
+  busy($('resetFolder'), false);
   setHint('Back to the servers that came with the app.');
 });
 
@@ -3420,14 +3531,14 @@ function acctPaint() {
       use.className = 'btn btn--quiet btn--auto';
       use.type = 'button';
       use.textContent = 'Use';
-      use.addEventListener('click', () => acctUse(row.id));
+      use.addEventListener('click', () => acctUse(row.id, use));
       act.appendChild(use);
     }
     const drop = document.createElement('button');
     drop.className = 'btn btn--quiet btn--auto';
     drop.type = 'button';
     drop.textContent = 'Remove';
-    drop.addEventListener('click', () => acctRemove(row.id, row.label));
+    drop.addEventListener('click', () => acctRemove(row.id, row.label, drop));
     act.appendChild(drop);
 
     el.append(tag, who, act);
@@ -3507,11 +3618,13 @@ $('acctSave').addEventListener('click', async () => {
   if (!user) { said($('acctNewSaid'), 'Enter the username.', 'bad'); return; }
   if (!pass) { said($('acctNewSaid'), 'Enter the password.', 'bad'); return; }
 
+  busy($('acctSave'), true);
   acctBusy(true);
   if (acct.provider === 'surfshark') {
-    said($('acctNewSaid'), 'Saving…');
+    said($('acctNewSaid'), 'Saving…', 'work');
     const r = await window.pywebview.api.accountAdd('surfshark', label, user, pass);
     acctBusy(false);
+    busy($('acctSave'), false);
     if (!r.ok) { said($('acctNewSaid'), r.error, 'bad'); return; }
     $('acctPass').value = '';
     acctShowForm(false);
@@ -3522,42 +3635,52 @@ $('acctSave').addEventListener('click', async () => {
   }
 
   // Windscribe: the puzzle stands between here and an account.
-  said($('acctNewSaid'), 'Asking Windscribe…');
+  said($('acctNewSaid'), 'Asking Windscribe…', 'work');
   const r = await window.pywebview.api.accountAdd(
     'windscribe', label, user, pass);
   if (!r.ok) {
     acctBusy(false);
+    busy($('acctSave'), false);
     said($('acctNewSaid'), r.error, 'bad');
     return;
   }
   $('acctPass').value = '';
   ws.token = r.token;
   if (r.captcha) {
+    // The puzzle is the wait now, and it is a picture on the screen in front
+    // of the person - so Save stops turning and stops claiming to be the
+    // thing being waited on.
+    busy($('acctSave'), false);
     wsShowCaptcha(r.captcha);
     said($('acctNewSaid'), 'Solve the puzzle to finish.');
   } else {
-    said($('acctNewSaid'), 'Signing in…');
+    said($('acctNewSaid'), 'Signing in…', 'work');
     await wsSubmit();
+    busy($('acctSave'), false);
   }
 });
 
 /* -- using and dropping ------------------------------------------------ */
 
-async function acctUse(id) {
+async function acctUse(id, btn) {
+  busy(btn, true);
   acctBusy(true);
-  said($('acctSaid'), 'Switching…');
+  said($('acctSaid'), 'Switching…', 'work');
   const r = await window.pywebview.api.accountUse(id);
   acctBusy(false);
+  busy(btn, false);
   if (!r.ok) { said($('acctSaid'), r.error, 'bad'); return; }
   said($('acctSaid'), `Now using ${r.label}.`, 'good');
   await acctRefresh();
   await refreshPrefs();
 }
 
-async function acctRemove(id, label) {
+async function acctRemove(id, label, btn) {
+  busy(btn, true);
   acctBusy(true);
   const r = await window.pywebview.api.accountRemove(id);
   acctBusy(false);
+  busy(btn, false);
   if (!r.ok) { said($('acctSaid'), r.error, 'bad'); return; }
   said($('acctSaid'), `Removed ${label}.`);
   await acctRefresh();
@@ -3573,11 +3696,13 @@ async function acctRemove(id, label) {
 /* One line each, where there were two paragraphs. What to do next is not
    said in words any more - the card says it, on the button, as the only
    thing there is to press. */
-async function fetchSurfshark() {
+async function fetchSurfshark(btn) {
+  busy(btn, true);
   acctBusy(true);
-  said($('provSaid'), 'Asking Surfshark…');
+  said($('provSaid'), 'Asking Surfshark…', 'work');
   const r = await window.pywebview.api.surfsharkServers();
   acctBusy(false);
+  busy(btn, false);
   if (!r.ok) { said($('provSaid'), r.error, 'bad'); return; }
   said($('provSaid'), r.added
     ? `${r.added} new, ${r.total} in all.`
@@ -3585,11 +3710,13 @@ async function fetchSurfshark() {
   await refreshPrefs();
 }
 
-async function fetchWindscribe() {
+async function fetchWindscribe(btn) {
+  busy(btn, true);
   acctBusy(true);
-  said($('provSaid'), 'Asking Windscribe…');
+  said($('provSaid'), 'Asking Windscribe…', 'work');
   const r = await window.pywebview.api.windscribeServers();
   acctBusy(false);
+  busy(btn, false);
   if (!r.ok) { said($('provSaid'), r.error, 'bad'); return; }
   said($('provSaid'), `${r.written} fetched.`, 'good');
   // The card is what says what happens next, and it can only say it once it
@@ -3626,14 +3753,14 @@ function provSays(has) {
   return 'no servers yet';
 }
 
-async function provDo(key, step) {
+async function provDo(key, step, btn) {
   if (step === 'signin') {
     acctSetProvider(key);
     acctShowForm(true);
     return;
   }
   if (step === 'fetch' || step === 'update') {
-    await (key === 'windscribe' ? fetchWindscribe() : fetchSurfshark());
+    await (key === 'windscribe' ? fetchWindscribe(btn) : fetchSurfshark(btn));
     return;
   }
   // Pinning is minutes of work and needs a route chosen, so this does not
@@ -3655,7 +3782,7 @@ $('useOpts').addEventListener('click', (e) => {
   // provider that has none.
   e.preventDefault();
   e.stopPropagation();
-  provDo(btn.closest('.prov').dataset.provider, btn.dataset.step);
+  provDo(btn.closest('.prov').dataset.provider, btn.dataset.step, btn);
 });
 
 $('wsRefresh').addEventListener('click', async (e) => {
@@ -3664,12 +3791,12 @@ $('wsRefresh').addEventListener('click', async (e) => {
   e.preventDefault();
   e.stopPropagation();
   const btn = $('wsRefresh');
-  btn.dataset.busy = '1';
+  busy(btn, true);
   acctBusy(true);
-  said($('provSaid'), 'Asking for a fresh credential…');
+  said($('provSaid'), 'Asking for a fresh credential…', 'work');
   const r = await window.pywebview.api.windscribeRefresh();
   acctBusy(false);
-  btn.dataset.busy = '0';
+  busy(btn, false);
   if (!r.ok) {
     said($('provSaid'), r.error + ' — sign in again to get a new one.', 'bad');
     return;
@@ -3703,6 +3830,54 @@ $('acctPeek').addEventListener('click', () => {
    with state in them - a sweep running, a pin part-done - and rebuilding
    one on the way in would throw that away. */
 
+/* ---------------------------------------------------------------- the floor */
+
+/* The settings menu is four rows and then two thirds of a window with nothing
+   in it. There is nothing to put down there - a fifth row invented to fill
+   the space would be worse than the space - so it gets a texture instead:
+   katakana at the weight of a watermark, faded out long before it reaches the
+   row above it, with a character lifting and going back down here and there.
+
+   Sequential rather than random. The alphabet is 71 long and the grid is 13
+   or 14 wide, and neither divides the other, so laying it down in order gives
+   the diagonals of a sheet of graph paper that has been sheared - which is a
+   pattern, and quiet. Random is not quiet: the eye finds the clumps in it
+   immediately and reads them as something meaning something.
+
+   Kana specifically, and not this app's own alphabet, because it has to be
+   unreadable. Anything in the writing system of somebody using this window
+   would be read, and something to read behind a menu is a thing to squint at
+   rather than a floor. */
+const FLOOR_KANA =
+  'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン'
+  + 'ガギグゲゴザジズゼゾダヂヅデドバビブベボパピプペポ';
+
+const FLOOR_CELL = 26;   // matches grid-auto-rows and the minmax in the CSS
+
+/* Measured, not guessed, and only ever grown. The window is resizable and
+   the sheet is the whole of it, so the number of cells that fit is a runtime
+   fact - and rebuilding the field on every open would restart every one of
+   its animations mid-cycle, which is the one thing that would make it look
+   like an effect rather than like a floor. */
+function fillFloor() {
+  const floor = $('prefsFloor');
+  const box = floor.getBoundingClientRect();
+  if (!box.width || !box.height) return;
+  const cols = Math.max(1, Math.floor((box.width - 12) / FLOOR_CELL));
+  const rows = Math.max(1, Math.ceil((box.height - 12) / FLOOR_CELL));
+  const want = cols * rows;
+  const have = floor.childElementCount;
+  if (have >= want) return;
+
+  const more = document.createDocumentFragment();
+  for (let i = have; i < want; i++) {
+    const cell = document.createElement('span');
+    cell.textContent = FLOOR_KANA[i % FLOOR_KANA.length];
+    more.appendChild(cell);
+  }
+  floor.appendChild(more);
+}
+
 function showScreen(slug) {
   for (const s of document.querySelectorAll('.screen')) {
     s.hidden = s.dataset.screen !== slug;
@@ -3718,6 +3893,10 @@ function showScreen(slug) {
   if (found) found.scrollTop = 0;
   $('prefsBody').scrollTop = 0;
   state.screen = found ? slug : null;
+  // The floor belongs to the top level and nowhere else. Behind a screen
+  // full of panes it would be texture under furniture; behind four rows and
+  // a lot of nothing it is the reason the nothing has a bottom to it.
+  $('prefs').dataset.floor = found ? '0' : '1';
   // The one note in here that is about something you did rather than about
   // something that is so - "pick at least one" - has no state to go stale
   // against, so paintUse cannot take it away. Leaving a screen ends the
@@ -4063,19 +4242,41 @@ window.onReachDone = (r) => {
   // is the only thing that says which. "30 of 37 answered" over a list of
   // ninety countries is a sentence about nothing in particular.
   const where = r.code ? ` in ${nameOf(r.code)}` : '';
-  // A run where the exits all turned the account away is not a run about the
+  // A run where the exits turned the account away is not a run about the
   // exits, and "0 of 37 answered" reads as thirty-seven broken servers. The
   // same account is at every one of those addresses, so the count is one
   // fact repeated - which is worth saying out loud, because the thing to fix
   // is somewhere else entirely.
-  const allRefused = !r.ok && r.refused >= 3 && r.refused > r.tested / 2;
+  //
+  // Measured on this machine: 27 of 37 Surfshark exits refused, every one of
+  // them a 407, because the file the proxy reads held an older credential
+  // than the account the window was showing as signed in. The app said
+  // nothing about credentials for any of it - see the note in main.py about
+  // `answered`, which is why this could not fire.
+  const answered = r.answered || 0;
+  const refused = r.refused || 0;
+  // The same test the connect race uses, so the two cannot disagree about
+  // whether a run was about the account: enough of them to be evidence, and
+  // most of what was asked. A handful of 407s is ordinary.
+  const mostRefused = refused >= 3 && refused > r.tested / 2;
+  const advice = ' — that is the account, not the servers. The service '
+    + "username and password are on the provider's manual-setup page, and "
+    + 'are not the email you log in with.';
   said($('reachSaid'),
-    r.cancelled ? `Stopped after ${r.tested}${where}. ${r.ok} answered.`
-      : allRefused
-        ? `${r.refused} of ${r.tested}${where} turned these credentials away `
-          + '— that is the account, not the servers.'
-        : `${r.ok} of ${r.tested} answered${where}.`,
-    r.ok ? 'good' : 'bad');
+    r.cancelled
+      ? `Stopped after ${r.tested}${where}. ${answered} answered.`
+      : mostRefused
+        ? `${refused} of ${r.tested}${where} turned these credentials away`
+          + advice
+        // Some refused and some did not. Worth saying, because it is the
+        // difference between an account that is wrong and a fleet where a
+        // few exits happen not to run a proxy for it - and the second is
+        // ordinary enough that hiding it would make the first look normal.
+        : refused
+          ? `${answered} of ${r.tested} answered${where}. `
+            + `${refused} turned these credentials away.`
+          : `${answered} of ${r.tested} answered${where}.`,
+    answered ? 'good' : 'bad');
   // The list is rebuilt rather than patched: every row's order can change,
   // because answering ones sort above blocked ones.
   $('list').dataset.key = '';
@@ -4089,6 +4290,9 @@ window.onReachDone = (r) => {
     if (holder) toggleExits(wasOpen, holder.closest('.row'));
   }
   render();
+  // A run has just re-judged every exit it asked, which is the one moment
+  // the count in the header is certain to be out of date.
+  refreshDead();
 };
 
 /* No listener here any more: the bolts are in the list, and the list already
@@ -4507,6 +4711,47 @@ function paintSort() {
   for (const b of $('sortBy').querySelectorAll('.pair__opt')) {
     b.setAttribute('aria-selected', String(b.dataset.sort === (state.sortBy || 'ping')));
   }
+  slideSort();
+}
+
+/* The lit backing, under whichever icon is chosen. Without this the pill
+   stayed 0 wide at the left edge and never showed at all, which left three
+   icons distinguished only by a shade of grey - a control that answered
+   every press by looking exactly as it had before.
+
+   Measured rather than told, because a dialog that has never been opened has
+   no layout: offsetWidth is 0 until showModal(), so this is called again on
+   the way in rather than only when the choice changes. */
+function slideSort() {
+  const chosen = $('sortBy').querySelector('[aria-selected="true"]');
+  const bar = $('sortBy').querySelector('.pair__slide');
+  if (!chosen || !bar || !chosen.offsetWidth) return;
+  bar.style.width = `${chosen.offsetWidth}px`;
+  bar.style.transform = `translateX(${chosen.offsetLeft - 2}px)`;
+}
+
+/* What the chosen sort has to work with, when the answer is nothing.
+
+   Two of the three are properties this list may simply not know. Nothing has
+   a time until a test has been run, and how busy a server is is a figure only
+   some providers publish - so both comparators fall through to the name, and
+   pressing either icon leaves ninety rows in exactly the order they were
+   already in. That is the right order to fall back to and a terrible thing to
+   do in silence: the control looked broken because the only evidence it had
+   done anything was a list that had not moved.
+
+   It only speaks when there is nothing. A sort that worked does not need a
+   sentence underneath saying it worked. */
+function sortHasNothing(kind) {
+  const list = state.countries || [];
+  if (!list.length) return '';
+  if (kind === 'ping' && !list.some((c) => c.ping !== null && c.ping !== undefined)) {
+    return 'Nothing has been timed yet — test a country first.';
+  }
+  if (kind === 'load' && !list.some((c) => cityLoad(c) !== null)) {
+    return 'These servers do not say how busy they are.';
+  }
+  return '';
 }
 
 $('sortBy').addEventListener('click', async (e) => {
@@ -4516,5 +4761,366 @@ $('sortBy').addEventListener('click', async (e) => {
   paintSort();
   $('list').dataset.key = '';
   drawList($('search').value.trim());
+  // Not over a run in progress: that line is counting exits at the time, and
+  // it is saying something about this second rather than about the sort.
+  const nothing = sortHasNothing(state.sortBy);
+  if (nothing && !state.testing) said($('reachSaid'), nothing);
   await window.pywebview.api.setSort(state.sortBy);
+});
+
+/* ========================================================================
+   THE ONES THAT STOPPED ANSWERING
+
+   The sweep used to delete these itself, out of every folder that said they
+   worked, on any run pointed at its own folder - which is every run this
+   window starts. That is gone (see -Prune), and this is what replaced it.
+
+   Three rules, and they are the whole design:
+
+     nothing goes without being shown first. The sheet is opened to find out
+     what would go; opening it removes nothing.
+
+     which folder is a question. The same config sits in pinned\ and in
+     success\ and they do not mean the same thing - one is a record that it
+     connected once, the other is the only copy there is - so the sheet asks
+     rather than assuming, and ticks nothing to begin with.
+
+     nothing is destroyed. An exit that failed one thirty-second window will
+     often answer perfectly a minute later; the test itself asks twice for
+     that reason. A verdict that provisional does not earn a delete, so they
+     go to a shelf and there is a button that empties it back.
+   ======================================================================== */
+
+const drop = {
+  folders: [],
+  exits: [],
+  shelved: [],
+  ticked: new Set(),
+  aside: 0,
+};
+
+/* The mark in the header. Asked for after anything that could change the
+   answer - a test finishing, a set-aside, a put-back - and never on a timer:
+   the number only moves when the app itself moved it. */
+async function refreshDead() {
+  let r;
+  try {
+    r = await window.pywebview.api.deadExits();
+  } catch (e) {
+    return;
+  }
+  if (!r || !r.ok) return;
+  drop.folders = r.folders || [];
+  drop.exits = r.exits || [];
+  drop.shelved = r.shelved || [];
+  drop.aside = r.aside || 0;
+  drop.dead = r.dead || 0;
+  const n = drop.dead;
+  const btn = $('dropOpen');
+  // Present when there is either something to take out or something to put
+  // back. An empty shelf and a clean list mean the button has nothing to say,
+  // and a control with nothing to say is furniture.
+  btn.hidden = !n && !drop.aside;
+  btn.dataset.n = String(n);
+  btn.setAttribute('aria-label', n
+    ? `${n} exits stopped answering`
+    : `${drop.aside} exits set aside`);
+}
+
+function openDrop() {
+  drop.ticked.clear();
+  said($('dropSaid'), '');
+  paintDrop();
+  $('dropDlg').showModal();
+}
+
+function paintDrop() {
+  const total = drop.dead || 0;
+  const when = drop.exits.reduce(
+    (latest, x) => (x.at && x.at > latest ? x.at : latest), 0);
+  // The date matters more than the count. A verdict from a week ago is a
+  // week-old guess about a fleet that moves, and somebody about to act on it
+  // should be told how old it is before they are told how many there are.
+  const ago = when ? ` The last test was ${whenAgo(when)}.` : '';
+  $('dropLede').innerHTML = total
+    ? `<b>${total} exits</b> did not answer when they were last asked.${ago} `
+      + 'They are still in the list, at the bottom, marked. An exit can miss '
+      + 'one bad thirty seconds on this line and answer perfectly a minute '
+      + 'later, so nothing here is deleted &mdash; what you take out is moved '
+      + 'to a folder called <b>dropped</b> and can be put back.'
+    : 'Everything in the list answered when it was last asked.';
+
+  const chips = $('dropFolders');
+  chips.textContent = '';
+  for (const f of drop.folders) {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip';
+    b.dataset.folder = f.path;
+    b.setAttribute('aria-pressed', String(drop.ticked.has(f.path)));
+    b.title = f.path;
+    const name = document.createElement('span');
+    name.textContent = f.label;
+    const n = document.createElement('span');
+    n.className = 'chip__count';
+    n.textContent = String(f.count);
+    b.append(name, n);
+    // pinned holds what a pin run resolved and nothing else does. Taking an
+    // exit out of it is not the same act as taking it out of a folder that
+    // was only ever a record of what worked, and the chip says so where the
+    // decision is being made.
+    if (/(^|\/)(pinned|configs|windscribe)$/.test(f.label)) {
+      const note = document.createElement('span');
+      note.className = 'chip__note';
+      note.textContent = 'originals';
+      b.append(note);
+    }
+    li.append(b);
+    chips.append(li);
+  }
+
+  paintDropList();
+  $('dropGo').disabled = !drop.ticked.size;
+
+  const back = $('dropBack');
+  back.hidden = !drop.aside;
+  if (drop.aside) {
+    const where = (drop.shelved || []).map((s) => s.label).join(', ');
+    $('dropBackWhy').textContent = `${drop.aside} set aside, ready to go back `
+      + `to ${where || 'where they came from'}.`;
+  }
+}
+
+function paintDropList() {
+  const box = $('dropList');
+  box.textContent = '';
+  const rows = drop.exits.filter((x) => drop.ticked.has(x.folder));
+  if (!rows.length) {
+    const p = document.createElement('p');
+    p.className = 'drop__empty';
+    p.textContent = drop.folders.length
+      ? 'Tick a folder to see what would come out of it.'
+      : 'Nothing to take out.';
+    box.append(p);
+    return;
+  }
+  // Worst first is the wrong order here. These are being read to be checked,
+  // not ranked, so they go in the order somebody would look for one: by
+  // place, with the folder named on the row when more than one is ticked.
+  const many = drop.ticked.size > 1;
+  rows.sort((a, b) => (a.country || '').localeCompare(b.country || '')
+    || (a.city || '').localeCompare(b.city || ''));
+  for (const x of rows) {
+    const row = document.createElement('div');
+    row.className = 'drop__row';
+
+    const where = document.createElement('span');
+    where.className = 'drop__where';
+    const place = [x.city, x.country ? x.country.toUpperCase() : '']
+      .filter(Boolean).join(' · ');
+    where.textContent = place || x.file;
+    if (many) where.textContent += `  —  ${x.tag}`;
+
+    const ip = document.createElement('span');
+    ip.className = 'drop__ip';
+    ip.textContent = x.ip || '';
+
+    const why = document.createElement('span');
+    why.className = 'drop__why';
+    why.textContent = x.why || 'no answer';
+
+    row.append(where, ip, why);
+    box.append(row);
+  }
+}
+
+/* How long ago, in the words a person would use. Not a timestamp: the point
+   of the sentence is whether the verdict is fresh enough to act on, and
+   "1788752940" answers that for nobody. */
+function whenAgo(at) {
+  const mins = Math.max(0, Math.round((Date.now() / 1000 - at) / 60));
+  if (mins < 2) return 'just now';
+  if (mins < 60) return `${mins} minutes ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return hours === 1 ? 'an hour ago' : `${hours} hours ago`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? 'yesterday' : `${days} days ago`;
+}
+
+async function dropGo() {
+  const btn = $('dropGo');
+  busy(btn, true);
+  said($('dropSaid'), 'Moving them…', 'work');
+  const r = await window.pywebview.api.dropExits([...drop.ticked]);
+  busy(btn, false);
+  if (!r || !r.ok) {
+    said($('dropSaid'), (r && r.error) || 'Could not move them.', 'bad');
+    return;
+  }
+  afterPoolChange(r);
+  drop.ticked.clear();
+  await refreshDead();
+  paintDrop();
+  said($('dropSaid'),
+    `${r.moved} set aside from ${r.folders.join(', ')}.`
+    + (r.failed ? ` ${r.failed} could not be moved.` : ''),
+    r.failed ? 'bad' : 'good');
+}
+
+async function dropRestore() {
+  const btn = $('dropRestore');
+  busy(btn, true);
+  said($('dropSaid'), 'Putting them back…', 'work');
+  const r = await window.pywebview.api.restoreDropped();
+  busy(btn, false);
+  if (!r || !r.ok) {
+    said($('dropSaid'), (r && r.error) || 'Could not put them back.', 'bad');
+    return;
+  }
+  afterPoolChange(r);
+  await refreshDead();
+  paintDrop();
+  said($('dropSaid'), `${r.back} put back.`
+    + (r.stuck ? ` ${r.stuck} could not be.` : ''), r.stuck ? 'bad' : 'good');
+}
+
+/* The list is a different list now, and everything cached about it is stale.
+   drawList memoises on a key that does not mention the server set, so the key
+   has to be cleared by hand - otherwise the picker goes on showing exits that
+   are not there any more. */
+function afterPoolChange(r) {
+  if (r.countries) {
+    state.countries = r.countries;
+    state.fuse = new Fuse(state.countries, {
+      keys: ['name', 'code', 'alias'], threshold: 0.4, ignoreLocation: true,
+    });
+  }
+  state.exits = {};
+  $('list').dataset.key = '';
+  drawList($('search').value.trim());
+  paintSourceHead();
+}
+
+$('dropOpen').addEventListener('click', async () => {
+  await refreshDead();
+  openDrop();
+});
+$('dropClose').addEventListener('click', () => shut($('dropDlg')));
+$('dropKeep').addEventListener('click', () => shut($('dropDlg')));
+$('dropGo').addEventListener('click', dropGo);
+$('dropRestore').addEventListener('click', dropRestore);
+$('dropFolders').addEventListener('click', (e) => {
+  const chip = e.target.closest('.chip[data-folder]');
+  if (!chip) return;
+  const path = chip.dataset.folder;
+  if (drop.ticked.has(path)) drop.ticked.delete(path);
+  else drop.ticked.add(path);
+  chip.setAttribute('aria-pressed', String(drop.ticked.has(path)));
+  paintDropList();
+  $('dropGo').disabled = !drop.ticked.size;
+  said($('dropSaid'), '');
+});
+
+/* ========================================================================
+   WHERE THE EXITS COME FROM
+
+   The app reads three folders at once and offers everything in them, which
+   is right until you want it not to. There was no way to say "only these":
+   the one control that narrowed anything refused to narrow onto a folder the
+   app already read, so choosing pinned silently widened back to all of them
+   and the count returned to what it was.
+
+   It lives on the line that was already above the list saying how many there
+   are. A row of chips under the search box would be permanent furniture for
+   a setting most people set once; the count was already there, and a count
+   that also says what it counted is one line doing two jobs rather than two
+   lines doing one each.
+   ======================================================================== */
+
+function paintSourceHead() {
+  const s = state.sources || {};
+  const row = (s.rows || []).find((r) => r.key === s.source);
+  $('sourceName').textContent = row ? row.name : 'All locations';
+  // Lit when it is anything but everything. A filter that is on and does not
+  // look on is how somebody comes to wonder where three hundred locations
+  // went.
+  $('sourcePick').dataset.narrow = (s.source && s.source !== 'all') ? '1' : '0';
+}
+
+async function openSource() {
+  const r = await window.pywebview.api.sources();
+  if (r && r.ok) state.sources = r;
+  paintSourceRows();
+  said($('srcSaid'), '');
+  $('srcDlg').showModal();
+}
+
+function paintSourceRows() {
+  const box = $('srcRows');
+  box.textContent = '';
+  const s = state.sources || {};
+  for (const r of (s.rows || [])) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'menu__row';
+    b.dataset.source = r.key;
+    b.setAttribute('aria-current', String(r.key === s.source));
+
+    const copy = document.createElement('span');
+    copy.className = 'menu__copy';
+    const name = document.createElement('span');
+    name.className = 'menu__name';
+    name.textContent = r.name;
+    const note = document.createElement('span');
+    note.className = 'menu__note';
+    note.textContent = r.note;
+    copy.append(name, note);
+
+    const n = document.createElement('span');
+    n.className = 'menu__n';
+    n.textContent = String(r.count);
+    // The tick is on every row and only visible on one. Appended to the
+    // chosen row alone, it took 23px out of that row and left its count
+    // sitting to the left of the other four - a column with one number out
+    // of line, which is the one fault a screenshot will not show you.
+    b.append(copy, n, icon('#i-check',
+      r.key === s.source ? 'menu__tick' : 'menu__tick is-off'));
+    box.append(b);
+  }
+}
+
+async function useSource(key) {
+  said($('srcSaid'), '');
+  const r = await window.pywebview.api.setSource(key);
+  if (!r || !r.ok) {
+    said($('srcSaid'), (r && r.error) || 'Could not switch to that.', 'bad');
+    return;
+  }
+  afterPoolChange(r);
+  const got = await window.pywebview.api.sources();
+  if (got && got.ok) state.sources = got;
+  paintSourceHead();
+  shut($('srcDlg'));
+}
+
+$('sourcePick').addEventListener('click', openSource);
+$('srcClose').addEventListener('click', () => shut($('srcDlg')));
+$('srcRows').addEventListener('click', (e) => {
+  const row = e.target.closest('.menu__row[data-source]');
+  if (row) useSource(row.dataset.source);
+});
+$('srcBrowse').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  busy(btn, true);
+  const r = await window.pywebview.api.chooseFolder();
+  busy(btn, false);
+  if (!r || !r.ok) {
+    if (r && r.error) said($('srcSaid'), r.error, 'bad');
+    return;
+  }
+  // chooseFolder only sets the folder. Saying it is now the source is this
+  // sheet's job, and going through setSource is what keeps the head of the
+  // list and the settings file agreeing about which pool is on.
+  await useSource(`folder:${r.folder}`);
 });

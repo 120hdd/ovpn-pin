@@ -1,6 +1,7 @@
 """Build Relay into a folder that is ready to run.
 
     python app/build.py
+    python app/build.py --public-release
 
 Three things this does beyond calling PyInstaller, each because leaving it
 out produced a real mistake:
@@ -43,8 +44,10 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-DIST = os.path.join(ROOT, 'dist')
-WORK = os.path.join(ROOT, 'build')
+PUBLIC_RELEASE = '--public-release' in sys.argv
+BUILD_ROOT = os.path.join(ROOT, 'release-build') if PUBLIC_RELEASE else ROOT
+DIST = os.path.join(BUILD_ROOT, 'dist')
+WORK = os.path.join(BUILD_ROOT, 'build')
 NAME = 'Relay'
 
 # The stash the run in progress is holding, so the failure path at the
@@ -85,8 +88,12 @@ KEEP = (
     '.state/tunnel',               # which CDN addresses answered, and when
     '.windscribe-auth',            # what opens Windscribe's exits
     '.ovpn-auth',                  # fallback only - see restore_user_data
+    '.state/dropped.json',         # where each set-aside exit came from
     'pinned',                      # what a pin run resolved - minutes of it
     'success',                     # and what a sweep measured
+    'dropped',                     # taken out by hand, and still restorable -
+                                   # a rebuild that lost these would make the
+                                   # undo the one button that does not work
     'windscribe',                  # the fetched fleet, waiting to be pinned
     'configs',                     # whatever was dropped in the inbox by hand
     'servers',                     # the shipped set, plus anything added to it
@@ -203,6 +210,48 @@ def find_servers():
     return None
 
 
+def public_configs():
+    """Only configs committed to git may enter a public build.
+
+    A normal build deliberately includes whatever its owner has dropped into
+    configs/.  That is useful on their machine and unsafe in a downloadable
+    artifact, where an untracked config can contain a private endpoint or
+    embedded key.  Refusing to guess when git is unavailable keeps the public
+    mode fail-closed.
+    """
+    try:
+        found = subprocess.run(
+            ['git', '-C', ROOT, 'ls-files', '--', 'configs/*.ovpn'],
+            capture_output=True, check=True, text=True, timeout=30).stdout
+    except Exception as exc:
+        raise RuntimeError(
+            'A public release must be built from a git checkout so only '
+            'tracked configs can be included.') from exc
+    return [os.path.join(ROOT, line.strip().replace('/', os.sep))
+            for line in found.splitlines() if line.strip()]
+
+
+def audit_public_output(out):
+    """Stop before packaging if user data somehow crossed into the build."""
+    forbidden = (
+        '.env', '.ovpn-auth', '.windscribe-auth', '.state', 'accounts.json',
+        'settings.json', 'windscribe.json', 'windscribe-meta.json',
+        'surfshark-meta.json', 'owners.tsv', 'reach.json', 'dropped.json',
+        'pinned', 'success', 'dropped', 'windscribe', 'servers',
+    )
+    found = []
+    for root, dirs, files in os.walk(out):
+        rel_root = os.path.relpath(root, out)
+        parts = [] if rel_root == '.' else rel_root.split(os.sep)
+        for name in dirs + files:
+            rel = os.path.join(*(parts + [name])) if parts else name
+            if name in forbidden or rel in forbidden:
+                found.append(rel)
+    if found:
+        raise RuntimeError(
+            'Public build contains private/runtime data: ' + ', '.join(found))
+
+
 def make_shortcut(target, folder, name, icon=None):
     """A .lnk via PowerShell, so there is nothing to install to make one."""
     link = os.path.join(folder, f'{name}.lnk')
@@ -272,17 +321,18 @@ def main():
     # dist/ apart, cannot remove the one file it is really after, and fails
     # somewhere later with a message about PyInstaller - by which point the
     # servers, the credentials and every pinned exit are gone.
-    if app_is_running():
+    if not PUBLIC_RELEASE and app_is_running():
         raise SystemExit(
             'Relay is running, and a build deletes the folder it is running\n'
             'from. Quit it from its tray icon first, then build.')
 
-    stop_tunnel_client()
+    if not PUBLIC_RELEASE:
+        stop_tunnel_client()
 
     # Out of the way before the delete, back in after it. Everything the last
     # build's app was told - the account, the tunnel domain, the session -
     # lives in the folder that is about to go.
-    kept = stash_user_data()
+    kept = None if PUBLIC_RELEASE else stash_user_data()
     global _KEPT
     _KEPT = kept
 
@@ -341,7 +391,7 @@ def main():
 
     # -- make it actually runnable ----------------------------------------
 
-    servers = find_servers()
+    servers = None if PUBLIC_RELEASE else find_servers()
     if servers:
         target = os.path.join(out, 'servers')
         os.makedirs(target, exist_ok=True)
@@ -362,15 +412,19 @@ def main():
     # section then opens saying it has nothing to do.
     inbox = os.path.join(out, 'configs')
     os.makedirs(inbox, exist_ok=True)
-    source = os.path.join(ROOT, 'configs')
     n = 0
-    try:
-        for f in os.listdir(source):
-            if f.endswith('.ovpn'):
-                shutil.copy2(os.path.join(source, f), os.path.join(inbox, f))
-                n += 1
-    except OSError:
-        pass
+    if PUBLIC_RELEASE:
+        config_files = public_configs()
+    else:
+        source = os.path.join(ROOT, 'configs')
+        try:
+            config_files = [os.path.join(source, f) for f in os.listdir(source)
+                            if f.endswith('.ovpn')]
+        except OSError:
+            config_files = []
+    for src in config_files:
+        shutil.copy2(src, os.path.join(inbox, os.path.basename(src)))
+        n += 1
     if n:
         print(f'inbox: {n} unpinned config(s) copied into configs/')
     else:
@@ -418,7 +472,8 @@ def main():
     # hundred addresses, with a deliberate wait between them - and without it
     # the "one per company" groupings come out as zero and the chips are an
     # empty row, which reads as broken rather than as unasked.
-    owners = os.path.join(ROOT, '.state', 'owners.tsv')
+    owners = ('' if PUBLIC_RELEASE
+              else os.path.join(ROOT, '.state', 'owners.tsv'))
     if os.path.isfile(owners):
         state = os.path.join(out, '.state')
         os.makedirs(state, exist_ok=True)
@@ -427,10 +482,12 @@ def main():
     else:
         print('landlords: none on record - the app can look them up itself')
 
-    auth = os.path.join(ROOT, '.ovpn-auth')
+    auth = '' if PUBLIC_RELEASE else os.path.join(ROOT, '.ovpn-auth')
     if os.path.isfile(auth):
         shutil.copy2(auth, os.path.join(out, '.ovpn-auth'))
         print('credentials: copied')
+    elif PUBLIC_RELEASE:
+        print('credentials: intentionally omitted from the public build')
     else:
         print('credentials: .ovpn-auth NOT FOUND - the app cannot connect')
 
@@ -446,14 +503,23 @@ def main():
     # it does not exist.
     shutil.rmtree(WORK, ignore_errors=True)
 
-    link = make_shortcut(exe, os.path.join(os.path.expanduser('~'), 'Desktop'),
-                         NAME, shortcut_icon)
+    if PUBLIC_RELEASE:
+        shutil.copy2(os.path.join(HERE, 'README.md'),
+                     os.path.join(out, 'README.md'))
+        audit_public_output(out)
+        link = None
+    else:
+        link = make_shortcut(
+            exe, os.path.join(os.path.expanduser('~'), 'Desktop'),
+            NAME, shortcut_icon)
 
     print()
     print('done.')
     print(f'   app       {exe}')
     if link:
         print(f'   shortcut  {link}')
+    if PUBLIC_RELEASE:
+        print('   mode      public release (no credentials or user state)')
     print()
     print(f'   check it   {NAME}.exe --selftest')
 

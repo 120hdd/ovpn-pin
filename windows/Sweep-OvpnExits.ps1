@@ -222,6 +222,15 @@ param(
 
     [switch]   $NoOwner,
 
+    # Take a config out of the folders that call it working, when this run
+    # finds it does not. Off unless asked for, and that is the whole of the
+    # setting: re-sweeping success\ used to prune it as a side effect of where
+    # it was pointed, so a run meant to measure came back having thrown things
+    # away, with no confirmation and nothing to undo it with. The window never
+    # passes this - it has a button that says what would go and puts it in
+    # dropped\ instead.
+    [switch]   $Prune,
+
     [string]   $OpenVpn,
     [string]   $AuthFile,
     [string]   $EnvFile,
@@ -820,6 +829,10 @@ function Remove-FromDir {
 # Re-sweeping the success folder is a re-test of things that used to work, so
 # one that no longer connects should not keep sitting in a folder that claims
 # otherwise. Only ever the copy - the original in pinned\ is untouched.
+#
+# Only ever when -Prune was asked for, too. This used to follow from where the
+# script was pointed, which meant the app - which points it at its own folder
+# every time - deleted part of its own list on every run and never said so.
 function Remove-Successful {
     param([IO.FileInfo] $Config, [string] $Dir, [string] $SiteDir)
     $base = Get-BaseConfigName $Config.Name
@@ -957,6 +970,7 @@ function Invoke-WslSweep {
         [int]      $First,
         [int]      $Timeout,
         [switch]   $Retest,
+        [switch]   $Prune,
         [string]   $SiteTestDir)
 
     Write-Head 'Sweeping from WSL'
@@ -1005,6 +1019,10 @@ function Invoke-WslSweep {
     $cmd = "cd '$lin' && bash ./linux/ovpn-connect.sh --sweep"
     if ($Filter)       { $cmd += " '$Filter'" }
     if ($Retest)       { $cmd += ' --retest' }
+    # Not implied by --retest on that side either, for the reason above
+    # Remove-Successful: the two halves have to agree about when a measuring
+    # run is allowed to delete, or the answer depends on which one you ran.
+    if ($Prune)        { $cmd += ' --prune' }
     if ($OnePer)         { $cmd += ' --one-per' }
     if ($OnePerLandlord) { $cmd += ' --one-per-landlord' }
     if ($OnePerLandlordLocation) { $cmd += ' --one-per-landlord-location' }
@@ -1044,10 +1062,11 @@ try {
     if (-not $SiteTestDir) { $SiteTestDir = Join-Path $root 'sitetest' }
 
     # Sweeping the success folder is a re-test of what worked last time rather
-    # than a survey of everything, and it behaves slightly differently: a
-    # config that no longer connects is taken out of it, because a folder that
-    # says these all work should not be quietly wrong. GetFullPath rather than
-    # Resolve-Path, which wants the folder to exist first.
+    # than a survey of everything, and it picks its configs differently for it.
+    # It no longer decides on its own that a config that stopped connecting
+    # should be taken out of the folder - that is -Prune's, and it is off
+    # unless someone asked. GetFullPath rather than Resolve-Path, which wants
+    # the folder to exist first.
     $retesting = ([IO.Path]::GetFullPath($PinnedDir).TrimEnd('\')) -eq
                  ([IO.Path]::GetFullPath($SuccessDir).TrimEnd('\'))
 
@@ -1064,7 +1083,7 @@ try {
                               -OnePerLandlordLocation:$OnePerLandlordLocation `
                               -Pick:$Pick -NoOwner:$NoOwner `
                               -First $First -Timeout $t -Retest:$retesting `
-                              -SiteTestDir $SiteTestDir)
+                              -Prune:$Prune -SiteTestDir $SiteTestDir)
     }
 
     if (-not (Test-Path $PinnedDir)) {
@@ -1362,7 +1381,7 @@ try {
         # so those go straight to the connect.
         if ($r.Proto -match '^tcp' -and -not (Test-Port $r.Ip $r.Port)) {
             Write-Bad 'the address does not answer - skipped'
-            if ($retesting -and (Remove-Successful $cfg $SuccessDir $SiteTestDir)) {
+            if ($retesting -and $Prune -and (Remove-Successful $cfg $SuccessDir $SiteTestDir)) {
                 Write-Info 'dropped from the folders that said it works - it does not answer any more'
             }
             $results += [pscustomobject]@{ Name = $base; Path = $cfg.FullName; Verdict = 'unreachable'; Exit = '-'; Owner = ''; Seconds = 0; Detail = 'address does not answer' }
@@ -1385,7 +1404,7 @@ try {
             if ($state -ne 'up') {
                 Write-Bad ("did not come up - $state [{0:n1}s]" -f ((Get-Date) - $t0).TotalSeconds)
                 Write-Info "log: $log"
-                if ($retesting -and (Remove-Successful $cfg $SuccessDir $SiteTestDir)) {
+                if ($retesting -and $Prune -and (Remove-Successful $cfg $SuccessDir $SiteTestDir)) {
                     Write-Info 'dropped from the folders that said it works - it does not connect any more'
                 }
                 $results += [pscustomobject]@{ Name = $base; Path = $cfg.FullName; Verdict = 'noconnect'; Exit = '-'; Owner = ''; Seconds = 0; Detail = $state }

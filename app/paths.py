@@ -79,6 +79,21 @@ SCRIPTS_DIR = DATA_DIR if FROZEN else os.path.join(DATA_DIR, 'windows')
 # gets the same app without moving anything.
 SERVER_DIRS = ('servers', 'success', 'pinned')
 
+# Where an exit goes when it is taken out of the list, rather than nowhere.
+# The sweep used to delete these outright, which is a fine thing to do to a
+# copy and the wrong thing to do to the only one - and either way it left the
+# person with no way of disagreeing after the fact. One folder per source
+# folder inside it, so putting one back is a move to a path that was written
+# down rather than a guess at where it came from.
+DROPPED = 'dropped'
+
+
+def dropped_dir():
+    return os.path.join(DATA_DIR, DROPPED)
+
+
+DROPPED_INDEX = os.path.join(STATE_DIR, 'dropped.json')
+
 
 def servers_dir():
     for name in SERVER_DIRS:

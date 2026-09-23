@@ -55,6 +55,7 @@ happens here, once, and the phone is on its own afterwards.
 """
 
 import argparse
+import datetime
 import glob
 import importlib.util
 import json
@@ -201,6 +202,42 @@ def gather(paths, limit, check=None, every_address=False):
 # typo in any of them is a config that loads and routes nowhere.
 TUNNEL_TAG = 'tunnel'
 GROUP_TAG = 'relay'
+
+
+# Where the phone's way into the server is remembered.
+#
+# install-server.sh generates the uuid once and never again - `[ -s ] ||` on
+# purpose, so a phone that already holds a config keeps working when the
+# server is reinstalled. That makes it a constant, and a constant nobody
+# writes down is one you go looking for on a box whose port 22 is blocked
+# from here. Until this file existed the only local copy lived inside
+# .state/mobile-tunnel.json, which is the file a tunnel run overwrites: one
+# run with the uuid mistyped and the last copy went with it.
+UUID_FILE = os.path.join(ROOT, '.state', 'tunnel', 'vless-uuid')
+
+
+def remembered_uuid():
+    """The uuid a previous run was given, or None."""
+    try:
+        with open(UUID_FILE, encoding='utf-8') as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def remember_uuid(uuid):
+    """Keep it, so --uuid only has to be typed the once.
+
+    Best effort: failing to write it is not a reason to refuse to write the
+    config the run was actually asked for.
+    """
+    try:
+        os.makedirs(os.path.dirname(UUID_FILE), exist_ok=True)
+        with open(UUID_FILE, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(uuid + '\n')
+        os.chmod(UUID_FILE, 0o600)
+    except OSError:
+        pass
 
 
 def tunnel_outbounds(tunnel, resolver=None, interval='30m'):
@@ -462,6 +499,12 @@ def clash_yaml(exits, user, password, exit_port, interval, nodes_only=False,
         '# DoH on a machine that could still do it - so nothing here depends on',
         '# a resolver answering honestly.',
         '#',
+        f'# Account {user}, written {datetime.date.today()}. The credentials',
+        '# are frozen in here. Rotate the account and this file goes on',
+        '# offering the old one, which every exit answers with a 407 - a node',
+        '# list where nothing connects and no client says why. Compare that',
+        '# name with the first line of .ovpn-auth before blaming the phone.',
+        '#',
         '# skip-cert-verify is on, and it is not laziness. Clash sends whatever',
         '# `sni` says, so naming the exit there puts *.prod.surfshark.com in the',
         '# clear and the handshake dies on the way out; leaving it off means the',
@@ -612,7 +655,9 @@ def main():
                         'The phone gets both ways out and a picker between '
                         'them. Needs --uuid')
     p.add_argument('--uuid',
-                   help='the VLESS uuid install-server.sh printed')
+                   help='the VLESS uuid install-server.sh printed. Needed '
+                        'once: it is kept in .state/tunnel/vless-uuid and '
+                        'reused by every later --tunnel run')
     p.add_argument('--ws-path', default='/vl',
                    help='the path on that domain (/vl)')
     p.add_argument('--edge', action='append', metavar='IP',
@@ -625,9 +670,20 @@ def main():
                         'filtered')
     args = p.parse_args()
 
-    if args.tunnel and not args.uuid:
-        p.error('--tunnel needs --uuid: the domain says where the server is, '
-                'the uuid is what lets you in. install-server.sh prints both.')
+    if args.tunnel:
+        if args.uuid:
+            remember_uuid(args.uuid)
+        else:
+            args.uuid = remembered_uuid()
+            if not args.uuid:
+                p.error(
+                    '--tunnel needs --uuid the first time: the domain says '
+                    'where the server is, the uuid is what lets you in. '
+                    'install-server.sh prints both, under "And for phones", '
+                    'and keeps the uuid in /etc/gost/vless.uuid. Given once, '
+                    f'it is remembered in {UUID_FILE} and every later run can '
+                    'leave it out.')
+            print(f'\n  uuid remembered from an earlier run ({UUID_FILE})')
 
     # Which addresses the phone should dial the CDN at. Measured rather than
     # asked for, because the answer changes: the two the domain resolves to

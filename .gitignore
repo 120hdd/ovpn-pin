@@ -3,6 +3,10 @@ success/
 sitetest/
 proxy-ok/
 
+# Exits taken out of the list by hand, kept so they can be put back. Same
+# contents as the folders above, and the same reason for staying out of git.
+dropped/
+
 # Written from Windscribe's published list, not by hand - 356 files that are
 # a download rather than a source, and stale the moment the fleet changes.
 windscribe/
@@ -41,6 +45,7 @@ __pycache__/
 # built app, and PyInstaller working files
 dist/
 build/
+release-build/
 
 # The tunnel client binary. 48 MB of somebody else's release; the
 # installer and the build fetch it rather than the repo carrying it.

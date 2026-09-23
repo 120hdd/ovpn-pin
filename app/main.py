@@ -43,6 +43,21 @@ sys.path.insert(0, HERE)
 
 import paths                                                 # noqa: E402
 
+# --ui-drive presses the buttons that move .ovpn files about, so it is given
+# a tree of its own to move them in. Redirected here, above every other
+# import: engine computes REACH_PATH from paths.STATE_DIR the moment it is
+# imported, and a run whose window used a fixture while its engine read the
+# real folders would prove nothing about either.
+if '--ui-drive' in sys.argv:
+    import uidrive
+    _DRIVE_TREE = uidrive.fixture()
+    paths.DATA_DIR = _DRIVE_TREE
+    paths.STATE_DIR = os.path.join(_DRIVE_TREE, '.state')
+    paths.AUTH_FILE = os.path.join(_DRIVE_TREE, '.ovpn-auth')
+    paths.SAVED_PROXY = os.path.join(paths.STATE_DIR,
+                                     'system-proxy-before.json')
+    paths.DROPPED_INDEX = os.path.join(paths.STATE_DIR, 'dropped.json')
+
 APP_ID = 'ovpnpin.relay'
 APP_NAME = 'Relay'
 
@@ -222,7 +237,8 @@ def run_selftest():
         # actually offering 125 from the other provider. A diagnostic whose
         # numbers are not the app's numbers sends whoever reads it the wrong
         # way, which is worse than not printing them.
-        if not saved.get('folderIsSite'):
+        if (saved.get('source') or
+                ('folder:x' if saved.get('folderIsSite') else 'all')) == 'all':
             for name in paths.SERVER_DIRS:
                 path = os.path.join(paths.DATA_DIR, name)
                 if os.path.isdir(path) and path not in e.folders:
@@ -241,15 +257,43 @@ def run_selftest():
         # diagnostic - the status, which is the part anyone actually wants -
         # down with it. A self-test that stops at the first missing thing
         # reports the first missing thing and nothing else.
+        #
+        # Whether the file matches the account, and not only whether it has
+        # two lines in it. Those are different questions and the second one
+        # was the only one being asked: a credential file holding an older
+        # account than the roster reads as a healthy True here, while every
+        # exit answers 407 and the window blames the fleet. That happened -
+        # 27 of 37 Surfshark exits refused, and this line said the
+        # credentials were fine throughout.
+        #
+        # The username only. It is not a secret - it is in the roster in
+        # clear and on the provider's own setup page - and this file is
+        # written to be pasted into a chat window when something is wrong.
         out['credentials'] = {}
+        try:
+            active = accounts.load().get('active') or {}
+        except Exception:
+            active = {}
         for name, path in ((accounts.SURFSHARK, paths.AUTH_FILE),
                            (accounts.WINDSCRIBE, windscribe.AUTH_FILE)):
+            got = {'file': False, 'user': None,
+                   'activeAccount': None, 'matches': None}
             try:
                 with open(path, encoding='utf-8') as f:
                     lines = [line.strip() for line in f if line.strip()]
-                out['credentials'][name] = len(lines) >= 2
+                got['file'] = len(lines) >= 2
+                got['user'] = lines[0] if lines else None
             except OSError:
-                out['credentials'][name] = False
+                pass
+            account = accounts.find(active.get(name) or '')
+            if account:
+                secrets = accounts.secrets(account['id']) or {}
+                want = (secrets.get('username') if name == accounts.SURFSHARK
+                        else (secrets.get('proxy') or ('', ''))[0])
+                got['activeAccount'] = want or None
+                if want and got['user']:
+                    got['matches'] = got['user'] == want
+            out['credentials'][name] = got
         out['status'] = e.status()
     except Exception as exc:
         out['engineError'] = repr(exc)
@@ -343,6 +387,7 @@ except Exception:
 # because it happens before there is any CSS.
 os.environ.setdefault('WEBVIEW2_DEFAULT_BACKGROUND_COLOR', '00111113')
 
+import dropped                                               # noqa: E402
 import engine                                                # noqa: E402
 import pin                                                   # noqa: E402
 import sweep                                                 # noqa: E402
@@ -380,6 +425,8 @@ class Api:
         self._pin = pin.Pin()
         self._apply_sources()
         self._sync_providers()
+        # Before anything can be dialled with the wrong one.
+        self._reconcile_credentials()
         # Spans the two halves of a Windscribe sign-in - the name and password
         # that fetched a puzzle, waiting for the puzzle to be let go of.
         self._ws_pending = None
@@ -484,6 +531,67 @@ class Api:
             save_settings(self._settings)
         return chosen
 
+    def _reconcile_credentials(self):
+        """Make the file the proxy reads match the account said to be in use.
+
+        Nothing downstream knows about accounts - the engine opens
+        .ovpn-auth, the sweep scripts read .env - so activating an account
+        means writing those files, and _write_active is the only thing that
+        does it. It runs when an account is added or switched to, and never
+        again. That is one write against a file three other things also
+        touch, and they drift:
+
+          the build copies a fresh .ovpn-auth out of the repo and carries
+          accounts.json across separately, so a rebuild can pair a new
+          roster with an old credential;
+
+          .env is edited by hand and by the shell half, and it wins - the
+          next sweep rewrites .ovpn-auth from it.
+
+        Measured, on this machine: the roster's Surfshark account was
+        accepted by 11 of 11 exits and the one in .ovpn-auth by 0 of 11, 407
+        every time. The window showed the working account as active and
+        dialled with the other, so every exit read as "no proxy for this
+        account" - a sentence about the fleet, printed because of a file.
+
+        Checked rather than rewritten. Writing the credential out at every
+        start would touch .env on machines where nothing is wrong, and the
+        comparison costs one line of one file.
+        """
+        fixed = []
+        try:
+            active = accounts.load().get('active') or {}
+        except Exception:
+            return fixed
+
+        for provider, path in ((accounts.SURFSHARK, paths.AUTH_FILE),
+                               (accounts.WINDSCRIBE, windscribe.AUTH_FILE)):
+            account = accounts.find(active.get(provider) or '')
+            if not account:
+                continue
+            got = accounts.secrets(account['id']) or {}
+            # Both files are two lines, username first - windscribe writes
+            # its proxy credential in .ovpn-auth's shape precisely so that
+            # one reader does for both.
+            want = (got.get('username') if provider == accounts.SURFSHARK
+                    else (got.get('proxy') or ('', ''))[0])
+            if not want:
+                continue
+            try:
+                with open(path, encoding='utf-8') as f:
+                    on_disk = f.readline().strip()
+            except OSError:
+                on_disk = ''
+            if on_disk == want:
+                continue
+            # _write_active rather than a write here: for Surfshark it goes
+            # through the engine's own writer, which is what keeps .env in
+            # step - and .env is the copy that would otherwise undo this on
+            # the next sweep.
+            if not self._write_active(account):
+                fixed.append(provider)
+        return fixed
+
     def _forget_provider(self, provider):
         """Take away what the app was using to sign in as that provider.
 
@@ -507,6 +615,7 @@ class Api:
                 'serverCount': len(self._engine.servers()),
                 'folder': self._engine.folder,
                 'folders': self._engine.sources(),
+                'sources': self.sources(),
                 'providers': sorted(self._engine.providers)
                 if self._engine.providers is not None else None,
                 'providerState': self._provider_state(),
@@ -717,9 +826,11 @@ class Api:
         # And back to reading every folder, which is what "the servers that
         # came with the app" means once there is more than one provider.
         self._settings.pop('folderIsSite', None)
+        self._settings['source'] = 'all'
         save_settings(self._settings)
         self._apply_sources()
         return {'ok': True, 'folder': self._engine.folder,
+                'source': 'all',
                 'folders': self._engine.sources()}
 
     def copy(self, text):
@@ -1109,22 +1220,38 @@ class Api:
     def _apply_sources(self):
         """Which folders the engine reads.
 
-        The chosen folder first, and then the other places pinned configs
-        land. Both providers have to be visible at once for "use both" to
-        mean anything, and they do not share a folder: Surfshark's configs
-        are downloaded and pinned, Windscribe's are fetched and pinned, and
-        nobody should have to merge two folders by hand to have both offered.
+        Everything, or one thing, and the setting says which. `all` is the
+        chosen folder plus the other places pinned configs land: both
+        providers have to be visible at once for "use both" to mean anything,
+        and they do not share a folder - Surfshark's configs are downloaded
+        and pinned, Windscribe's are fetched and pinned, and nobody should
+        have to merge two folders by hand to have both offered.
 
-        Picking a site's folder is the one case that narrows rather than
-        widens - see useSiteFolder, which is the whole point of that feature.
+        Anything else is one folder and nothing beside it. That used to be
+        allowed only for a site folder, with a guard against narrowing onto
+        one of the standard three - because back then narrowing was a side
+        effect of a button called "connect through these" and never something
+        anyone asked for by name. It is asked for by name now, so the guard
+        would be refusing the request; what stands in its place is that the
+        head of the list says which source is on at all times, so exits
+        cannot go missing without the reason being on screen.
         """
+        source = self._source()
         folders = [self._engine.folder]
-        if not self._narrowed():
+        if source == 'all':
             for name in paths.SERVER_DIRS:
                 path = os.path.join(paths.DATA_DIR, name)
                 if os.path.isdir(path) and path not in folders:
                     folders.append(path)
         self._engine.folders = folders
+        # Cleared before it is worked out, not after. _starred_files reads
+        # the servers on offer to turn a favourite into filenames, and with
+        # the old filter still on it would only ever see what the last one
+        # let through - a list that could shrink on every call and never
+        # grow back.
+        self._engine.only_files = None
+        if source == 'starred':
+            self._engine.only_files = self._starred_files()
         return folders
 
     @staticmethod
@@ -1138,27 +1265,62 @@ class Api:
                 os.path.join(paths.DATA_DIR, name)))
             for name in paths.SERVER_DIRS)
 
-    def _narrowed(self):
-        """Whether to read one folder instead of all of them.
+    def _source(self):
+        """Which pool to connect out of: `all`, or one named source.
 
-        Only ever for a site folder - a pile somebody swept against one site,
-        where the whole point is that nothing else is offered.
-
-        Never for a folder the app reads anyway, and that guard is the whole
-        reason this is a method. `pinned/` is in SERVER_DIRS, and "Connect
-        through these" after a pin run goes through useSiteFolder, so pinning
-        Windscribe narrowed the app onto pinned/ - which cannot add anything,
-        because it was already being read, and could only take servers/ away
-        with the 37 Surfshark exits in it. Surfshark then reported "none
-        pinned" minutes after being the only provider that worked.
-
-        Written as a test rather than only fixed where it is set, so that a
-        settings file already carrying folderIsSite over pinned/ - which is
-        what that button leaves behind - comes right on the next start
-        instead of staying wrong until somebody presses Reset.
+        Read through a method rather than off the settings dict so that a
+        settings file written before this existed still comes up right. The
+        old shape was a folder plus a folderIsSite flag, which said "narrowed"
+        without saying onto what; it is mapped once, here, and then forgotten.
         """
-        return (bool(self._settings.get('folderIsSite'))
-                and not self._standard_source(self._engine.folder))
+        source = self._settings.get('source')
+        if source:
+            return source
+        if self._settings.get('folderIsSite'):
+            return f'folder:{self._engine.folder}'
+        return 'all'
+
+    def _source_folder(self, source):
+        """The folder a source names, or None for the ones that are not one."""
+        if source in ('all', 'starred'):
+            return None
+        if source.startswith('folder:'):
+            return source[7:]
+        if source.startswith('site:'):
+            return os.path.join(sweep.sitetest_dir(), source[5:])
+        return os.path.join(paths.DATA_DIR,
+                            {'pinned': 'pinned',
+                             'verified': self._verified_name()}.get(source, ''))
+
+    @staticmethod
+    def _verified_name():
+        """What this copy calls the folder of things that connected.
+
+        A shipped copy carries `servers/` and a repo has `success/`; they hold
+        the same thing under two names, and only one of them exists at a time.
+        """
+        for name in ('success', 'servers'):
+            path = os.path.join(paths.DATA_DIR, name)
+            try:
+                if any(f.endswith('.ovpn') for f in os.listdir(path)):
+                    return name
+            except OSError:
+                continue
+        return 'success'
+
+    def _starred_files(self):
+        """The config filenames behind the starred places.
+
+        Favourites are picker codes - a country, a city, one provider's share
+        of a country, a single exit - and _pool_for already turns any of those
+        into servers. Resolved to filenames so the engine can filter on them
+        without knowing what a favourite is.
+        """
+        out = set()
+        for code in (self._settings.get('favourites') or []):
+            for s in self._pool_for(code):
+                out.add(s.file)
+        return out
 
     def setProviders(self, providers=None):
         """Which providers to offer exits from.
@@ -1212,15 +1374,179 @@ class Api:
         # that were measured getting into this site", and quietly reading the
         # other folders beside it would give back exactly what was excluded.
         #
-        # Except for the three folders the app reads anyway - see _narrowed.
-        # Narrowing onto one of those excludes the other two and includes
-        # nothing, which is not a filter, it is a way to lose a provider.
-        self._settings['folderIsSite'] = not self._standard_source(folder)
+        # Said as a source rather than as a flag, so that the head of the list
+        # can name it. The old flag could say "narrowed" but not onto what,
+        # which is how narrowing onto pinned/ - a folder that was already
+        # being read - managed to look like a filter while its only effect
+        # was to drop the Surfshark folder beside it.
+        self._settings['source'] = self._source_for_folder(folder)
+        self._settings.pop('folderIsSite', None)
         save_settings(self._settings)
         self._apply_sources()
         return {'ok': True, 'folder': folder,
-                'narrowed': self._narrowed(),
+                'source': self._settings['source'],
+                'narrowed': self._settings['source'] != 'all',
                 'count': len(sweep.configs_in(folder))}
+
+    def _source_for_folder(self, folder):
+        """The source name for a folder, so the same place is spelled one way.
+
+        A folder picked out of the file dialog that happens to be pinned/ is
+        the pinned source, not a stranger with the same path - otherwise the
+        list head would say "a folder of your own" about the app's own folder,
+        and switching to Pinned afterwards would look like a different place.
+        """
+        here = os.path.normcase(os.path.abspath(folder))
+
+        def same(path):
+            return here == os.path.normcase(os.path.abspath(path))
+
+        if same(os.path.join(paths.DATA_DIR, 'pinned')):
+            return 'pinned'
+        if same(os.path.join(paths.DATA_DIR, self._verified_name())):
+            return 'verified'
+        site = sweep.sitetest_dir()
+        if os.path.normcase(os.path.abspath(os.path.dirname(folder))) == \
+                os.path.normcase(os.path.abspath(site)):
+            return f'site:{os.path.basename(os.path.normpath(folder))}'
+        return f'folder:{folder}'
+
+    # -- which pool to connect out of --------------------------------------
+
+    def _count_in(self, folders, only=None):
+        """What a source would offer: how many places, and how many exits.
+
+        Counted the way the list counts, not by listing .ovpn files: a folder
+        of 352 Windscribe configs offers nothing at all while only Surfshark
+        is selected, and a row promising 352 that opens onto an empty list is
+        worse than no number.
+
+        Both numbers, because the sheet needs them for different jobs. The
+        line above the list has always counted places - it used to read "All
+        locations, 99" - so the column in the chooser has to be places too,
+        or picking Pinned would set a line saying 99 from a row that said
+        1564. The exits are the size of the pool and belong in the sentence.
+        """
+        was = (self._engine.folder, self._engine.folders,
+               self._engine.only_files)
+        try:
+            # The primary folder as well, not only the list. sources() is
+            # [folder] + folders, so setting the list alone left whatever is
+            # currently chosen on the front of every count - and Pinned and
+            # Everything both came back 1601 on a tree where pinned holds
+            # 1564. A count that is the same for two different answers is
+            # worse than no count.
+            self._engine.folder = folders[0]
+            self._engine.folders = list(folders)
+            self._engine.only_files = only
+            got = self._engine.servers()
+            return len({s.country for s in got}), len(got)
+        finally:
+            (self._engine.folder, self._engine.folders,
+             self._engine.only_files) = was
+
+    def sources(self):
+        """The pools worth offering, with what each one holds.
+
+        Every row is somewhere exits already are - no row is offered for a
+        folder that does not exist, because a source with nothing in it is a
+        way to empty the list and then wonder why.
+        """
+        here = self._source()
+        rows = []
+
+        def row(key, name, note, folders, only=None):
+            """One choice, or nothing at all if it would offer nothing."""
+            places, exits = self._count_in(folders, only)
+            if not places:
+                return
+            # The size of the pool goes in the sentence rather than in the
+            # column. Two bare numbers on a row - 99 and 1564 - is a row
+            # nobody can read, and only one of them is what the line above
+            # the list is about to say.
+            rows.append({'key': key, 'name': name,
+                         'note': f'{exits} exits · {note}',
+                         'count': places, 'exits': exits})
+
+        every = [self._engine.folder]
+        for name in paths.SERVER_DIRS:
+            path = os.path.join(paths.DATA_DIR, name)
+            if os.path.isdir(path) and path not in every:
+                every.append(path)
+        row('all', 'Everything', 'every folder the app reads', every)
+
+        verified = self._verified_name()
+        for key, folder, name, note in (
+                ('pinned', 'pinned', 'Pinned',
+                 'each one resolved to an address'),
+                ('verified', verified, 'Verified',
+                 'what actually connected, with its times')):
+            path = os.path.join(paths.DATA_DIR, folder)
+            if os.path.isdir(path):
+                row(key, name, note, [path])
+
+        if self._settings.get('favourites'):
+            starred = self._starred_files()
+            if starred:
+                row('starred', 'Starred', 'only the places you picked out',
+                    every, starred)
+
+        try:
+            sites = sorted(os.listdir(sweep.sitetest_dir()))
+        except OSError:
+            sites = []
+        for name in sites:
+            path = os.path.join(sweep.sitetest_dir(), name)
+            if os.path.isdir(path):
+                # The folder is named www-reddit-com because a folder cannot
+                # be called www.reddit.com on Windows without inviting
+                # trouble. The row is about the site, so it says the site.
+                row(f'site:{name}', name.replace('-', '.'),
+                    'measured getting into this site', [path])
+
+        # A folder of somebody's own is only a row once it is the one in use;
+        # before that it is the button underneath, which opens a file dialog.
+        if here.startswith('folder:'):
+            folder = here[7:]
+            row(here, os.path.basename(os.path.normpath(folder)) or folder,
+                folder, [folder])
+
+        keys = {r['key'] for r in rows}
+        return {'ok': True, 'rows': rows,
+                # A source whose folder has since gone reads as Everything
+                # rather than as a name with nothing behind it.
+                'source': here if here in keys else 'all'}
+
+    def setSource(self, source=None):
+        """Connect out of this pool from now on."""
+        source = source or 'all'
+        if source not in {r['key'] for r in self.sources()['rows']}:
+            return {'ok': False, 'error': 'There is nothing in that one.'}
+
+        folder = self._source_folder(source)
+        if folder:
+            if not os.path.isdir(folder):
+                return {'ok': False, 'error': 'That folder is not there any '
+                                              'more.'}
+            self._engine.folder = folder
+            self._settings['folder'] = folder
+        elif source == 'all':
+            # Back to the folder the app would have chosen for itself. Leaving
+            # the last narrow choice as the primary would put it first in the
+            # union - harmless for what is offered, misleading for what the
+            # settings sheet says the folder is.
+            self._engine.folder = paths.servers_dir()
+            self._settings.pop('folder', None)
+
+        self._settings['source'] = source
+        self._settings.pop('folderIsSite', None)
+        save_settings(self._settings)
+        self._apply_sources()
+        return {'ok': True, 'source': source,
+                'folder': self._engine.folder,
+                'folders': self._engine.sources(),
+                'countries': self._engine.catalogue(),
+                'serverCount': len(self._engine.servers())}
 
     def startSweep(self, folder=None):
         return self._sweep.start(
@@ -1434,6 +1760,12 @@ class Api:
             try:
                 out = self._engine.test_reach(
                     lambda p: self._emit('Reach', p), only=only)
+                # Moved out of the way of `ok`, which every call in this
+                # class uses for "the call worked" and which was being set
+                # over the top of it here - so the count reached the page as
+                # `true`, printed itself as "true of 37 answered", and left
+                # the test that names a credential problem reading !true.
+                out['answered'] = out.pop('ok', 0)
                 out['ok'] = True
                 out['code'] = code
                 out['countries'] = self._engine.catalogue()
@@ -1450,6 +1782,124 @@ class Api:
     def cancelReach(self):
         self._engine.cancelled.set()
         return {'ok': True}
+
+    # -- taking the dead ones out, on purpose ------------------------------
+
+    def _dead(self):
+        """The exits the last test refused, by filename.
+
+        `ok is False` and nothing else. `ok is None` is what _second_look
+        leaves on an exit it asked twice and could not judge, and treating
+        "we could not tell" as "it is dead" is how one bad thirty seconds on
+        this line used to cost a provider its whole fleet.
+        """
+        return {f: rec for f, rec in self._engine.reach().items()
+                if rec.get('ok') is False}
+
+    def deadExits(self):
+        """What would go, where from, and why - without anything going.
+
+        The header button opens this and nothing else. Every folder holding a
+        copy is offered separately, including pinned/, because the folders
+        mean different things: one says these connected once, one holds the
+        only copy there is. Which of them to take a config out of is a
+        judgement, so it is asked rather than assumed.
+        """
+        dead = self._dead()
+        if not dead:
+            return {'ok': True, 'folders': [], 'exits': [], 'shelved': [],
+                    'aside': sum(s['count']
+                                 for s in dropped.shelved().values())}
+        by_base = {sweep.base_name(f): rec for f, rec in dead.items()}
+        folders = dropped.folders_holding(set(by_base), self._engine.sources())
+        notes = windscribe.meta()
+
+        # One row per file per folder: the same exit in success\ and in
+        # pinned\ is two files, and the sheet has to be able to say that one
+        # of them is being taken and the other left.
+        seen = {}
+        for s in self._engine.scan():
+            seen.setdefault(sweep.base_name(s.file), s)
+        rows = []
+        for folder in folders:
+            for name in folder['files']:
+                base = sweep.base_name(name)
+                s = seen.get(base)
+                # Whichever copy was the tested one carries the verdict; the
+                # others are the same config under another name, and inherit
+                # it through the base they share.
+                rec = by_base.get(base) or {}
+                rows.append({
+                    'file': name,
+                    'folder': folder['path'],
+                    'tag': folder['tag'],
+                    'country': s.country if s else '',
+                    'city': (self._engine.city_of(s, notes)[1] if s else ''),
+                    'provider': s.provider if s else '',
+                    'ip': rec.get('ip', ''),
+                    'why': rec.get('why', ''),
+                    'at': rec.get('at'),
+                })
+        shelves = dropped.shelved()
+        return {'ok': True,
+                'folders': [{k: v for k, v in f.items() if k != 'files'}
+                            for f in folders],
+                'exits': rows,
+                # Exits, not rows. The same config in two folders is two
+                # files and one exit, and the header says how many stopped
+                # answering - which is a fact about exits.
+                'dead': len({sweep.base_name(r['file']) for r in rows}),
+                'shelved': sorted(shelves.values(),
+                                  key=lambda x: x['label']),
+                'aside': sum(s['count'] for s in shelves.values())}
+
+    def dropExits(self, folders=None):
+        """Move the dead ones out of the folders that were ticked.
+
+        Only folders deadExits() just offered, and only the files it named.
+        A path arriving from the page that is not on that list is refused
+        rather than acted on - this is the one call in here that moves
+        somebody's configs about, and "whatever the page said" is not a good
+        enough reason to.
+        """
+        wanted = {os.path.normcase(os.path.abspath(f))
+                  for f in (folders or []) if f}
+        if not wanted:
+            return {'ok': False, 'error': 'Nothing was ticked.'}
+
+        dead = self._dead()
+        # By base name, so the reason is found for the pinned copy of an exit
+        # as well as for the timed one the verdict was written against.
+        why = {sweep.base_name(f): (rec.get('why') or '')
+               for f, rec in dead.items()}
+        offered = dropped.folders_holding(set(why), self._engine.sources())
+
+        moved, failed, folders_done = [], [], []
+        for folder in offered:
+            if os.path.normcase(folder['path']) not in wanted:
+                continue
+            went, stuck = dropped.put_aside(folder['path'], folder['files'],
+                                            why)
+            moved += went
+            failed += stuck
+            if went:
+                folders_done.append(folder['label'])
+        if not moved and not failed:
+            return {'ok': False, 'error': 'Those folders hold none of them '
+                                          'any more.'}
+        return {'ok': True, 'moved': len(moved), 'failed': len(failed),
+                'folders': folders_done,
+                'countries': self._engine.catalogue(),
+                'serverCount': len(self._engine.servers())}
+
+    def restoreDropped(self, tags=None):
+        """Put them back where they came from."""
+        back, stuck = dropped.put_back(tags or None)
+        if not back and not stuck:
+            return {'ok': False, 'error': 'There is nothing set aside.'}
+        return {'ok': True, 'back': len(back), 'stuck': len(stuck),
+                'countries': self._engine.catalogue(),
+                'serverCount': len(self._engine.servers())}
 
     def exitsIn(self, country, provider=None):
         """The individual exits behind one country or city, with their times."""
@@ -3147,6 +3597,10 @@ def main():
                 traceback.print_exc()
         if '--ui-check' in sys.argv:
             threading.Thread(target=ui_check, args=(window,),
+                             daemon=True).start()
+        if '--ui-drive' in sys.argv:
+            import uidrive
+            threading.Thread(target=uidrive.run, args=(window,),
                              daemon=True).start()
         if '--ui-layout' in sys.argv:
             # An optional scene name after the flag, for the loop where you

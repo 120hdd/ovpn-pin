@@ -416,6 +416,12 @@ core/ovpn-mobile.py pinned --count 20 \
     --tunnel yourdomain.com --uuid <the uuid the installer printed>
 ```
 
+`--uuid` is needed the once. The installer generates it on the server and
+never again, so it is a constant: given here, it is kept in
+`.state/tunnel/vless-uuid` and every later `--tunnel` run picks it up on
+its own. Lose it and it is `cat /etc/gost/vless.uuid` on the server, or
+another run of the installer, which prints it again.
+
 The file keeps its shape. The way in goes in front, each exit gains a
 `detour` — `dialer-proxy`, in Clash — and a selector goes on the end, so the
 phone has both ways out and switches between them in its own proxy picker.

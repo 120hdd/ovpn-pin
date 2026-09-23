@@ -172,12 +172,68 @@ def _exits(p):
          " if (m) m.click(); })()", 1.2)
 
 
+def _sorted(p):
+    """The sort strip on a choice that has no data behind it.
+
+    Two of the three sorts read a figure the list may not have - nothing has
+    a time until a test is run, and only some providers say how loaded a
+    server is - so pressing them puts the note underneath into a sentence
+    the other states never show. It is also the only state where the lit
+    backing under the icons is anywhere but its resting place, which is the
+    part that was broken: it was measured at zero width and stayed there.
+    """
+    for _ in range(20):
+        if (p.ask("document.querySelectorAll('#list .row').length") or 0) > 20:
+            break
+        time.sleep(0.15)
+    p.do("document.querySelector('#sortBy [data-sort=\"load\"]').click()", 0.7)
+
+
+def _unsorted(p):
+    p.do("document.querySelector('#sortBy [data-sort=\"ping\"]').click()", 0.5)
+
+
 def _prefs(p):
     p.click('#settings', 1.0)
 
 
 def _shut_prefs(p):
     p.do("document.getElementById('prefs').close()")
+
+
+def _prefs_working(p):
+    """The settings sheet with something in flight.
+
+    Its own state because it is one: a button that is turning, a note with
+    the light passing along it, a pill saying it does not know yet, and the
+    floor running amber behind all of it. Nothing about that layout is
+    implied by the resting screen, and a busy state nobody photographs is a
+    busy state that drifts.
+
+    Driven through the page's own busy() and said() rather than by setting
+    the attributes by hand, so that a scene which stops matching the app
+    fails here instead of quietly photographing something the app can no
+    longer produce.
+    """
+    p.click('#settings', 1.0)
+    p.click('.menu__row[data-goto="connection"]', 0.5)
+    p.do("document.getElementById('prefsBody').scrollTop = 720", 0.2)
+    p.do("busy(document.getElementById('tunnelTest'), true);"
+         "said(document.getElementById('tunnelSaid'),"
+         "     'Starting the client and asking the server…', 'work');"
+         "var pill = document.getElementById('tunnelPill');"
+         "pill.dataset.state = 'work'; pill.textContent = 'asking'", 0.5)
+
+
+def _shut_prefs_working(p):
+    p.do("busy(document.getElementById('tunnelTest'), false);"
+         "said(document.getElementById('tunnelSaid'), '');"
+         # Put the pill back from where it came, rather than from a guess:
+         # paintTunnel on an empty object would leave it reading "no client"
+         # for every state after this one.
+         "if (state.tunnel) paintTunnel(state.tunnel);"
+         "showScreen(null);"
+         "document.getElementById('prefs').close()")
 
 
 def _log(p):
@@ -188,8 +244,90 @@ def _shut_log(p):
     p.do("document.getElementById('log').close()")
 
 
+def _dead_mark(p):
+    """The header with the count on it.
+
+    Its own state because the mark is only ever there on a bad day, and a
+    thing nobody photographs is a thing that drifts. Three digits rather than
+    one: the count sits outside the button's box and has to be able to grow
+    without moving anything in the bar.
+    """
+    p.do("(() => { const b = document.getElementById('dropOpen');"
+         " b.hidden = false; b.dataset.n = '151'; })()", 0.5)
+
+
+def _no_dead_mark(p):
+    p.do("(() => { const b = document.getElementById('dropOpen');"
+         " b.hidden = true; b.dataset.n = '0'; })()")
+
+
+def _source(p):
+    """The pools to connect out of, opened off the head of the list.
+
+    Reached through the picker, because that is where it lives - the line it
+    hangs off is the one counting the list, and there is no list without the
+    picker open.
+    """
+    _picker(p)
+    p.click('#sourcePick', 0.8)
+
+
+def _shut_source(p):
+    p.do("document.getElementById('srcDlg').close()")
+    _shut_picker(p)
+
+
+def _dropped(p):
+    """The set-aside sheet, with a folder ticked and rows under it.
+
+    Stubbed rather than reached, for the reason the skill gives: the
+    assertion is about the page. It is also the only way to have this state
+    at all on a copy where everything answers - the sheet is empty then, and
+    the part that can be laid out wrong is the list of rows, which only
+    exists when something has failed. So a plausible answer is handed to it:
+    two folders, a long place name, a long reason, and a count wide enough to
+    make a column out of.
+
+    Ticked on purpose. Unticked, the list is one sentence where the rows go.
+    """
+    p.do("""(() => {
+      window.pywebview.api.deadExits = async () => ({
+        ok: true,
+        folders: [
+          { path: 'C:/x/pinned', label: 'pinned', tag: 'pinned', count: 131 },
+          { path: 'C:/x/success', label: 'success', tag: 'success', count: 20 },
+        ],
+        exits: [
+          { file: 'a.ovpn', folder: 'C:/x/pinned', tag: 'pinned',
+            country: 'ru', city: 'Saint Petersburg', provider: 'windscribe',
+            ip: '146.70.253.162', at: Math.floor(Date.now() / 1000) - 5400,
+            why: 'filtered here - TCP answers, TLS gets nothing back' },
+          { file: 'b.ovpn', folder: 'C:/x/pinned', tag: 'pinned',
+            country: 'kr', city: 'Seoul', provider: 'surfshark',
+            ip: '61.97.243.105', at: Math.floor(Date.now() / 1000) - 5400,
+            why: 'timed out' },
+          { file: 'c.ovpn', folder: 'C:/x/pinned', tag: 'pinned',
+            country: 'br', city: 'Sao Paulo', provider: 'windscribe',
+            ip: '188.95.54.55', at: Math.floor(Date.now() / 1000) - 5400,
+            why: 'no proxy for this account' },
+        ],
+        dead: 151, shelved: [], aside: 0,
+      });
+    })()""")
+    p.do("(() => { const b = document.getElementById('dropOpen');"
+         " b.hidden = false; b.dataset.n = '151'; })()")
+    p.click('#dropOpen', 1.2)
+    p.do("(() => { const c = document.querySelector('#dropFolders .chip');"
+         " if (c) c.click(); })()", 0.5)
+
+
+def _shut_dropped(p):
+    p.do("document.getElementById('dropDlg').close()")
+
+
 SCENES = [
     ('main', None, None),
+    ('main-dead', _dead_mark, _no_dead_mark),
     ('main-busy', _busy, _idle),
     ('main-on', _connected, _idle),
     ('main-on-details', lambda p: (_connected(p), _details(p)),
@@ -204,8 +342,13 @@ SCENES = [
     ('picker-scrolled', lambda p: (_picker(p), _scrolled(p)),
      lambda p: (_unscroll(p), _shut_picker(p))),
     ('picker-exits', lambda p: (_picker(p), _exits(p)), _shut_picker),
+    ('picker-sorted', lambda p: (_picker(p), _sorted(p)),
+     lambda p: (_unsorted(p), _shut_picker(p))),
     ('prefs', _prefs, _shut_prefs),
+    ('prefs-working', _prefs_working, _shut_prefs_working),
     ('log', _log, _shut_log),
+    ('source', _source, _shut_source),
+    ('dropped', _dropped, _shut_dropped),
 ]
 
 
