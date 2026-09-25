@@ -286,6 +286,7 @@ class Pin:
                 '-File', sweep.library_path(),
                 '-Path', folder,
                 '-OutDir', out,
+                '-StateDir', paths.STATE_DIR,
                 '-MaxIps', str(max_ips)]
         # Always one or the other, never the script's own default. Left to
         # itself it would try direct and then go looking for a proxy, which

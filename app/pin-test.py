@@ -164,6 +164,8 @@ argv = pin.Pin()._argv(r'C:\Program Files\my configs', r'C:\out', 'direct',
                        0, 4, True)
 check('a folder with a space in it stays one argument',
       argv[argv.index('-Path') + 1], r'C:\Program Files\my configs')
+check('the resolver writes its cache under the user data folder',
+      argv[argv.index('-StateDir') + 1], pin.paths.STATE_DIR)
 
 
 #------------------------------------------------------------- what is refused

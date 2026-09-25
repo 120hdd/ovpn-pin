@@ -55,6 +55,7 @@ jobs:
           python -m compileall -q app core
           python app/engine-test.py
           python app/build-test.py
+          python app/paths-test.py
           python app/pin-test.py
           python app/sweep-test.py
           python core/ovpn-proxy-test.py
@@ -142,7 +143,7 @@ jobs:
         run: |
           gh release create "$env:GITHUB_REF_NAME" `
             "$env:RELEASE_ZIP" `
-            "$env:RELEASE_ZIP.sha256" `
+            "${env:RELEASE_ZIP}.sha256" `
             --title "Relay $env:GITHUB_REF_NAME" `
             --generate-notes `
-            --notes "Windows x64 desktop build. Extract the whole ZIP, then run Relay.exe. The bundle includes credential-free starter servers for Surfshark and Windscribe; add your own provider account in the app. Accounts and credentials are not included in the download. This executable is not code-signed, so Windows may show a SmartScreen warning. Verify the accompanying SHA-256 file before running it."
+            --notes "Windows x64 portable desktop build. Extract the whole ZIP before running Relay.exe. The bundle includes credential-free starter servers for Surfshark and Windscribe; add your own provider account in the app. Relay stores accounts, settings and server data under %LOCALAPPDATA%\Relay, so it can run from Program Files without Administrator access. Existing data beside the EXE is imported on first run. Accounts and credentials are not included in the download. This executable is not code-signed, so Windows may show a SmartScreen warning. Verify the accompanying SHA-256 file before running it."

@@ -497,6 +497,11 @@ takes to connect. Everything else works without it.
 
 ## Windows release integrity
 
+Download the portable ZIP and extract the whole archive before running
+`Relay.exe`. Relay stores accounts, settings and server data under
+`%LOCALAPPDATA%\Relay`, so the extracted app also works from Program Files
+without Administrator access.
+
 Windows releases are not code-signed, so SmartScreen may show a warning on the
 first run. Each release includes a SHA-256 checksum beside the ZIP; verify it
 before running the application. See the [privacy policy](PRIVACY.md) for the
