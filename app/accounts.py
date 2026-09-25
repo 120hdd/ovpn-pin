@@ -33,6 +33,7 @@ a roster entry that leaked one is not.
 
 import json
 import os
+import tempfile
 import time
 import uuid
 
@@ -72,7 +73,15 @@ def load():
     try:
         with open(STORE, encoding='utf-8') as f:
             got = json.load(f)
-    except (OSError, ValueError):
+    except PermissionError:
+        # An older release could remove inherited ACLs before successfully
+        # granting the current user access. Repair that file before reading;
+        # treating it as an empty roster would discard existing accounts.
+        if not windscribe._grant_current_user(STORE):
+            raise
+        with open(STORE, encoding='utf-8') as f:
+            got = json.load(f)
+    except (FileNotFoundError, ValueError):
         got = {}
     if not isinstance(got, dict):
         got = {}
@@ -82,10 +91,26 @@ def load():
 
 
 def save(state):
-    os.makedirs(paths.STATE_DIR, exist_ok=True)
-    with open(STORE, 'w', encoding='utf-8') as f:
-        json.dump(state, f, indent=1)
-    windscribe._lock_down(STORE)
+    folder = os.path.dirname(STORE)
+    os.makedirs(folder, exist_ok=True)
+    temporary = None
+    try:
+        fd, temporary = tempfile.mkstemp(prefix='.accounts-', dir=folder)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=1)
+        windscribe._lock_down(temporary)
+        try:
+            os.replace(temporary, STORE)
+        except PermissionError:
+            # Replacing a file normally needs only access to its directory,
+            # but some ACLs also require access to the old file itself.
+            if not windscribe._grant_current_user(STORE):
+                raise
+            os.replace(temporary, STORE)
+        temporary = None
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.remove(temporary)
     return state
 
 
