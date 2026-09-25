@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """A Windows account can still read and update its private roster."""
 
+import builtins
 import json
 import os
 import subprocess
 import tempfile
+from unittest import mock
 from pathlib import Path
 
 import accounts
@@ -40,11 +42,28 @@ def test_locked_roster():
             try:
                 store.read_text(encoding='utf-8')
             except PermissionError:
-                pass
+                # A normal account must recover from the damaged ACL.
+                state = accounts.load()
             else:
-                raise AssertionError('The repro file is still readable')
+                # Hosted runners may have an elevated token that can read
+                # the file despite its broken user ACL. Exercise the same
+                # recovery path on those runners without relying on their
+                # effective permissions.
+                original_open = builtins.open
+                denied = False
 
-            assert accounts.load()['accounts'][0]['id'] == 'older'
+                def deny_first_read(file, *args, **kwargs):
+                    nonlocal denied
+                    if not denied and os.fspath(file) == str(store):
+                        denied = True
+                        raise PermissionError(13, 'Permission denied', str(store))
+                    return original_open(file, *args, **kwargs)
+
+                with mock.patch('builtins.open', side_effect=deny_first_read):
+                    state = accounts.load()
+                assert denied
+
+            assert state['accounts'][0]['id'] == 'older'
             accounts.put('surfshark', 'Newer', 'newer')
             assert {a['id'] for a in accounts.load()['accounts']} >= {'older'}
             assert {a['username'] for a in accounts.load()['accounts']} == {
