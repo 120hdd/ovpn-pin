@@ -14,6 +14,12 @@ the Desktop. It also copies in the servers, the credentials, the tunnel client
 and the sweep scripts, so what comes out is ready to run rather than ready to
 assemble.
 
+In the Windows build, `Relay.exe` and its scripts may be installed under
+`Program Files`. Relay keeps accounts, credentials, settings, server configs
+and logs in `%LOCALAPPDATA%\Relay`, so it runs as a normal user. On first use
+it copies any existing data beside the exe into that folder without replacing
+files already there. The bundled starter configs are copied there too.
+
 For a downloadable build, use `python app/build.py --public-release`. It writes
 to `release-build/dist/Relay`, includes only configs tracked by git, and refuses
 to finish if credentials, account data, sessions, or other runtime state enter
@@ -79,8 +85,8 @@ password, so it reads as *no server accepted just now* and sends people
 looking at their servers folder. An address typed into the username field is
 refused here, out loud, for that reason.
 
-It writes `.ovpn-auth` beside the app and takes the inherited permissions off
-it with `icacls` — `chmod` on NTFS returns success and changes nothing, which
+It writes `.ovpn-auth` under `%LOCALAPPDATA%\Relay` in a Windows build and
+takes the inherited permissions off it with `icacls` — `chmod` on NTFS returns success and changes nothing, which
 is worse than failing. If `.env` already carries credentials those are updated
 too, and the window says so: `.env` is the side the shell and PowerShell
 halves edit, and a password set in one place and not the other comes back

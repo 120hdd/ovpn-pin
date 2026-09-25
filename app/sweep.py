@@ -868,6 +868,9 @@ class Sweep:
         auth = paths.AUTH_FILE
         if os.path.isfile(auth):
             argv += ['-AuthFile', auth]
+        env_file = os.path.join(paths.DATA_DIR, '.env')
+        if os.path.isfile(env_file):
+            argv += ['-EnvFile', env_file]
 
         wrapper = WRAPPER.format(
             log=_ps_string(self._log_path()),

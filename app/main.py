@@ -58,6 +58,12 @@ if '--ui-drive' in sys.argv:
                                      'system-proxy-before.json')
     paths.DROPPED_INDEX = os.path.join(paths.STATE_DIR, 'dropped.json')
 
+# A packaged app keeps its executable and scripts read-only. Import the
+# shipped starter files and any state left by older portable builds before
+# engine, accounts and the worker resolve their paths.
+if paths.FROZEN and '--ui-drive' not in sys.argv:
+    paths.prepare_data()
+
 APP_ID = 'ovpnpin.relay'
 APP_NAME = 'Relay'
 
@@ -2714,6 +2720,30 @@ def ui_check(window):
         said['acctTwoShown'] = window.evaluate_js(
             "!document.getElementById('acctTwoWrap').hidden")
         said['acctForm'] = shot('settings-add-account')
+        # A file permission error crosses the pywebview bridge as a rejected
+        # promise. The form must report it and release the controls, rather
+        # than leaving the person looking at "Saving..." forever.
+        window.evaluate_js("""
+            window.__acctAddReal = window.pywebview.api.accountAdd;
+            window.pywebview.api.accountAdd = () => Promise.reject(
+                new Error('Permission denied: accounts.json'));
+            document.querySelector(
+                '#acctWhich [data-provider=surfshark]').click();
+            document.getElementById('acctUser').value = 'test-service-user';
+            document.getElementById('acctPass').value = 'test-password';
+            document.getElementById('acctSave').click();
+        """)
+        time.sleep(0.5)
+        said['acctSaveError'] = window.evaluate_js(
+            "document.getElementById('acctNewSaid').textContent")
+        said['acctSaveReadyAfterError'] = window.evaluate_js(
+            "!document.getElementById('acctSave').disabled")
+        said['acctSaveErrorShot'] = shot('settings-add-account-error')
+        window.evaluate_js("""
+            window.pywebview.api.accountAdd = window.__acctAddReal;
+            document.getElementById('acctUser').value = '';
+            document.getElementById('acctPass').value = '';
+        """)
         window.evaluate_js("document.getElementById('acctCancel').click()")
         time.sleep(0.3)
         said['acctFormClosed'] = window.evaluate_js(

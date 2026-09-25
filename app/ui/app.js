@@ -3622,9 +3622,16 @@ $('acctSave').addEventListener('click', async () => {
   acctBusy(true);
   if (acct.provider === 'surfshark') {
     said($('acctNewSaid'), 'Saving…', 'work');
-    const r = await window.pywebview.api.accountAdd('surfshark', label, user, pass);
-    acctBusy(false);
-    busy($('acctSave'), false);
+    let r;
+    try {
+      r = await window.pywebview.api.accountAdd('surfshark', label, user, pass);
+    } catch (e) {
+      said($('acctNewSaid'), `Could not save the account: ${e?.message || e}`, 'bad');
+      return;
+    } finally {
+      acctBusy(false);
+      busy($('acctSave'), false);
+    }
     if (!r.ok) { said($('acctNewSaid'), r.error, 'bad'); return; }
     $('acctPass').value = '';
     acctShowForm(false);

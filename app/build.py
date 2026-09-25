@@ -63,10 +63,11 @@ _KEPT = None
 # Where the .ovpn files come from, in the order the app itself looks.
 SERVER_SOURCES = ('servers', 'success', 'pinned')
 
-# What belongs to whoever has been using the app rather than to the build.
-# dist/ is deleted whole on every run - PyInstaller wants that folder to
-# itself - and every one of these lives inside it, so a rebuild used to take
-# the tunnel domain, the accounts roster and the Windscribe session with it.
+# Legacy portable builds kept user data beside the exe. New frozen builds
+# import it into LocalAppData on first run, but a personal rebuild must still
+# preserve any old files under dist/ until that migration has happened.
+# PyInstaller deletes dist/ whole on every run, which used to take the tunnel
+# domain, accounts roster and Windscribe session with it.
 # Surfshark looked like it survived, but only because .ovpn-auth happens to
 # be copied back out of the repo below; nothing else had a copy anywhere.
 #
