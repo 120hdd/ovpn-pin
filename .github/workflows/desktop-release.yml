@@ -53,12 +53,22 @@ jobs:
         shell: pwsh
         run: |
           python -m compileall -q app core
-          python app/engine-test.py
-          python app/build-test.py
-          python app/paths-test.py
-          python app/pin-test.py
-          python app/sweep-test.py
-          python core/ovpn-proxy-test.py
+          if ($LASTEXITCODE -ne 0) { throw 'Python compilation failed' }
+          $tests = @(
+            'app/engine-test.py',
+            'app/build-test.py',
+            'app/paths-test.py',
+            'app/accounts-permissions-test.py',
+            'app/pin-test.py',
+            'app/sweep-test.py',
+            'core/ovpn-proxy-test.py'
+          )
+          foreach ($test in $tests) {
+            python $test
+            if ($LASTEXITCODE -ne 0) {
+              throw "$test failed with exit code $LASTEXITCODE"
+            }
+          }
 
       - name: Build the public desktop bundle
         shell: pwsh

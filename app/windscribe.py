@@ -36,6 +36,7 @@ is how that happens. One attempt, then say what went wrong and stop.
 """
 
 import base64
+import csv
 import ctypes
 import hashlib
 import json
@@ -402,24 +403,57 @@ def proxy_credentials(session_auth_hash):
 # -- what is kept on disk ------------------------------------------------
 
 
-def _lock_down(path):
-    """The treatment .ovpn-auth gets: take the inherited permissions off a
-    file that holds a secret. chmod does nothing on NTFS."""
+def _current_user_sid():
+    """Use the process token, not USERNAME, which can name another account."""
     if os.name != 'nt':
-        return False
-    me = os.environ.get('USERNAME')
-    if not me:
-        return False
+        return None
     try:
-        subprocess.run(['icacls', path, '/inheritance:r',
-                        '/grant:r', f'{me}:F',
-                        '/grant:r', 'SYSTEM:F',
-                        '/grant:r', 'Administrators:F'],
-                       capture_output=True, timeout=20,
-                       creationflags=0x08000000)
-        return True
+        result = subprocess.run(
+            ['whoami', '/user', '/fo', 'csv', '/nh'],
+            capture_output=True, text=True, timeout=20,
+            creationflags=0x08000000)
+        if result.returncode:
+            return None
+        row = next(csv.reader(result.stdout.splitlines()))
+        sid = row[1].strip()
+        return sid if re.fullmatch(r'S-\d+(?:-\d+)+', sid) else None
+    except (OSError, subprocess.SubprocessError, IndexError, StopIteration,
+            csv.Error):
+        return None
+
+
+def _icacls(path, *args):
+    try:
+        result = subprocess.run(
+            ['icacls', path, *args], capture_output=True, timeout=20,
+            creationflags=0x08000000)
+        return result.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def _grant_current_user(path):
+    """Repair an older secret file without relying on its account name."""
+    sid = _current_user_sid()
+    return bool(sid and _icacls(path, '/grant:r', f'*{sid}:F'))
+
+
+def _lock_down(path):
+    """Remove inherited ACLs only after the real user has explicit access."""
+    if not _grant_current_user(path):
+        return False
+    if not _icacls(path, '/grant:r', '*S-1-5-18:F',
+                   '/grant:r', '*S-1-5-32-544:F'):
+        return False
+    if not _icacls(path, '/inheritance:r'):
+        return False
+    try:
+        with open(path, 'rb'), open(path, 'ab'):
+            pass
+    except OSError:
+        _icacls(path, '/inheritance:e')
+        return False
+    return True
 
 
 def _record():

@@ -537,30 +537,8 @@ class Engine:
 
     @staticmethod
     def _lock_down(path):
-        """Take the inherited permissions off a file holding a password.
-
-        chmod is not a thing here - on NTFS it returns success and changes
-        nothing, which is worse than failing. The repo has already been caught
-        out by this once: a group had Read on the folder with the inherit
-        flags set, so every file underneath picked it up and nothing said so.
-        Best effort; a file that could not be locked down is still better than
-        no credentials at all.
-        """
-        if os.name != 'nt':
-            return False
-        me = os.environ.get('USERNAME')
-        if not me:
-            return False
-        try:
-            subprocess.run(['icacls', path, '/inheritance:r',
-                            '/grant:r', f'{me}:F',
-                            '/grant:r', 'SYSTEM:F',
-                            '/grant:r', 'Administrators:F'],
-                           capture_output=True, timeout=20,
-                           creationflags=0x08000000)
-            return True
-        except (OSError, subprocess.SubprocessError):
-            return False
+        """Use the same SID-based protection as the other secret files."""
+        return windscribe._lock_down(path)
 
     # -- choosing one ------------------------------------------------------
 
