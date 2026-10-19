@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -208,14 +209,33 @@ type handler Tunnel
 // almost everything copes - QUIC falls back to TCP when it gets nothing, and
 // that fallback is what makes the web work here at all.
 func (h *handler) JudgeFlow(network uint8, _ netip.AddrPort, destination netip.AddrPort, _ []byte) tun.FlowVerdict {
-	if network == N.NetworkUDP[0] || destination.Port() == 53 {
-		if destination.Port() == 53 {
-			return tun.FlowVerdict{Action: tun.ActionHijackDNS}
-		}
+	if destination.Port() == 53 {
+		return tun.FlowVerdict{Action: tun.ActionHijackDNS}
+	}
+	if network == ipProtoUDP {
 		return tun.FlowVerdict{Action: tun.ActionDrop}
 	}
 	return tun.FlowVerdict{Action: tun.ActionAccept}
 }
+
+// What the stack means by "network" here is the IP protocol number - 6 and
+// 17 - and not sing's "tcp"/"udp" strings. sing-tun calls this with
+// uint8(header.TCPProtocolNumber) and uint8(header.UDPProtocolNumber).
+//
+// Worth a name, because the mistake it replaces compiled and read correctly.
+// N.NetworkUDP is the string "udp", so N.NetworkUDP[0] is the character 'u',
+// 117, which is a number no protocol is - and the test against it was never
+// once true. Every UDP flow the comment above says is dropped was quietly
+// accepted instead, dialled as though it were a stream, and closed a layer
+// further in when CONNECT would not carry it. What a person saw was the
+// same. Where it happened, and how long it took to happen, was not.
+//
+// Left untyped, because the two places that want them want different types:
+// JudgeFlow compares against a uint8 and whoOpened takes an int.
+const (
+	ipProtoTCP = 6
+	ipProtoUDP = 17
+)
 
 // label is what to call this destination in the list.
 //
@@ -258,10 +278,11 @@ func (h *handler) carry(ctx context.Context, conn net.Conn, source, destination 
 	// connection, before the dial, because after it the source port may
 	// already be gone from the kernel's table.
 	//
-	// 6 is IPPROTO_TCP; nothing else reaches here, because JudgeFlow drops
-	// UDP and hijacks DNS before either gets this far.
+	// Nothing but TCP reaches here, because JudgeFlow drops UDP and hijacks
+	// DNS before either gets this far - so the protocol to look the owner up
+	// under is a constant, and it is named rather than written as 6.
 	row := h.hosts.opened(destination.String(), h.label(destination),
-		whoOpened(6, source.String(), destination.String()))
+		whoOpened(ipProtoTCP, source.String(), destination.String()))
 
 	upstream, spare, err := h.exit.Open(destination.String(), 15*time.Second)
 	if err != nil {
@@ -360,6 +381,19 @@ func (h *handler) NewDNSPacket(payload []byte, _ M.Socksaddr, _ M.Socksaddr, wri
 			// up, which is the same thing it does for a dropped packet -
 			// and inventing a SERVFAIL here would have applications cache
 			// the failure.
+			//
+			// Said out loud all the same. Silence towards the phone is
+			// right; silence everywhere is how "no name resolves, but every
+			// address does" becomes an afternoon. From outside, a resolver
+			// that answered nothing and a packet that never arrived look
+			// identical, and this is the only place that knows which of the
+			// two it was. gomobile puts Go's stderr on logcat, so it lands
+			// beside the service's own lines.
+			if err != nil {
+				log.Printf("relay: dns through the exit: %v", err)
+			} else {
+				log.Printf("relay: dns through the exit: empty answer")
+			}
 			return
 		}
 		// Read on the way past, not on the way in: an answer is what maps a

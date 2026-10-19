@@ -79,6 +79,22 @@ func IsPublic(ip netip.Addr) bool {
 // about them and the difference is invisible in a bare "lookup failed".
 var ErrForged = errors.New("every address returned was a reserved one - the resolver is answering for someone else")
 
+// ForgedError is ErrForged carrying the addresses that were thrown away, so
+// that a pinning run can name the answer it was given rather than only say
+// there was one.
+//
+// The address is the evidence. "a reserved address" is a category; 10.10.34.36
+// is the sinkhole this line actually points names at, and somebody reading it
+// on screen knows immediately that the resolver is the problem rather than
+// the server. It costs one slice to keep.
+//
+// errors.Is(err, ErrForged) still holds, so every caller that only wants to
+// know which kind of failure this was is untouched.
+type ForgedError struct{ Addrs []string }
+
+func (e *ForgedError) Error() string        { return ErrForged.Error() }
+func (e *ForgedError) Is(target error) bool { return target == ErrForged }
+
 type dohAnswer struct {
 	Status int `json:"Status"`
 	Answer []struct {
@@ -167,7 +183,7 @@ func resolveAt(ctx context.Context, client *http.Client, resolver, endpoint, nam
 
 	var addrs []netip.Addr
 	seen := map[netip.Addr]bool{}
-	forged := 0
+	var forged []string
 	for _, a := range out.Answer {
 		// An A query can be answered with CNAMEs too. Type 1 is A; anything
 		// else in here is a step along the way rather than an address.
@@ -179,7 +195,7 @@ func resolveAt(ctx context.Context, client *http.Client, resolver, endpoint, nam
 			continue
 		}
 		if !IsPublic(ip) {
-			forged++
+			forged = append(forged, ip.String())
 			continue
 		}
 		if seen[ip] {
@@ -188,8 +204,8 @@ func resolveAt(ctx context.Context, client *http.Client, resolver, endpoint, nam
 		seen[ip] = true
 		addrs = append(addrs, ip)
 	}
-	if len(addrs) == 0 && forged > 0 {
-		return nil, ErrForged
+	if len(addrs) == 0 && len(forged) > 0 {
+		return nil, &ForgedError{Addrs: forged}
 	}
 	if len(addrs) == 0 {
 		return nil, answered{fmt.Errorf("%s returned no addresses for %s", resolver, name)}

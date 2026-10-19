@@ -12,37 +12,43 @@
 
 /* ------------------------------------------------------------ the tall gap */
 
-/* .hero and .swap are both `flex: 1`. In a 660px window that shares the slack
- * between the orb and the two address cards, which is what it is for. On a
- * phone there is nearer 870px and the surplus lands in one hole in the middle
- * - which reads as something failing to load rather than as space.
+/* The app fills the phone, and the surplus goes to the orb.
  *
- * The orb keeps growing, because it is the thing worth looking at. The cards
- * stop at the size they were drawn, because a two-line card stretched to four
- * lines of nothing is not a bigger card, it is a card with a hole in it. */
-/* .hero is `flex: 1`, and inside it the orb is pinned to the top
- * (`.blob-stage { position: absolute; top: 1px }`) and the two address cards
- * to the bottom (`.swap { position: absolute; bottom: 0 }`). So the hole in
- * the middle is not a bug in either of them - it is the height of .hero, and
- * .hero is however much column is left over.
+ * `.hero` is the only row of the column that stretches, and everything inside
+ * it is positioned absolutely - the orb pinned near the top, the two address
+ * cards near the bottom. So a taller `.hero` draws nothing bigger. It only
+ * opens a gap between the two, and a gap in the middle of a screen reads as
+ * something that failed to load rather than as space.
  *
- * Which means the honest fix is not a number invented here. It is to give the
- * page the window it was drawn for and put the surplus outside it: 660px, the
- * height app/main.py opens on the desktop, centred, with the rest as margin.
- * Then every proportion inside is the desktop's, because it is the desktop's
- * own arithmetic doing it.
+ * The first answer to that was to keep the 660px window the desktop was drawn
+ * for and centre it, letting the rest be margin. It was honest about the
+ * proportions and wrong about the screen: 79px of black above the mark and 79
+ * below the hint, on a screen the app had been given all of.
  *
- * max-height keeps it honest the other way too - a phone shorter than 660
- * gets the layout app.css already handles at that size. */
+ * So the height is given back and the hole is closed where it comes from: the
+ * orb is sized out of the room it is in rather than from a number. It is the
+ * one thing here worth more of the screen, sphere.js measures its canvas every
+ * frame and follows without being told, and the cards below it keep the size
+ * they were drawn - a two-line card stretched to four lines of nothing is not
+ * a bigger card.
+ *
+ * The floor is the desktop's own 210px, so nothing here ever makes the orb
+ * smaller than app.css already makes it: at a 660px window it comes out at
+ * exactly 210. The ceiling is the width, because a square that grows with the
+ * height would otherwise walk off both sides. */
 body {
   display: flex;
-  align-items: center;
+  align-items: stretch;
 }
 
 .app {
-  height: 660px;
-  max-height: 100%;
   width: 100%;
+}
+
+.blob-stage {
+  height: max(210px, min(82%, 88vw));
+  width: auto;
+  aspect-ratio: 1;
 }
 
 /* --------------------------------------------------------- the safe areas */
@@ -76,6 +82,92 @@ body {
   .icon:hover {
     background: inherit;
   }
+
+  /* The same thing one level down, where it is harder to see and worse.
+   *
+   * A pane lifts its glyph 1px and turns it green while the pointer is over
+   * it. There is no pointer here, so what that means on a phone is that the
+   * last pane anybody touched stays raised and lit for good - and the next
+   * one joins it. The layout audit is what noticed: "centre is 1px off, in
+   * a row that says align-items: center", on three panes at once, which is
+   * a stuck hover wearing the costume of a broken heading. */
+  .pane:hover .pane__glyph {
+    color: var(--text-off);
+    transform: none;
+    background: rgba(255, 255, 255, 0.04);
+  }
+}
+
+/* ----------------------------------- controls for a machine that is not this
+                                        one */
+
+/* Hidden rather than removed, always.
+ *
+ * Each of these is a control the bridge still answers with "not on a phone",
+ * and a control whose only possible answer is a refusal should not have been
+ * offered. One of them is worse than useless: the port pane hands out an
+ * address to point Telegram at, and nothing on a phone is listening at it.
+ *
+ * display:none rather than a deletion, for the reason phone.js has a resay()
+ * in it: app.js writes into these on every paint of the sheet - #listenPort
+ * and #routeAddr among them - and a phone that took them out of the document
+ * would stop the sheet painting at the first one it could not find.
+ *
+ * Nothing else is hidden. The folder pickers and the pin route were both on
+ * this list until the bridge learned to answer them, and a row that works is
+ * a row that stays. */
+#prefPort { display: none; }
+
+/* Sweeping runs OpenVPN against every exit and times the leg it takes, which
+   needs a machine that can run OpenVPN. What the phone measures with instead
+   is the bolt on each row of the list. */
+#prefSweep { display: none; }
+
+/* There is one folder the app reads, and a picker onto it can only agree
+   with where the files already go. The path stays on screen; the button that
+   cannot move it does not. */
+#pinOutPick { display: none; }
+
+/* ------------------------------------------------------- room for a finger */
+
+/* Two controls cannot simply be made bigger, and on a phone they are the two
+ * hardest to hit: the (i) beside a heading is 18px square and a switch is
+ * 40x22. A finger pad is nearer 44px across, and where the phone reports it
+ * landed is only roughly where it was aimed.
+ *
+ * Their size is doing a job, though. The (i) is 18px because it sits inside a
+ * line of heading text and a bigger one would push the words apart; a switch
+ * is 40x22 because that is what a switch looks like, on both machines.
+ *
+ * So the drawn box is left exactly as the desktop drew it and an invisible one
+ * is laid over it. Nothing moves and nothing is redrawn - the only thing that
+ * changes is the size of the area that answers a tap, which is the only part
+ * of this a finger can tell apart. */
+@media (pointer: coarse) {
+  .info,
+  .toggle {
+    position: relative;
+  }
+
+  .info::after,
+  .toggle::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
+
+  /* The stepper is the one place two of these sit against each other, so they
+     cannot each take 44px: the areas would overlap and the wrong arrow would
+     answer, which is worse than a small one that answers. They take the width
+     instead, which is free - the column is at the end of a field with nothing
+     past it - and as much height as a taller field gives them without the two
+     meeting in the middle. */
+  .stepper .field__in { min-height: 44px; padding-right: 38px; }
+  .stepper__keys { width: 32px; right: 3px; }
 }
 
 /* A long press selects text and offers to copy it. Over a status line that is

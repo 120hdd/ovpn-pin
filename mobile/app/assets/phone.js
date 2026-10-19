@@ -44,6 +44,27 @@
     }
   }
 
+  /**
+   * Change what a line says without changing what is inside it.
+   *
+   * `.pane__why` carries `<span id="routeAddr">`, and app.js writes the
+   * listening address into it on every paint of the settings sheet. Setting
+   * textContent takes that span out of the document, and the next paint
+   * throws on a null - so the words are replaced around the elements rather
+   * than over them.
+   *
+   * What is kept is hidden. These nodes are about a machine this is not; they
+   * only have to exist, so that the paint that writes into them finishes.
+   */
+  function resay(el, text) {
+    var kept = Array.prototype.slice.call(el.children);
+    el.textContent = text;
+    kept.forEach(function (node) {
+      node.style.display = 'none';
+      el.appendChild(node);
+    });
+  }
+
   // "Windows is back to normal." There is no system proxy on a phone: the tun
   // carries everything and nothing about the machine is left altered, so the
   // sentence does not just miss - it describes an undoing that never had a
@@ -105,6 +126,26 @@
       : 'Asking directly…';
   });
 
+  /* --------------------------------------------------------- the sweep */
+
+  /* Nothing should be asking about a pane that is not on the screen.
+   *
+   * Sweeping runs OpenVPN against every exit and times the leg it takes, which
+   * needs a machine that can run OpenVPN - so the bridge refuses it with a
+   * sentence saying exactly that, and phone.css takes the pane off the screen.
+   * What is left is app.js still asking: it reaches for the plan on the way
+   * into the settings sheet, after every pin run, and from five other places,
+   * and each refusal arrives as an unhandled rejection in the console.
+   *
+   * Replaced rather than caught, because there is genuinely nothing to paint.
+   * A Promise, because several of those callers await it.
+   */
+  if (typeof window.refreshSweep === 'function') {
+    window.refreshSweep = function () { return Promise.resolve(); };
+  } else {
+    console.warn('phone.js: no refreshSweep to silence - app.js has moved on');
+  }
+
   /* ------------------------------------------------- the local network */
 
   /* "Route all of Windows" is the one row in Settings that cannot mean
@@ -127,19 +168,27 @@
     var why = row.querySelector('.pane__why');
     if (!title || !why) return false;
 
-    title.textContent = 'Reach the local network';
-    why.textContent =
+    resay(title, 'Reach the local network');
+    resay(why,
       'Leaves the printer, the router and anything else on this wifi outside '
       + 'the tunnel. They are not reachable from the internet either way. '
       + 'Off, everything goes through - including this phone’s own '
-      + 'debugger.';
+      + 'debugger.');
 
     // A fresh node, so every listener app.js attached to the old switch goes
     // with it. Adding a second listener would leave the first one still
     // calling setSystemProxy, which on a phone answers with a refusal.
+    // And the old one is put out of sight rather than out of the document.
+    // paintPrefs opens with
+    // `$('sysProxy').setAttribute('aria-checked', ...)`, so a switch that has
+    // been removed is a TypeError on the first line of the paint - and the
+    // port, the folder, the counts, the paths and the credential all come
+    // after it. The sheet opens blank and nothing on screen says why. It cost
+    // an afternoon once; it is one line to never pay again.
     var fresh = toggle.cloneNode(true);
     fresh.id = 'allowLan';
-    toggle.parentNode.replaceChild(fresh, toggle);
+    toggle.parentNode.insertBefore(fresh, toggle);
+    toggle.style.display = 'none';
 
     function paint(on) {
       fresh.setAttribute('aria-checked', String(!!on));

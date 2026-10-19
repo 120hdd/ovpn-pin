@@ -89,6 +89,10 @@ class MainActivity : FlutterActivity() {
                 override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
                     statusSink = events
                     pushStatus()
+                    // Whatever was already found out while nothing was
+                    // listening. A page that attaches after the lookup landed
+                    // would otherwise never be told, and asks only once.
+                    lastRealIp?.let { push("RealIp", it) }
                 }
 
                 override fun onCancel(arguments: Any?) {
@@ -220,6 +224,25 @@ class MainActivity : FlutterActivity() {
     private fun catalogue(): Client {
         cat?.let { return it }
         val c = Relay.newClient("", "")
+
+        // What the exits are opened with, handed over before anything asks
+        // one of them a question.
+        //
+        // Easy to leave out, and it was: the connect path never needed it,
+        // because the service builds its own client out of the intent it was
+        // started with. So this one kept an empty map, and every reachability
+        // test on a phone that was signed in and connecting perfectly well
+        // came back "no credentials for surfshark" - a sentence about the
+        // account, from the one code path that had never been told about it.
+        //
+        // Re-read on every rebuild rather than cached beside the catalogue,
+        // because reload() is also what runs after an account is switched.
+        for (name in listOf(Accounts.SURFSHARK, Accounts.WINDSCRIBE)) {
+            Accounts.credentials(applicationContext, name)?.let { (user, password) ->
+                c.setCredentials(name, user, password)
+            }
+        }
+
         try {
             c.load()
         } catch (e: Exception) {
@@ -415,6 +438,7 @@ class MainActivity : FlutterActivity() {
     fun whoami(): String {
         Thread {
             val json = Relay.whereAmIJSON(8000L)
+            lastRealIp = json
             main.post { push("RealIp", json) }
         }.start()
         return "{}"
@@ -430,22 +454,71 @@ class MainActivity : FlutterActivity() {
      * checked.
      */
     fun seenAs(): String {
+        startSeenAs()
+        return "{}"
+    }
+
+    /**
+     * The last two answers that nobody asks for twice.
+     *
+     * Both are looked up on a thread and pushed when they land, and a push
+     * goes nowhere when no page is listening - which, on the way up, is most
+     * of the first second. Without somewhere to keep them the window then
+     * sits on "checking..." for the life of the tunnel, because neither
+     * question is ever put again.
+     */
+    @Volatile private var lastSeen = "{}"
+    @Volatile private var lastRealIp: String? = null
+
+    /**
+     * The exit the seen-as check has already been run for.
+     *
+     * app.js never calls seenAs - measured, not assumed: there is no
+     * `api.seenAs` anywhere in the file. On the desktop it does not have to,
+     * because the engine fills `exit.seen_as` into the status it pushes and
+     * the page only ever reads it. So on a phone the method sat there being
+     * correct and never being called, and "Seen as" stayed on "checking..."
+     * for every tunnel this app has ever opened.
+     *
+     * The check is a whole request through the exit and takes seconds, so it
+     * cannot happen inside a push. It starts when the tunnel comes up, and
+     * this is what stops each of the status broadcasts starting another one.
+     */
+    @Volatile private var seenFor = ""
+
+    /**
+     * Ask, through the tunnel, what the internet says the traffic came out as.
+     *
+     * Once per exit: the answer cannot change while the same tunnel is up,
+     * and every status broadcast would otherwise open another CONNECT to
+     * another continent.
+     */
+    private fun startSeenAs() {
         val addr = RelayVpnService.exitAddress
         val name = RelayVpnService.exitName
+        if (addr.isEmpty() || seenFor == addr) return
         // Asked with the winning exit's own provider credential. The other
         // one is refused, and a refusal here reads on screen as a tunnel
         // that cannot say where it comes out.
         val creds = when (RelayVpnService.exitProvider) {
             Accounts.WINDSCRIBE -> windscribeCredentials()
             else -> credentials()
-        }
-        if (addr.isEmpty() || creds == null) return "{}"
+        } ?: return
+        seenFor = addr
 
         Thread {
-            val seen = Relay.seenAsJSON(addr, name, creds.first, creds.second, 15000L)
+            val seen = try {
+                Relay.seenAsJSON(addr, name, creds.first, creds.second, 20000L)
+            } catch (e: Exception) {
+                "{}"
+            }
+            // An empty answer is not something to tell the page about - it
+            // draws "unconfirmed", which is exactly what is true. But it must
+            // not be remembered as this exit's answer, or one check that
+            // timed out would never be tried again.
+            if (seen == "{}") seenFor = "" else lastSeen = seen
             main.post { pushConnected(seen) }
         }.start()
-        return "{}"
     }
 
     /**
@@ -667,7 +740,19 @@ class MainActivity : FlutterActivity() {
             })
         }
 
-        val starred = counts(c, starredFiles(c))
+        // The names first, and the count only if there are any.
+        //
+        // counts() with an empty filter means Everything - that is what the
+        // row above it is asking for. So a Starred set whose files have all
+        // gone does not come back as nothing, it comes back as all 276 of
+        // them, and the guard below waits for a zero that cannot arrive. The
+        // row then reads "276 exits - only the places you picked out", which
+        // is every country in the app wearing the name of the two the user
+        // picked. Found by starring Bulgaria and then setting its two exits
+        // aside for not answering: the pool that should have emptied offered
+        // the whole world instead.
+        val starredNames = starredFiles(c)
+        val starred = if (starredNames.isBlank()) JSONObject() else counts(c, starredNames)
         if (favouriteSet().isNotEmpty() && starred.optInt("exits") > 0) {
             rows.put(JSONObject().apply {
                 put("key", "starred")
@@ -1496,7 +1581,7 @@ class MainActivity : FlutterActivity() {
      * check through the tunnel answers. Until then the page shows
      * "checking...", which is exactly what is true.
      */
-    private fun pushConnected(seenJson: String = "{}") {
+    private fun pushConnected(seenJson: String = lastSeen) {
         val name = RelayVpnService.exitName
         val exit = JSONObject().apply {
             put("ip", RelayVpnService.exitAddress)
@@ -1511,8 +1596,11 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun pushStatus() {
-        if (statusSink == null) return
         val up = RelayVpnService.exitAddress.isNotEmpty()
+        // Started whether or not a page is listening: the tunnel coming up is
+        // what this waits on, and a window opened later still wants the answer.
+        if (up) startSeenAs() else { seenFor = ""; lastSeen = "{}" }
+        if (statusSink == null) return
         when {
             RelayVpnService.status.startsWith("failed") ->
                 push("Failed", JSONObject().put(

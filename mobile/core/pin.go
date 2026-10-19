@@ -428,9 +428,19 @@ func pinRun(o PinOptions, p PinProgress, stop chan struct{}) {
 				// A forged answer is worth naming separately: it is the line
 				// lying about this name rather than the name being retired,
 				// and it is the thing this whole repo exists because of.
+				//
+				// With the address it was given, where the error carried one,
+				// because that address is the evidence: the page prints "was
+				// answered with X, which is not a public address", and the
+				// desktop has always put a real X there. A category where the
+				// address should be reads like the app is guessing.
 				if errors.Is(lookErr, ErrForged) {
-					say(pinEvent{Phase: "forged", Host: host,
-						Addresses: "a reserved address"})
+					var forged *ForgedError
+					said := "a reserved address"
+					if errors.As(lookErr, &forged) && len(forged.Addrs) > 0 {
+						said = strings.Join(forged.Addrs, ", ")
+					}
+					say(pinEvent{Phase: "forged", Host: host, Addresses: said})
 				}
 				done(pinEvent{Phase: "result", Outcome: "skipped", Name: name,
 					Detail: why(lookErr)})
