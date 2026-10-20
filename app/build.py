@@ -538,6 +538,7 @@ def main():
         # once frozen; paths.py knows the difference.
         '--add-data', f'{proxy_source}{sep}.',
         '--hidden-import', 'winproxy',
+        '--hidden-import', 'winwindow',
         '--hidden-import', 'windscribe',
         '--hidden-import', 'engine',
         '--hidden-import', 'countries',

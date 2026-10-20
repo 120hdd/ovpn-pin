@@ -270,6 +270,16 @@ to this app, and no icon fixes that afterwards.
 the proxy up, because that is what *connected* should mean. Quitting from the
 tray takes it down and restores the machine.
 
+**Minimising goes to the tray.** The tray menu says whether you are connected
+and as what, connects or disconnects, connects straight to a favourite, and
+holds the window's switches: *Lock position and size*, *Minimise to tray* (on
+by default) and *Always on top*.
+
+**It comes back where it was.** Size, position and maximised state are read
+with `GetWindowPlacement`, which is right even while the window is minimised
+or hidden in the tray, and put back with `SetWindowPlacement` — onto the
+nearest monitor if the one it was on is gone. See `winwindow.py`.
+
 ---
 
 ## Checking a build

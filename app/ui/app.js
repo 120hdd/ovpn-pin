@@ -741,6 +741,18 @@ window.onDisconnected = (info) => {
   render();
 };
 
+/* The tray menu asks through here instead of calling the API itself, so that
+   connecting from it walks the same steps as the button - the busy state,
+   the stages, switching away from a connection already up - and the window
+   says the same thing afterwards. Off the call stack, because the caller is
+   a synchronous evaluate_js and these are async and take seconds. */
+window.onTray = (ask) => {
+  setTimeout(() => {
+    if (ask.do === 'act') onAct();
+    else if (ask.do === 'pick' && ask.code) choose(ask.code);
+  }, 0);
+};
+
 window.onRealIp = (info) => {
   state.realIp = info && info.ip;
   setIp($('realIp'), (info && info.ip) || 'unknown', true);

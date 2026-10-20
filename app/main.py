@@ -151,6 +151,11 @@ SETTINGS = os.path.join(paths.STATE_DIR, 'settings.json')
 WINDOW_W = 400
 WINDOW_H = 740
 
+# The window's own switches, all in the tray menu. Minimising to the tray is
+# on unless turned off: the window is a dashboard for a connection that lives
+# in the tray anyway, and a taskbar button for it is one more thing open.
+WINDOW_DEFAULTS = {'lockWindow': False, 'minToTray': True, 'onTop': False}
+
 
 def load_settings():
     try:
@@ -400,7 +405,9 @@ import sweep                                                 # noqa: E402
 import tunnel                                                # noqa: E402
 import webview                                               # noqa: E402
 import winproxy                                              # noqa: E402
+import winwindow                                             # noqa: E402
 import accounts                                              # noqa: E402
+import countries                                             # noqa: E402
 import uishot                                                # noqa: E402
 import surfshark                                             # noqa: E402
 import windscribe                                            # noqa: E402
@@ -421,6 +428,7 @@ class Api:
             set_system_proxy=self._settings_early.get('systemProxy', True),
             port=self._settings_early.get('port'))
         self._window = None
+        self._hwnd_cache = None
         self._tray = None
         self._busy = False
         self._settings = self._settings_early
@@ -453,9 +461,16 @@ class Api:
         except Exception:
             pass
 
-    def _retray(self, state):
-        if self._tray:
+    def _retray(self, state=None):
+        """The icon to a new state, or with none given, only the menu - whose
+        status line, Connect item and favourites are read when it is built,
+        and on Windows it is built ahead of being opened, not as it opens."""
+        if not self._tray:
+            return
+        if state:
             self._tray.set_state(state)
+        else:
+            self._tray.refresh()
 
     # -- what the page asks for -------------------------------------------
 
@@ -678,6 +693,7 @@ class Api:
         if info.get('ip') != self._real_ip or self._real_ip is None:
             self._real_ip = info.get('ip')
             self._emit('RealIp', info)
+            self._retray()
 
     def _watch_self(self):
         """Keep that address honest while it is not ours to change.
@@ -1940,6 +1956,7 @@ class Api:
             on = True
         self._settings['favourites'] = codes
         save_settings(self._settings)
+        self._retray()
         return {'ok': True, 'codes': codes, 'on': on}
 
     def setSort(self, kind=None):
@@ -1959,6 +1976,7 @@ class Api:
     def remember(self, code):
         self._settings['picked'] = code
         save_settings(self._settings)
+        self._retray()
         return {'ok': True}
 
     # -- the tunnel of your own -------------------------------------------
@@ -2269,6 +2287,7 @@ class Api:
                 info['unconfirmed'] = str(e)[:120]
             if self._engine.exit_info is info:
                 self._emit('Connected', self._engine.status())
+                self._retray()
         threading.Thread(target=work, daemon=True).start()
 
     def cancel(self):
@@ -2293,6 +2312,47 @@ class Api:
     def minimise(self):
         if self._window:
             self._window.minimize()
+
+    # -- the window itself ------------------------------------------------
+
+    def _hwnd(self):
+        if not winwindow.alive(self._hwnd_cache):
+            self._hwnd_cache = winwindow.find(APP_NAME)
+        return self._hwnd_cache
+
+    def _window_option(self, key):
+        return bool(self._settings.get(key, WINDOW_DEFAULTS[key]))
+
+    def _set_window_option(self, key, on):
+        self._settings[key] = bool(on)
+        save_settings(self._settings)
+        self._apply_window()
+        self._retray()
+
+    def _apply_window(self):
+        """Lock and always-on-top, as the settings have them.
+
+        Safe to call again, and called again whenever the window comes back
+        from the tray or from being minimised: WinForms owns this window and
+        keeps its own idea of what its frame should be, so what was set from
+        underneath it is put back rather than trusted to have stayed.
+        """
+        try:
+            winwindow.lock(self._hwnd(), self._window_option('lockWindow'))
+        except Exception:
+            traceback.print_exc()
+        try:
+            if self._window:
+                self._window.on_top = self._window_option('onTop')
+        except Exception:
+            traceback.print_exc()
+
+    def _remember_place(self):
+        where = winwindow.placement(self._hwnd())
+        if where:
+            self._settings['placement'] = where
+            save_settings(self._settings)
+        return where
 
 
 def install_safety(api):
@@ -2379,12 +2439,35 @@ class Tray:
         except Exception as e:
             self.error = repr(e)
             return False
-        menu = pystray.Menu(
-            pystray.MenuItem('Show Relay', self._show, default=True),
-            pystray.MenuItem('Disconnect', self._disconnect,
-                             enabled=lambda _: self.api._engine.running() is not None),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem('Quit', self._quit))
+        Item, Menu = pystray.MenuItem, pystray.Menu
+        api = self.api
+
+        # pystray calls an action with as many of (icon, item) as it takes,
+        # counting them from the function's code - so every action here takes
+        # none, and nothing is a functools.partial, which has no code to count.
+        def toggle(key):
+            def flip(*_):
+                api._set_window_option(key, not api._window_option(key))
+            return flip
+
+        def switch(key, text):
+            return Item(text, toggle(key),
+                        checked=lambda _: api._window_option(key))
+
+        menu = Menu(
+            # Not a button: the one line that answers "am I routed, and as
+            # what" without opening the window.
+            Item(lambda _: self._status_line(), lambda: None, enabled=False),
+            Menu.SEPARATOR,
+            Item('Show Relay', self._show, default=True),
+            Item(lambda _: self._act_label(), self._act),
+            Item('Favourites', Menu(self._favourite_items)),
+            Menu.SEPARATOR,
+            switch('lockWindow', 'Lock position and size'),
+            switch('minToTray', 'Minimise to tray'),
+            switch('onTop', 'Always on top'),
+            Menu.SEPARATOR,
+            Item('Quit', self._quit))
         self.icon = pystray.Icon(APP_NAME, self._image('off'),
                                  f'{APP_NAME} - not connected', menu)
         threading.Thread(target=self.icon.run, daemon=True).start()
@@ -2399,6 +2482,92 @@ class Tray:
             self.icon.title = f'{APP_NAME} — {text}'
         except Exception:
             pass
+        self.refresh()
+
+    def refresh(self):
+        """Rebuild the menu, which on Windows is built before it is opened
+        and so goes on saying whatever was true when it was last built."""
+        if not self.icon:
+            return
+        try:
+            self.icon.update_menu()
+        except Exception:
+            pass
+
+    # -- what the menu says ----------------------------------------------
+
+    @staticmethod
+    def _name(code):
+        """A picker code as a person would say it. The same four shapes the
+        connect call takes: auto, "fr", "fr/par", "fr:windscribe", and
+        "file:<config>" for one exit by name."""
+        code = code or 'auto'
+        if code == 'auto':
+            return 'fastest'
+        if code.startswith('file:'):
+            base = os.path.basename(code[5:])
+            return base[:-5] if base.lower().endswith('.ovpn') else base
+        where, _, provider = code.partition(':')
+        country, _, city = where.partition('/')
+        name = countries.country_name(country)
+        if city:
+            name = f'{countries.city_name(city)}, {name}'
+        if provider:
+            name += f' ({accounts.LABELS.get(provider, provider.title())})'
+        return name
+
+    def _running(self):
+        try:
+            return self.api._engine.running() is not None
+        except Exception:
+            return False
+
+    def _status_line(self):
+        api = self.api
+        if api._busy:
+            return 'Connecting…'
+        try:
+            status = api._engine.status()
+        except Exception:
+            return 'Status unknown'
+        state = status.get('state')
+        if state == 'on':
+            exit_ = status.get('exit') or {}
+            seen = exit_.get('seen_as') or {}
+            country = seen.get('country') or exit_.get('country')
+            parts = ['Connected',
+                     countries.country_name(country) if country else None,
+                     # Only the checked address. The proxy's own is not the
+                     # one websites see, and the page refuses to show it for
+                     # the same reason.
+                     seen.get('ip')]
+        elif state == 'broken':
+            parts = ['Connection broken - open Relay']
+        else:
+            parts = ['Not connected', api._real_ip]
+        return ' · '.join(p for p in parts if p)
+
+    def _act_label(self):
+        if self.api._busy:
+            return 'Cancel connecting'
+        if self._running():
+            return 'Disconnect'
+        return f"Connect — {self._name(self.api._settings.get('picked'))}"
+
+    def _favourite_items(self):
+        import pystray
+        codes = self.api._settings.get('favourites') or []
+        if not codes:
+            yield pystray.MenuItem('None yet - star a place in the list',
+                                   lambda: None, enabled=False)
+            return
+        for code in codes:
+            def pick(*_, code=code):
+                self.api._emit('Tray', {'do': 'pick', 'code': code})
+            yield pystray.MenuItem(self._name(code), pick,
+                                   enabled=lambda _: not self.api._busy)
+
+    # -- what the menu does ----------------------------------------------
 
     def _show(self, *_):
         try:
@@ -2406,13 +2575,14 @@ class Tray:
             self.api._window.restore()
         except Exception:
             pass
+        self.api._apply_window()
 
-    def _disconnect(self, *_):
-        try:
-            self.api.disconnect()
-            self.api._emit('Disconnected', {})
-        except Exception:
-            pass
+    def _act(self, *_):
+        """Connect, cancel or disconnect - whichever the page's own button
+        would do now. Asked of the page rather than done here, so that a
+        connection started from the tray walks the same steps, and leaves the
+        window saying the same thing, as one started from the button."""
+        self.api._emit('Tray', {'do': 'act'})
 
     def _quit(self, *_):
         try:
@@ -3592,6 +3762,12 @@ def main():
         settings['h'] = WINDOW_H
         save_settings(settings)
 
+    # The exact rectangle, from the last time it closed. Applied once the
+    # window exists - pywebview takes a size in its own units, which is what
+    # w/h/x/y below are for, and those get it close; this gets it exact, and
+    # back onto a screen if the one it was on has gone.
+    placed = settings.get('placement') or {}
+
     window = webview.create_window(
         APP_NAME,
         os.path.join(paths.UI_DIR, 'index.html'),
@@ -3600,6 +3776,8 @@ def main():
         height=settings.get('h', WINDOW_H),
         x=settings.get('x'), y=settings.get('y'),
         min_size=(380, 640),
+        maximized=bool(placed.get('max')),
+        on_top=api._window_option('onTop'),
         background_color='#111113',
         resizable=True,
         text_select=False,
@@ -3610,6 +3788,30 @@ def main():
     tray = Tray(api, on_quit=lambda: window.destroy())
     api._tray = tray
 
+    def settle():
+        # On its own thread and after the window is on screen, because
+        # on_start can run before the form has a handle to find.
+        window.events.shown.wait(15)
+        if placed:
+            try:
+                winwindow.place(api._hwnd(), placed)
+            except Exception:
+                traceback.print_exc()
+        api._apply_window()
+
+    def minimised():
+        # Only with a tray icon to come back from. Hiding the window without
+        # one would leave nothing on screen that can bring it back.
+        if not api._window_option('minToTray') or not tray.icon:
+            return
+        # Now as well as at close: an app that lives in the tray is an app
+        # that gets ended by a shutdown, and a shutdown may not wait for it.
+        api._remember_place()
+        window.hide()
+
+    window.events.minimized += minimised
+    window.events.restored += api._apply_window
+
     def on_start():
         # Each of these on its own, and none able to take the others down.
         # This runs on pywebview's own thread, where an exception is printed
@@ -3617,6 +3819,8 @@ def main():
         # that came up and does nothing, with no tray, no address watcher and
         # no diagnostic. Which is exactly what one of them did.
         for step in (tray.start, dress_window,
+                     lambda: threading.Thread(target=settle,
+                                              daemon=True).start(),
                      lambda: threading.Thread(target=api._watch_self,
                                               daemon=True).start(),
                      lambda: threading.Thread(target=api._watch_traffic,
@@ -3654,6 +3858,13 @@ def main():
     def closing():
         # Remember where it was, and leave the connection alone. Quitting is
         # the tray's job; closing the window is just closing the window.
+        #
+        # The placement first: it is right in every state, including the
+        # ones the check below has to refuse - minimised, hidden in the tray.
+        try:
+            exact = api._remember_place()
+        except Exception:
+            exact = None
         try:
             where = {'w': window.width, 'h': window.height,
                      'x': window.x, 'y': window.y}
@@ -3663,8 +3874,12 @@ def main():
             # then restored, at which point the app opens off every screen
             # there is and the person has no way to know why. Nothing is
             # written rather than something that cannot be come back from.
+            #
+            # Nor if it is maximised: it then reports the monitor's size as
+            # its own, and that is not the size to come back to on restore.
             if all(-8000 < where[k] < 20000 for k in ('x', 'y')) \
-                    and where['w'] >= 300 and where['h'] >= 400:
+                    and where['w'] >= 300 and where['h'] >= 400 \
+                    and not (exact and exact.get('max')):
                 settings.update(where)
                 save_settings(settings)
         except Exception:
