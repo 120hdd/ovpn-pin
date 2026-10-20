@@ -96,6 +96,13 @@ LIBS="$HERE/app/android/app/libs"
 mkdir -p "$LIBS"
 cp "$HERE/relay.aar" "$LIBS/relay.aar"
 
+# And the native app at the repo root, which reads it from the same place in
+# its own tree.
+NATIVE="$HERE/../android/app/libs"
+mkdir -p "$NATIVE"
+cp "$HERE/relay.aar" "$NATIVE/relay.aar"
+
 echo
 ls -la "$HERE/relay.aar" | awk '{printf "  relay.aar  %.1f MB\n", $5/1048576}'
 echo "  libs       app/android/app/libs/relay.aar"
+echo "  libs       ../android/app/libs/relay.aar"
