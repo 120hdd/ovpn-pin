@@ -3,6 +3,7 @@ package com.erelay.relay.ui.theme
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,6 +33,8 @@ enum class Palette(
     val controlActive: Color,
     /** The faint violet light at the top of every page. */
     val glow: Color,
+    /** A light page: dark text, dark hairlines, deeper status colours. */
+    val light: Boolean = false,
 ) {
     /** app.css's dark theme: near-black with violet in it. */
     MIDNIGHT("midnight", "Midnight", Color(0xFF09090E), Color(0xFF17171F), Color(0xFF20212B),
@@ -56,7 +59,10 @@ enum class Palette(
         Color(0xFF34241E), Color(0xFF3F2C25), Color(0x33D9622B)),
     /** Blue-grey, like slate in the rain. */
     SLATE("slate", "Slate", Color(0xFF0C0F13), Color(0xFF161B21), Color(0xFF1F262E),
-        Color(0xFF27303A), Color(0xFF303A45), Color(0x24607D9B));
+        Color(0xFF27303A), Color(0xFF303A45), Color(0x24607D9B)),
+    /** Paper: an off-white page with white cards, for daylight. */
+    WHITE("white", "White", Color(0xFFF4F5F8), Color(0xFFFFFFFF), Color(0xFFECEEF2),
+        Color(0xFFE4E7EC), Color(0xFFDCE0E7), Color(0x266C5CE7), light = true);
 
     companion object {
         fun of(key: String?) = entries.firstOrNull { it.key == key } ?: MIDNIGHT
@@ -82,29 +88,37 @@ object Tone {
     val controlHover get() = palette.controlHover
     val controlActive get() = palette.controlActive
     val glow get() = palette.glow
-    val divider = Color(0x17FFFFFF)
-    val border = Color(0x21FFFFFF)
+    val light get() = palette.light
 
-    val text = Color(0xFFF5F5F8)
-    val textMuted = Color(0xFFB9BAC6)
-    val textOff = Color(0xFF777987)
+    // Text, hairlines and the state colours turn over with the page. The
+    // dark set is app.css's; the light set keeps the same hues a step deeper,
+    // because mint and amber that glow on near-black wash out on white.
+    val divider get() = if (light) Color(0x17000000) else Color(0x17FFFFFF)
+    val border get() = if (light) Color(0x24000000) else Color(0x21FFFFFF)
 
-    val ok = Color(0xFF61EFBF)
-    val work = Color(0xFFFFC761)
-    val fail = Color(0xFFFF8F9B)
+    val text get() = if (light) Color(0xFF16171D) else Color(0xFFF5F5F8)
+    val textMuted get() = if (light) Color(0xFF474B57) else Color(0xFFB9BAC6)
+    val textOff get() = if (light) Color(0xFF7A7F8E) else Color(0xFF777987)
+
+    val ok get() = if (light) Color(0xFF0C9C72) else Color(0xFF61EFBF)
+    val work get() = if (light) Color(0xFFB7791F) else Color(0xFFFFC761)
+    val fail get() = if (light) Color(0xFFD23B54) else Color(0xFFFF8F9B)
     val failBg = Color(0x80651D2C)
-    val focus = Color(0xFF74E4C2)
-    val accent = Color(0xFF8C82FF)
+    val focus get() = if (light) Color(0xFF0C9C72) else Color(0xFF74E4C2)
+    val accent get() = if (light) Color(0xFF5B4FE0) else Color(0xFF8C82FF)
+
+    /** What a press lights a control with: white on a dark page, black on a light one. */
+    val wash get() = if (light) Color.Black else Color.White
 
     val jade2 = Color(0xFF4AE5C3)
     val jadeDeep = Color(0xFF0B6B52)
     val ink = Color(0xFF06281D)
 
-    val fluxDown = Color(0xFF61EFBF)
-    val fluxUp = Color(0xFF9C8CFF)
+    val fluxDown get() = ok
+    val fluxUp get() = if (light) Color(0xFF6A5AE0) else Color(0xFF9C8CFF)
 
     val surfshark = Color(0xFF3BC1C9)
-    val windscribe = Color(0xFF61EFBF)
+    val windscribe get() = ok
 }
 
 /** The orb's colours per state: `--blob-a/b/c`, `--blob-glow`, `--state-accent`. */
@@ -171,32 +185,41 @@ val Mono = FontFamily(
 )
 
 object Type {
-    val eyebrow = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W600, fontSize = 10.sp,
+    val eyebrow get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W600, fontSize = 10.sp,
         letterSpacing = 1.4.sp, color = Tone.textOff)
-    val kicker = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W700, fontSize = 10.sp,
+    val kicker get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W700, fontSize = 10.sp,
         letterSpacing = 1.6.sp, color = Tone.ok)
-    val title = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W700, fontSize = 20.sp,
+    val title get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W700, fontSize = 20.sp,
         color = Tone.text)
-    val status = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W700, fontSize = 20.sp,
+    val status get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W700, fontSize = 20.sp,
         letterSpacing = 0.4.sp, color = Tone.text)
-    val body = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W400, fontSize = 14.sp,
+    val body get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W400, fontSize = 14.sp,
         lineHeight = 20.sp, color = Tone.textMuted)
-    val strong = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W600, fontSize = 15.sp,
+    val strong get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W600, fontSize = 15.sp,
         color = Tone.text)
-    val small = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W400, fontSize = 12.5.sp,
+    val small get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W400, fontSize = 12.5.sp,
         lineHeight = 18.sp, color = Tone.textOff)
-    val mono = TextStyle(fontFamily = Mono, fontWeight = FontWeight.Normal, fontSize = 12.sp,
+    val mono get() = TextStyle(fontFamily = Mono, fontWeight = FontWeight.Normal, fontSize = 12.sp,
         color = Tone.textOff)
-    val ip = TextStyle(fontFamily = Mono, fontWeight = FontWeight.Medium, fontSize = 16.sp,
+    val ip get() = TextStyle(fontFamily = Mono, fontWeight = FontWeight.Medium, fontSize = 16.sp,
         color = Tone.text)
-    val button = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W600, fontSize = 15.sp,
+    val button get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W600, fontSize = 15.sp,
         color = Tone.text)
 }
 
 @Composable
 fun RelayTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = darkColorScheme(
+        colorScheme = if (Tone.light) lightColorScheme(
+            background = Tone.bg,
+            surface = Tone.surface,
+            primary = Tone.ok,
+            onPrimary = Tone.ink,
+            secondary = Tone.accent,
+            error = Tone.fail,
+            onSurface = Tone.text,
+            onBackground = Tone.text,
+        ) else darkColorScheme(
             background = Tone.bg,
             surface = Tone.surface,
             primary = Tone.ok,

@@ -143,7 +143,7 @@ private fun DrawScope.ring(
     accent: Color, flow: Float, unit: Float,
 ) {
     rotate(tilt) {
-        drawOval(Color.White.copy(alpha = 0.105f * alpha),
+        drawOval(com.erelay.relay.ui.theme.Tone.wash.copy(alpha = (if (com.erelay.relay.ui.theme.Tone.light) 0.16f else 0.105f) * alpha),
             topLeft = Offset(center.x - w / 2, center.y - h / 2), size = Size(w, h),
             style = Stroke(1f * unit))
         val rad = Math.toRadians(angle.toDouble())

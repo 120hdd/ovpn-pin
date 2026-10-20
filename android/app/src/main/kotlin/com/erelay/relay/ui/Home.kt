@@ -502,7 +502,8 @@ private fun GoButton(mode: Mode, enabled: Boolean, accent: Color, onClick: () ->
                 val r = androidx.compose.ui.geometry.CornerRadius(14.dp.toPx())
                 when (mode) {
                     Mode.ON -> {
-                        drawRoundRect(Color(0xFF0E2A22), cornerRadius = r)
+                        drawRoundRect(Tone.surface, cornerRadius = r)
+                        drawRoundRect(Tone.ok.copy(alpha = 0.14f), cornerRadius = r)
                         drawRoundRect(Tone.ok.copy(alpha = 0.45f), cornerRadius = r,
                             style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
                         val far = Offset(size.width - 44.dp.toPx(), size.height / 2)
@@ -513,7 +514,8 @@ private fun GoButton(mode: Mode, enabled: Boolean, accent: Color, onClick: () ->
                             center = near, radius = 14.dp.toPx()), radius = 14.dp.toPx(), center = near)
                     }
                     Mode.BUSY -> {
-                        drawRoundRect(Color(0xFF2A2214), cornerRadius = r)
+                        drawRoundRect(Tone.surface, cornerRadius = r)
+                        drawRoundRect(Tone.work.copy(alpha = 0.14f), cornerRadius = r)
                         drawRoundRect(Tone.work.copy(alpha = 0.5f), cornerRadius = r,
                             style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
                         val at = Offset(size.width - 56.dp.toPx(), size.height / 2)

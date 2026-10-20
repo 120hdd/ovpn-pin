@@ -437,6 +437,8 @@ private fun Look(feel: com.erelay.relay.data.Feel, onFeel: (com.erelay.relay.dat
                 for (p in row) Swatch(p, p == chosen, Modifier.weight(1f)) {
                     onFeel(feel.copy(theme = p.key))
                 }
+                // A short last row keeps its swatches the size of the rest.
+                repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }

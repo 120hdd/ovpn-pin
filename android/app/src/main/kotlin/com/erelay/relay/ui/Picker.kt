@@ -207,7 +207,7 @@ private fun Search(value: String, onChange: (String) -> Unit) {
             .fillMaxWidth()
             .height(54.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(Brush.horizontalGradient(listOf(Color(0xFF0E1A17), Color(0xFF101318))))
+            .background(Brush.horizontalGradient(listOf(Tone.ok.copy(alpha = 0.06f), Tone.control.copy(alpha = 0.6f))))
             .border(1.dp, Tone.ok.copy(alpha = 0.22f), RoundedCornerShape(16.dp))
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,

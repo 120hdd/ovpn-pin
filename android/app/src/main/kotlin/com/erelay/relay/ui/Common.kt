@@ -119,7 +119,7 @@ fun Modifier.press(
             drawContent()
             if (lit > 0.01f) {
                 drawOutline(shape.createOutline(size, layoutDirection, this),
-                    Color.White.copy(alpha = 0.09f * lit))
+                    Tone.wash.copy(alpha = (if (Tone.light) 0.06f else 0.09f) * lit))
             }
         }
         .clickable(source, indication = null, enabled = enabled) {

@@ -18,6 +18,26 @@ import com.erelay.relay.ui.theme.Tone
  */
 class MainActivity : ComponentActivity() {
 
+    private var barsFor: Palette? = null
+
+    private fun paintBars() {
+        if (barsFor == Tone.palette) return
+        barsFor = Tone.palette
+        val bg = Tone.bg.toArgb()
+        if (Tone.light) {
+            enableEdgeToEdge(
+                statusBarStyle = SystemBarStyle.light(android.graphics.Color.TRANSPARENT,
+                    android.graphics.Color.TRANSPARENT),
+                navigationBarStyle = SystemBarStyle.light(bg, bg),
+            )
+        } else {
+            enableEdgeToEdge(
+                statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+                navigationBarStyle = SystemBarStyle.dark(bg),
+            )
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val core = (application as RelayApp).core
@@ -25,11 +45,16 @@ class MainActivity : ComponentActivity() {
         // on one frame of Midnight - and before the bars take their colour.
         Tone.palette = Palette.of(core.feel.value.theme)
         Tone.signal = core.feel.value.orbColors != "desktop"
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(Tone.bg.toArgb()),
-        )
+        paintBars()
         setContent {
+            // The bars and the window behind Compose follow the theme as it
+            // changes: dark icons on a light page, and no dark flash under it.
+            // Read here so a change of theme recomposes this and repaints them.
+            val palette = Tone.palette
+            androidx.compose.runtime.SideEffect {
+                paintBars()
+                window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Tone.bg.toArgb()))
+            }
             RelayTheme {
                 Root(core)
             }
