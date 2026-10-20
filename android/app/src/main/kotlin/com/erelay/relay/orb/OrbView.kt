@@ -50,6 +50,9 @@ class OrbView(context: Context) : TextureView(context), TextureView.SurfaceTextu
     @Volatile var colors: FloatArray = floatArrayOf(
         0.61f, 0.55f, 1.0f, 0.30f, 0.89f, 0.82f, 0.28f, 0.23f, 0.76f)
 
+    /** Asked not to move: one still frame, the reduced-motion one. */
+    @Volatile var still: Boolean = false
+
     /** Covered by a sheet or the app in the background: stop drawing. */
     var paused: Boolean = false
         set(value) {
@@ -197,7 +200,7 @@ class OrbView(context: Context) : TextureView(context), TextureView.SurfaceTextu
                 last = now
 
                 val moving = sphere.ease(dt, mode, colors)
-                if (reducedMotion()) {
+                if (still || reducedMotion()) {
                     // One still frame, picked for its profile, redrawn only
                     // while the colours are still easing.
                     if (settled && !moving) {

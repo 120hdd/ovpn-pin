@@ -127,6 +127,28 @@ class RelayCore(private val app: Application) {
     private val _pinRun = MutableStateFlow(PinRun())
     val pinRun: StateFlow<PinRun> = _pinRun.asStateFlow()
 
+    private val _feel = MutableStateFlow(readFeel())
+    val feel: StateFlow<Feel> = _feel.asStateFlow()
+
+    private fun readFeel() = Feel(
+        theme = prefs.getString("theme", "midnight") ?: "midnight",
+        haptics = prefs.getBoolean("haptics", true),
+        orbTap = prefs.getBoolean("orbTap", true),
+        orbMotion = prefs.getBoolean("orbMotion", true),
+        meter = prefs.getBoolean("meter", true),
+    )
+
+    fun setFeel(next: Feel) {
+        prefs.edit()
+            .putString("theme", next.theme)
+            .putBoolean("haptics", next.haptics)
+            .putBoolean("orbTap", next.orbTap)
+            .putBoolean("orbMotion", next.orbMotion)
+            .putBoolean("meter", next.meter)
+            .apply()
+        _feel.value = next
+    }
+
     /** Whether there is an account to connect with: Connect is off without one. */
     val hasCredentials: Boolean
         get() = credentials(Accounts.SURFSHARK) != null ||
@@ -165,7 +187,8 @@ class RelayCore(private val app: Application) {
         val failed = note.startsWith("failed")
         val busy = !up && !failed && (RelayVpnService.total > 0 ||
             note.startsWith("racing") || note.startsWith("asked") ||
-            note.startsWith("opening") || note.startsWith("finding"))
+            note.startsWith("opening") || note.startsWith("finding") ||
+            note.startsWith("checking"))
         val mode = when {
             up -> Mode.ON
             failed -> Mode.FAIL

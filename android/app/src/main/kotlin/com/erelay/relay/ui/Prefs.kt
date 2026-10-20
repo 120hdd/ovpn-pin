@@ -45,6 +45,7 @@ private enum class Screen(val title: String, val note: String) {
     SIGN_IN("Sign-in", "the accounts this app can use"),
     CONNECTION("Connection", "your own tunnel, and what it leaves alone"),
     SERVERS("Servers", "finding them, pinning them, timing them"),
+    LOOK("Look and feel", "theme, haptics, the orb"),
     ABOUT("About this copy", "paths, versions"),
 }
 
@@ -72,6 +73,8 @@ fun Prefs(
     onImport: () -> Unit,
     onDrop: () -> Unit,
     notice: String,
+    feel: com.erelay.relay.data.Feel,
+    onFeel: (com.erelay.relay.data.Feel) -> Unit,
 ) {
     var screen by rememberSaveable { mutableStateOf(Screen.MENU) }
     LaunchedEffect(open) { if (!open) screen = Screen.MENU }
@@ -89,7 +92,7 @@ fun Prefs(
         when (screen) {
             Screen.MENU -> {
                 Spacer(Modifier.height(4.dp))
-                for (s in listOf(Screen.SIGN_IN, Screen.CONNECTION, Screen.SERVERS, Screen.ABOUT)) {
+                for (s in listOf(Screen.SIGN_IN, Screen.CONNECTION, Screen.SERVERS, Screen.LOOK, Screen.ABOUT)) {
                     MenuRow(s.title, s.note) { screen = s }
                     if (s != Screen.ABOUT) Divider()
                 }
@@ -98,6 +101,7 @@ fun Prefs(
             Screen.CONNECTION -> Connection(core, tunnel, allowLan)
             Screen.SERVERS -> Servers(core, serverCount, countryCount, pinPlan, pinRun,
                 deadCount, asideCount, onImport, onDrop)
+            Screen.LOOK -> Look(feel, onFeel)
             Screen.ABOUT -> About(core)
         }
     }
@@ -395,6 +399,49 @@ private fun Progress(done: Int, total: Int) {
     Box(Modifier.fillMaxWidth().height(4.dp).clip(CircleShape).background(Tone.control)) {
         Box(Modifier.fillMaxWidth(if (total > 0) (done.toFloat() / total).coerceIn(0.02f, 1f) else 0.02f)
             .height(4.dp).background(Tone.ok))
+    }
+}
+
+// -- look and feel ----------------------------------------------------------------
+
+@Composable
+private fun Look(feel: com.erelay.relay.data.Feel, onFeel: (com.erelay.relay.data.Feel) -> Unit) {
+    val palette = com.erelay.relay.ui.theme.Palette.of(feel.theme)
+    Pane(icon = Glyph.layers, title = "Theme") {
+        Segment(com.erelay.relay.ui.theme.Palette.entries, palette, { it.label },
+            { onFeel(feel.copy(theme = it.key)) })
+        Spacer(Modifier.height(10.dp))
+        Text(when (palette) {
+            com.erelay.relay.ui.theme.Palette.MIDNIGHT ->
+                "The desktop's own: near-black with violet in it."
+            com.erelay.relay.ui.theme.Palette.GRAPHITE ->
+                "Neutral grey, no colour cast. The desktop's other dark set."
+            com.erelay.relay.ui.theme.Palette.BLACK ->
+                "True black. On an OLED screen those pixels are switched off, which " +
+                    "saves battery on a phone that keeps a tunnel up all evening."
+        }, style = Type.small)
+    }
+
+    Pane(icon = Glyph.activity, title = "Touch") {
+        ToggleRow("Haptic feedback",
+            "A light tick under each press, and a buzz when the tunnel comes up or fails.",
+            feel.haptics) { onFeel(feel.copy(haptics = it)) }
+        Spacer(Modifier.height(16.dp))
+        ToggleRow("Tap the orb to connect",
+            "The sphere works like the Connect button: tap to connect, tap again to " +
+                "disconnect. Only the sphere itself, not the space around it.",
+            feel.orbTap) { onFeel(feel.copy(orbTap = it)) }
+    }
+
+    Pane(icon = Glyph.gauge, title = "Motion") {
+        ToggleRow("Animate the orb",
+            "Off draws it once and leaves it still - less for the GPU to do. It still " +
+                "changes colour with the connection.",
+            feel.orbMotion) { onFeel(feel.copy(orbMotion = it)) }
+        Spacer(Modifier.height(16.dp))
+        ToggleRow("Show the traffic meter",
+            "The live wave of what is going up and down while connected.",
+            feel.meter) { onFeel(feel.copy(meter = it)) }
     }
 }
 

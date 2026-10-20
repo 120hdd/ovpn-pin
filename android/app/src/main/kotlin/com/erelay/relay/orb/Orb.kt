@@ -26,6 +26,12 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.erelay.relay.ui.press
 import com.erelay.relay.data.Mode
 import com.erelay.relay.ui.theme.toneOf
 import kotlin.math.cos
@@ -40,7 +46,10 @@ import kotlin.math.sin
  * [flow] is the traffic pace, 0..1, which the beads swell with.
  */
 @Composable
-fun OrbStage(mode: Mode, flow: Float, paused: Boolean, modifier: Modifier = Modifier, size: Dp = 210.dp) {
+fun OrbStage(
+    mode: Mode, flow: Float, paused: Boolean, modifier: Modifier = Modifier, size: Dp = 210.dp,
+    still: Boolean = false, onTap: (() -> Unit)? = null,
+) {
     val tone = toneOf(mode)
     val accent by animateColorAsState(tone.accent, tween(460), label = "accent")
     val glow by animateColorAsState(tone.glow, tween(460), label = "glow")
@@ -55,11 +64,22 @@ fun OrbStage(mode: Mode, flow: Float, paused: Boolean, modifier: Modifier = Modi
     val inner = loop.animateFloat(360f, 0f,
         infiniteRepeatable(tween(13000, easing = LinearEasing)), label = "inner")
 
-    Box(modifier.size(size), contentAlignment = Alignment.Center) {
+    val tapSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val held by tapSource.collectIsPressedAsState()
+    val squish by androidx.compose.animation.core.animateFloatAsState(
+        if (held) 0.93f else 1f,
+        androidx.compose.animation.core.spring(dampingRatio = 0.45f,
+            stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow), label = "squish")
+
+    Box(
+        modifier.size(size).graphicsLayer { scaleX = squish; scaleY = squish },
+        contentAlignment = Alignment.Center,
+    ) {
         Canvas(Modifier.fillMaxSize()) {
             val unit = this.size.width / 210f
-            val breathe = breathe.value
-            val halo = halo.value
+            // Still: the rings and glow hold one pose with the sphere.
+            val breathe = if (still) 0.5f else breathe.value
+            val halo = if (still) 0.35f else halo.value
 
             // The glow: a 150 disc of --blob-glow, breathing between 0.88 and
             // 1.13. A radial falloff stands in for the CSS blur.
@@ -76,8 +96,8 @@ fun OrbStage(mode: Mode, flow: Float, paused: Boolean, modifier: Modifier = Modi
             val ha = if (halo < 0.5f) halo / 0.5f * 0.3f else (1 - halo) / 0.5f * 0.3f
             drawCircle(accent.copy(alpha = ha), radius = 72.5f * unit * hs, style = Stroke(1f * unit))
 
-            ring(190f * unit, 184f * unit, -12f, outer.value, 1f, accent, flow, unit)
-            ring(163f * unit, 170f * unit, 0f, inner.value, 0.62f, accent, flow, unit)
+            ring(190f * unit, 184f * unit, -12f, if (still) 210f else outer.value, 1f, accent, flow, unit)
+            ring(163f * unit, 170f * unit, 0f, if (still) 40f else inner.value, 0.62f, accent, flow, unit)
         }
 
         val colors = remember(mode) {
@@ -92,9 +112,28 @@ fun OrbStage(mode: Mode, flow: Float, paused: Boolean, modifier: Modifier = Modi
             update = { v ->
                 v.mode = mode
                 v.colors = colors
+                v.still = still
                 v.paused = paused
             },
         )
+
+        // The sphere is a button too: the same press as Connect, on the body
+        // itself rather than the whole stage, so a thumb resting on the empty
+        // ring space does not start a tunnel. It squishes under the finger.
+        if (onTap != null) {
+            Box(
+                Modifier
+                    .size(size * 0.64f)
+                    .press(shape = CircleShape, source = tapSource,
+                        feel = androidx.compose.ui.hapticfeedback.HapticFeedbackType.Confirm,
+                        onClick = onTap)
+                    .semantics { contentDescription = when (mode) {
+                        Mode.ON -> "Disconnect"
+                        Mode.BUSY -> "Cancel"
+                        else -> "Connect"
+                    } },
+            )
+        }
     }
 }
 

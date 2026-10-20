@@ -4,6 +4,9 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
@@ -15,15 +18,52 @@ import com.erelay.relay.R
 import com.erelay.relay.data.Mode
 
 /**
+ * The surfaces a theme changes. Everything else - text, the state colours,
+ * jade - stays the same in all of them, so a status reads the same however
+ * dark the page behind it is.
+ */
+enum class Palette(
+    val key: String,
+    val label: String,
+    val bg: Color,
+    val surface: Color,
+    val control: Color,
+    val controlHover: Color,
+    val controlActive: Color,
+    /** The faint violet light at the top of every page. */
+    val glow: Color,
+) {
+    /** app.css's dark theme: near-black with violet in it. */
+    MIDNIGHT("midnight", "Midnight", Color(0xFF09090E), Color(0xFF17171F), Color(0xFF20212B),
+        Color(0xFF292B37), Color(0xFF313440), Color(0x2E483AC2)),
+    /** app.css's other dark set: neutral grey, no colour cast. */
+    GRAPHITE("graphite", "Graphite", Color(0xFF111113), Color(0xFF18191B), Color(0xFF212225),
+        Color(0xFF272A2D), Color(0xFF2E3135), Color(0x14FFFFFF)),
+    /** True black: the pixels of an OLED screen switched off. */
+    BLACK("black", "Black", Color(0xFF000000), Color(0xFF0E0E12), Color(0xFF18181F),
+        Color(0xFF202029), Color(0xFF2A2A34), Color(0x1A483AC2));
+
+    companion object {
+        fun of(key: String?) = entries.firstOrNull { it.key == key } ?: MIDNIGHT
+    }
+}
+
+/**
  * The desktop's palette, `app/ui/app.css` in its dark theme, name for name.
  * A colour changed there should be findable here by searching for the word.
+ *
+ * The surfaces read [palette], which is Compose state: switching the theme
+ * repaints every screen that drew with them, with nothing passed down.
  */
 object Tone {
-    val bg = Color(0xFF09090E)
-    val surface = Color(0xFF17171F)
-    val control = Color(0xFF20212B)
-    val controlHover = Color(0xFF292B37)
-    val controlActive = Color(0xFF313440)
+    var palette by mutableStateOf(Palette.MIDNIGHT)
+
+    val bg get() = palette.bg
+    val surface get() = palette.surface
+    val control get() = palette.control
+    val controlHover get() = palette.controlHover
+    val controlActive get() = palette.controlActive
+    val glow get() = palette.glow
     val divider = Color(0x17FFFFFF)
     val border = Color(0x21FFFFFF)
 

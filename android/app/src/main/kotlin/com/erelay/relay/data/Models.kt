@@ -34,6 +34,15 @@ enum class Sort(val key: String, val label: String) {
     }
 }
 
+/** How the app looks and answers a touch, as Settings → Look and feel has it. */
+data class Feel(
+    val theme: String = "midnight",
+    val haptics: Boolean = true,
+    val orbTap: Boolean = true,
+    val orbMotion: Boolean = true,
+    val meter: Boolean = true,
+)
+
 /** An address and the country it is in, as whereAmI and seenAs answer. */
 data class Place(val ip: String, val country: String)
 

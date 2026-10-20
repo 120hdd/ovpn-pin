@@ -75,6 +75,9 @@ import com.erelay.relay.ui.theme.Tone
 import com.erelay.relay.ui.theme.Type
 
 /** A click with no ripple: the desktop's controls light up on their own. */
+/** The look-and-feel settings, for controls deep in the tree that answer to them. */
+val LocalFeel = androidx.compose.runtime.compositionLocalOf { com.erelay.relay.data.Feel() }
+
 fun Modifier.tap(enabled: Boolean = true, onClick: () -> Unit): Modifier =
     press(enabled = enabled, onClick = onClick)
 
@@ -98,6 +101,7 @@ fun Modifier.press(
     val source = source ?: remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
     val haptics = LocalHapticFeedback.current
+    val buzz = LocalFeel.current.haptics
     // In fast, out slow: the light should be there the instant the finger
     // is, and fade rather than blink off when it lifts.
     val lit by animateFloatAsState(if (pressed && enabled) 1f else 0f,
@@ -117,7 +121,7 @@ fun Modifier.press(
             }
         }
         .clickable(source, indication = null, enabled = enabled) {
-            feel?.let { haptics.performHapticFeedback(it) }
+            if (buzz) feel?.let { haptics.performHapticFeedback(it) }
             onClick()
         }
 }
@@ -130,7 +134,7 @@ fun Backdrop(content: @Composable () -> Unit) {
             .fillMaxSize()
             .background(Tone.bg)
             .background(Brush.radialGradient(
-                listOf(Color(0x2E483AC2), Color.Transparent),
+                listOf(Tone.glow, Color.Transparent),
                 center = androidx.compose.ui.geometry.Offset(540f, 0f), radius = 1400f)),
     ) { content() }
 }

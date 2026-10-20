@@ -90,7 +90,11 @@ data class HomeState(
     val deadCount: Int,
     val hint: String,
     val hintBad: Boolean,
-)
+    val feel: com.erelay.relay.data.Feel = com.erelay.relay.data.Feel(),
+) {
+    /** Whether the chosen way out has what it needs to start. */
+    val canStart get() = if (way == Way.PROVIDER) hasCredentials && serverCount > 0 else tunnelReady
+}
 
 @Composable
 fun Home(
@@ -118,7 +122,7 @@ fun Home(
                     .padding(horizontal = 16.dp),
             ) {
                 Header(s, onLog, onDrop, onSettings)
-                Hero(s, orbPaused, onCopy, roomy, if (roomy) Modifier.weight(1f) else Modifier)
+                Hero(s, orbPaused, onCopy, onAct, roomy, if (roomy) Modifier.weight(1f) else Modifier)
                 Spacer(Modifier.height(12.dp))
                 StatusCard(s, onWay, onPick, onAct)
                 Text(
@@ -168,7 +172,7 @@ private val ROUTE = mapOf(
 )
 
 @Composable
-private fun Hero(s: HomeState, orbPaused: Boolean, onCopy: (String) -> Unit, roomy: Boolean, modifier: Modifier) {
+private fun Hero(s: HomeState, orbPaused: Boolean, onCopy: (String) -> Unit, onAct: () -> Unit, roomy: Boolean, modifier: Modifier) {
     val mode = s.conn.mode
     val accent by animateColorAsState(toneOf(mode).accent, tween(460), label = "routeDot")
     Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -178,8 +182,10 @@ private fun Hero(s: HomeState, orbPaused: Boolean, onCopy: (String) -> Unit, roo
         ) {
             val orb = minOf(maxWidth * 0.86f, maxHeight - 26.dp).coerceIn(200.dp, 380.dp)
             Box(Modifier.size(orb + 26.dp), contentAlignment = Alignment.Center) {
+                val tappable = s.feel.orbTap && (mode == Mode.BUSY || mode == Mode.ON || s.canStart)
                 OrbStage(mode, paceOf(s.traffic), orbPaused,
-                    Modifier.offset(y = if (mode == Mode.ON) (-4).dp else 6.dp), size = orb)
+                    Modifier.offset(y = if (mode == Mode.ON) (-4).dp else 6.dp), size = orb,
+                    still = !s.feel.orbMotion, onTap = if (tappable) onAct else null)
                 Row(Modifier.align(Alignment.TopCenter), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(5.dp).clip(CircleShape).background(accent))
                     Spacer(Modifier.width(7.dp))
@@ -189,7 +195,7 @@ private fun Hero(s: HomeState, orbPaused: Boolean, onCopy: (String) -> Unit, roo
         }
 
         AnimatedVisibility(
-            visible = mode == Mode.ON && s.traffic.live,
+            visible = mode == Mode.ON && s.traffic.live && s.feel.meter,
             enter = fadeIn(tween(Shape.ENTER_MS)) + expandVertically(tween(Shape.ENTER_MS)),
             exit = fadeOut(tween(Shape.FADE_MS)) + shrinkVertically(tween(Shape.ENTER_MS)),
         ) {
@@ -293,6 +299,7 @@ private val STAGES = mapOf(
     "finding" to "Finding a way in",
     "racing" to "Looking for a server",
     "asked" to "Looking for a server",
+    "checking" to "Checking the server answers",
     "opening" to "Opening the connection",
 )
 
@@ -398,8 +405,7 @@ private fun StatusCard(s: HomeState, onWay: (Way) -> Unit, onPick: () -> Unit, o
             PickButton(s.picked, s.pickLabel, enabled = mode != Mode.BUSY, onPick)
         }
         Spacer(Modifier.height(12.dp))
-        val canStart = if (s.way == Way.PROVIDER) s.hasCredentials && s.serverCount > 0 else s.tunnelReady
-        GoButton(mode, enabled = mode == Mode.BUSY || mode == Mode.ON || canStart, tone.accent, onAct)
+        GoButton(mode, enabled = mode == Mode.BUSY || mode == Mode.ON || s.canStart, tone.accent, onAct)
     }
 }
 

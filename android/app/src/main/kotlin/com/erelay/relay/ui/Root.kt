@@ -66,6 +66,10 @@ fun Root(core: RelayCore) {
     val allowLan by core.allowLan.collectAsStateWithLifecycle()
     val pinPlan by core.pinPlan.collectAsStateWithLifecycle()
     val pinRun by core.pinRun.collectAsStateWithLifecycle()
+    val feel by core.feel.collectAsStateWithLifecycle()
+    androidx.compose.runtime.SideEffect {
+        com.erelay.relay.ui.theme.Tone.palette = com.erelay.relay.ui.theme.Palette.of(feel.theme)
+    }
 
     var over by rememberSaveable { mutableStateOf(Over.NONE) }
     var over2 by rememberSaveable { mutableStateOf(Over2.NONE) }
@@ -96,14 +100,14 @@ fun Root(core: RelayCore) {
     val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
     var lastMode by remember { mutableStateOf(conn.mode) }
     LaunchedEffect(conn.mode) {
-        if (conn.mode != lastMode) {
+        if (conn.mode != lastMode && feel.haptics) {
             when (conn.mode) {
                 Mode.ON -> haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.Confirm)
                 Mode.FAIL -> haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.Reject)
                 else -> Unit
             }
-            lastMode = conn.mode
         }
+        lastMode = conn.mode
     }
 
     LaunchedEffect(conn.mode, conn.since) {
@@ -159,6 +163,7 @@ fun Root(core: RelayCore) {
     val (hint, hintBad) = said ?: hintOf(conn, way, seen, seenFailed, loaded, serverCount,
         countries.size, hasCredentials, picked, names, closedMinutes)
 
+    androidx.compose.runtime.CompositionLocalProvider(LocalFeel provides feel) {
     Box(Modifier.fillMaxSize()) {
         Home(
             HomeState(
@@ -167,7 +172,7 @@ fun Root(core: RelayCore) {
                 tunnelReady = tunnel.ready, picked = picked,
                 pickLabel = nameOfPick(picked, names), countries = countries.size,
                 serverCount = serverCount, loaded = loaded, hasCredentials = hasCredentials,
-                deadCount = dead.dead, hint = hint, hintBad = hintBad,
+                deadCount = dead.dead, hint = hint, hintBad = hintBad, feel = feel,
             ),
             orbPaused = over != Over.NONE || over2 != Over2.NONE || !foreground,
             onLog = { over = Over.LOG },
@@ -216,6 +221,8 @@ fun Root(core: RelayCore) {
             onImport = { importer.launch(null) },
             onDrop = { over = Over.DROP },
             notice = notice,
+            feel = feel,
+            onFeel = { core.setFeel(it) },
         )
 
         LogSheet(over == Over.LOG, live = conn.mode == Mode.ON, hosts = { core.hosts() },
@@ -240,6 +247,7 @@ fun Root(core: RelayCore) {
             beginWindscribe = { label, user, pass -> core.beginWindscribe(label, user, pass) },
             finishWindscribe = { token, solution, xs, ys, code -> core.finishWindscribe(token, solution, xs, ys, code) },
             onDone = { msg -> notice = msg; over2 = Over2.NONE })
+    }
     }
 
     // No account and nothing to connect through: the desktop opens Settings

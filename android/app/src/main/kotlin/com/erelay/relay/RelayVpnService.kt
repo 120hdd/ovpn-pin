@@ -314,6 +314,25 @@ class RelayVpnService : VpnService() {
                 }
             }
 
+            if (cfg.edges.isBlank()) {
+                fail("no way in to $domain answered - check the domain, or try " +
+                    "Find another way in under Settings")
+                return
+            }
+
+            // One real request through the server before the tunnel goes up.
+            // Without it the interface came up for any domain at all - a
+            // server that did not exist showed as connected, with every app's
+            // traffic routed into nothing. A few seconds now buys a
+            // "connected" that is true.
+            say("checking the server answers")
+            try {
+                Relay.testServer(cfg, 20000L)
+            } catch (e: Exception) {
+                fail("$domain did not carry a request: " + (e.message ?: e.toString()).take(140))
+                return
+            }
+
             say("opening the tunnel to $domain")
 
             val builder = buildInterface()
