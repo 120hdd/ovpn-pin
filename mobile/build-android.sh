@@ -87,22 +87,12 @@ go vet ./...
 gomobile bind -tags with_gvisor -target=android -androidapi 21 \
     -o "$HERE/relay.aar" ./bind
 
-# Where Gradle actually reads it. build.gradle.kts asks for
-# `files("libs/relay.aar")` - app/android/app/libs - and nothing ever put it
-# there, so a clean checkout could build the core, build the app, and ship an
-# APK with no core inside it. Both paths are gitignored; this is the copy
-# step that was only ever done by hand.
-LIBS="$HERE/app/android/app/libs"
-mkdir -p "$LIBS"
-cp "$HERE/relay.aar" "$LIBS/relay.aar"
-
-# And the native app at the repo root, which reads it from the same place in
-# its own tree.
+# Where Gradle reads it: android/app/libs, in the native app at the repo
+# root. Gitignored there as here; this is the copy step.
 NATIVE="$HERE/../android/app/libs"
 mkdir -p "$NATIVE"
 cp "$HERE/relay.aar" "$NATIVE/relay.aar"
 
 echo
 ls -la "$HERE/relay.aar" | awk '{printf "  relay.aar  %.1f MB\n", $5/1048576}'
-echo "  libs       app/android/app/libs/relay.aar"
 echo "  libs       ../android/app/libs/relay.aar"

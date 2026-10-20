@@ -65,7 +65,7 @@ Out comes `relay.aar`: the Go engine compiled for `arm64-v8a`, `armeabi-v7a`,
 `Client`, `Result`, `ServerConfig`, `PinOptions` and the four callback
 interfaces — `Progress`, `ReachProgress`, `PinProgress`, `Namer`, `Protector`
 — beside it. It is gitignored, and the script copies it into
-`app/android/app/libs/`, which is where Gradle reads it from.
+`../android/app/libs/`, which is where Gradle reads it from.
 
 The script prefers a named toolchain, then one it can find, and only then
 `PATH`, because each of these fails in a way that reads like a code error:
@@ -135,58 +135,52 @@ where it lands, which is after the socket exists and before it connects.
 
 ## The app
 
+The app is [`android/`](../android) at the repo root: its own Gradle project,
+Jetpack Compose, no web view. It used to be Flutter showing the desktop's
+page in a WebView, and that was slow in the way a whole desktop UI booting
+inside a browser on a phone is slow; it is gone.
+
 ```
-app/
-  lib/
-    main.dart               the WebView, and the two channels
-    bridge.dart             the JavaScript that becomes window.pywebview
-    theme.dart              the frame behind the page, from app/ui/app.css
-  assets/
-    phone.css               safe areas, touch targets, the tall gap
-    phone.js                the few sentences that are about Windows
-    ui/                     app/ui itself, copied here by sync-ui.sh
-  android/app/src/main/kotlin/com/erelay/relay/
-    MainActivity.kt         the Kotlin end of the bridge
-    Bridge.kt               one `when`: what the page asks for, answered
-    RelayVpnService.kt      the tunnel's whole lifetime
-    AppFiles.kt             the one writable directory, and what is under it
-    Accounts.kt             the roster, and which credential is in use
-    Secrets.kt              passwords, in the keystore rather than in prefs
-    Providers.kt            signing in, and fetching a published fleet
-    Pin.kt                  which inbox a pin run reads
-    Import.kt               a picked folder, copied in
-    Routes.kt               0.0.0.0/0 minus the local network, for API < 33
-    AppNamer.kt             which application opened this connection
+android/app/src/main/kotlin/com/erelay/relay/
+  data/RelayCore.kt         everything the window knows and can do, as flows
+  data/Models.kt            the core's JSON, parsed once into Kotlin
+  ui/                       the screens, in Compose
+  orb/                      the desktop's sphere shader, on OpenGL ES 3
+  RelayVpnService.kt        the tunnel's whole lifetime
+  RelayTile.kt              the quick-settings tile: one press to connect
+  AppFiles.kt               the one writable directory, and what is under it
+  Accounts.kt               the roster, and which credential is in use
+  Secrets.kt                passwords, in the keystore rather than in prefs
+  Providers.kt              signing in, and fetching a published fleet
+  Pin.kt                    which inbox a pin run reads
+  Import.kt                 a picked folder, copied in
+  Routes.kt                 0.0.0.0/0 minus the local network, for API < 33
+  AppNamer.kt               which application opened this connection
 ```
 
-**Two channels, not one.** `relay/control` is asked and answered.
-`relay/status` is pushed — the race counting up, the exit that won, the
-failure. Collapsing them would mean Dart polling for progress, and progress
-that arrives eight times a second is the one thing polling is worst at.
+**The orb is the desktop's own shader**, not a drawing of it. WebGL2 is GLSL
+ES 3.00 and so is OpenGL ES 3.0, so `sphere.js`'s shaders compile here as they
+are - which is why it is GLES rather than AGSL, which is fragment-only and
+this is a displaced mesh with a depth buffer. It draws on a `TextureView`, so
+the sheets that rise over it composite like anything else.
 
-**An answer can be late.** Half of what the page asks for is a network round
-trip, and it asks for those the way it asks the time: `const r = await
-api.x()`, and then it reads `r.edges[0]`. Answering at once with `{ok:true}`
-and pushing the real answer as an event looked reasonable and was not — the
-page has no handler for that event, so the answer was dropped in silence and
-the placeholder went straight into a TypeError one line later. `Bridge.Later`
-holds the result open until there is something true to settle it with.
-
-**The palette is the desktop's**, because the page is the desktop's.
+**The palette is the desktop's**, name for name, so a colour changed in
+`app/ui/app.css` can be found here by searching for the same word.
 
 ## Building it
 
 ```sh
-./sync-ui.sh                              # app/ui into the phone's assets
-./build-android.sh                        # relay.aar, and into app/libs
-cd app && flutter build apk --debug
+./build-android.sh                                # relay.aar, into android/app/libs
+cd ../android && ./gradlew :app:assembleDebug     # the APK
 ```
 
 Or take one that was built for you. Every push builds an APK
 ([.github/workflows/android.yml](../.github/workflows/android.yml)) and a `v*`
-tag attaches it to a release, which is a URL a phone can open. That is the
-usual route now: the machine this is developed on has none of the toolchain,
-and the line it is on drops a seventy-megabyte download halfway through.
+tag attaches it to a release, which is a URL a phone can open.
+
+Building here needs Google's Maven and the Android SDK, which refuse this
+line's own exits as a sanctioned region. Gradle and the SDK manager both
+take a proxy; through an exit Google does not count as one, they download.
 
 ## Setting one up
 

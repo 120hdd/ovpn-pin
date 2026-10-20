@@ -10,8 +10,7 @@
 # somewhere else in the tree, so there is one version of each and it is named
 # twice rather than guessed at:
 #
-#   Flutter   mobile/app/.metadata revision d3b14c87... == tag 3.47.2
-#   NDK       mobile/app/android/app/build.gradle.kts  ndkVersion
+#   NDK       android/app/build.gradle.kts  ndkVersion
 #   gomobile  mobile/core/go.mod's golang.org/x/mobile, via `go install`
 #             with no @version - which resolves out of the build list rather
 #             than off the tip of master, so the tool and the module it binds
@@ -25,7 +24,7 @@ on:
   # be reviewed either.
   push:
     paths:
-      - 'app/ui/**'
+      - 'android/**'
       - 'mobile/**'
       - 'tunnel/install-server.sh'
       - '.github/workflows/android.yml'
@@ -52,7 +51,6 @@ on:
 
 env:
   NDK_VERSION: '27.3.13750724'
-  FLUTTER_VERSION: '3.47.2'
   GO_VERSION: '1.27'
 
 jobs:
@@ -99,12 +97,6 @@ jobs:
         with:
           packages: 'platform-tools ndk;27.3.13750724'
 
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
-
       # No @version, and deliberately. `go install` from inside the module
       # resolves out of its build list, so gomobile is the same x/mobile the
       # bound package is compiled against. Pinning it separately is how the
@@ -116,10 +108,6 @@ jobs:
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
           go install golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
           gomobile init
-
-      # The window is app/ui itself, copied rather than reimplemented.
-      - name: copy the desktop's window into the phone's assets
-        run: mobile/sync-ui.sh
 
       - name: build the Go core
         run: |
@@ -157,13 +145,12 @@ jobs:
           echo "RELAY_KEY_ALIAS=relay" >> "$GITHUB_ENV"
 
       - name: build the APK
-        working-directory: mobile/app
+        working-directory: android
         run: |
-          flutter pub get
           if [ "${{ inputs.release }}" = "true" ]; then
-            flutter build apk --release --target-platform android-arm64
+            ./gradlew --no-daemon :app:assembleRelease
           else
-            flutter build apk --debug --target-platform android-arm64
+            ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
           fi
 
       # One name for both, because what changes between them is the build
@@ -172,9 +159,9 @@ jobs:
         id: apk
         run: |
           if [ "${{ inputs.release }}" = "true" ]; then
-            echo "path=mobile/app/build/app/outputs/flutter-apk/app-release.apk" >> "$GITHUB_OUTPUT"
+            echo "path=android/app/build/outputs/apk/release/app-release.apk" >> "$GITHUB_OUTPUT"
           else
-            echo "path=mobile/app/build/app/outputs/flutter-apk/app-debug.apk" >> "$GITHUB_OUTPUT"
+            echo "path=android/app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: actions/upload-artifact@v4
