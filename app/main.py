@@ -144,12 +144,16 @@ def _diagnostics_to_file(name):
 
 SETTINGS = os.path.join(paths.STATE_DIR, 'settings.json')
 
-# What the window opens at. The height is set by the front of the app
-# rather than by the settings sheet, which scrolls: the card, the orb
-# above it and the hint below have to sit together without the orb
-# being squeezed into an oval to make room.
+# The window's shape. The height is set by the front of the app rather than
+# by the settings sheet, which scrolls: the card, the orb above it and the
+# hint below have to sit together without the orb being squeezed into an
+# oval to make room. These are the proportions and the fallback; the size it
+# actually opens at is a share of the screen, so that it is neither a
+# postage stamp on a 4K monitor nor taller than a laptop's.
 WINDOW_W = 400
 WINDOW_H = 740
+WINDOW_SHARE = 0.85          # of the work area's height
+WINDOW_MIN = (380, 640)      # unless the screen itself is smaller
 
 # The window's own switches, all in the tray menu. Minimising to the tray is
 # on unless turned off: the window is a dashboard for a connection that lives
@@ -399,6 +403,7 @@ except Exception:
 os.environ.setdefault('WEBVIEW2_DEFAULT_BACKGROUND_COLOR', '00111113')
 
 import dropped                                               # noqa: E402
+import oneinstance                                           # noqa: E402
 import engine                                                # noqa: E402
 import pin                                                   # noqa: E402
 import sweep                                                 # noqa: E402
@@ -2604,8 +2609,8 @@ def dress_window():
 
     Windows 11 will recolour the caption it is already drawing instead:
     DWMWA_CAPTION_COLOR takes the bar, DWMWA_TEXT_COLOR takes the title, and
-    DWMWA_BORDER_COLOR takes the hairline around the window. The minimise,
-    maximise and close glyphs are the system's own and follow the caption -
+    DWMWA_BORDER_COLOR takes the hairline around the window. The minimise
+    and close glyphs are the system's own and follow the caption -
     on a dark one they come out white, which is the ask - and they stay the
     system's, so they keep their hover colours, their tooltips, their snap
     layouts flyout and their hit targets at the very edge of the screen.
@@ -3746,37 +3751,35 @@ def ui_check(window):
 
 
 def main():
+    # Before anything that touches the proxy, the engine or the settings
+    # file: a second copy that got that far would already be fighting the
+    # first. It has asked the first to come forward, and that is all it does.
+    if not oneinstance.claim():
+        print(f'{APP_NAME} is already running; brought it to the front.')
+        return
+
     api = Api()
     undo = install_safety(api)
 
     settings = api._settings
 
-    # The way-out strip and its line cost the card about eighty pixels, and
-    # the orb is what paid: its height is what is left over, so it went from
-    # round to squeezed without the page ever overflowing. A window saved
-    # before that control existed is now too short for its own contents, so
-    # it is raised once here rather than left for somebody to find by
-    # dragging the edge. Only upwards, and only to the new floor - a window
-    # deliberately made taller than that keeps the size it was given.
-    if settings.get('h') and settings['h'] < WINDOW_H:
-        settings['h'] = WINDOW_H
-        save_settings(settings)
-
-    # The exact rectangle, from the last time it closed. Applied once the
-    # window exists - pywebview takes a size in its own units, which is what
-    # w/h/x/y below are for, and those get it close; this gets it exact, and
-    # back onto a screen if the one it was on has gone.
+    # The exact rectangle, from the last time it closed, scaled to the
+    # screen as it is now. Applied once the window exists - pywebview takes
+    # a size in its own units, which is what the size below is for, and that
+    # gets it close; this gets it exact, and back onto a screen if the one it
+    # was on has gone.
     placed = settings.get('placement') or {}
+    size, least = winwindow.opening(
+        placed, WINDOW_W / WINDOW_H, WINDOW_SHARE, WINDOW_MIN) \
+        or ((WINDOW_W, WINDOW_H), WINDOW_MIN)
 
     window = webview.create_window(
         APP_NAME,
         os.path.join(paths.UI_DIR, 'index.html'),
         js_api=api,
-        width=settings.get('w', WINDOW_W),
-        height=settings.get('h', WINDOW_H),
+        width=size[0], height=size[1],
         x=settings.get('x'), y=settings.get('y'),
-        min_size=(380, 640),
-        maximized=bool(placed.get('max')),
+        min_size=least,
         on_top=api._window_option('onTop'),
         background_color='#111113',
         resizable=True,
@@ -3787,6 +3790,18 @@ def main():
 
     tray = Tray(api, on_quit=lambda: window.destroy())
     api._tray = tray
+
+    def come_forward():
+        # Launched again while already running: the same as Show in the tray
+        # menu, and to the front as well, which a click on the tray gets for
+        # free and a signal from another process does not.
+        tray._show()
+        try:
+            ctypes.windll.user32.SetForegroundWindow(api._hwnd())
+        except Exception:
+            pass
+
+    oneinstance.listen(come_forward, api._stop)
 
     def settle():
         # On its own thread and after the window is on screen, because
@@ -3809,7 +3824,16 @@ def main():
         api._remember_place()
         window.hide()
 
+    def maximised():
+        # There is no maximise button, but Win+Up and a few other ways in
+        # are the system's rather than the frame's. Put it straight back.
+        try:
+            window.restore()
+        except Exception:
+            traceback.print_exc()
+
     window.events.minimized += minimised
+    window.events.maximized += maximised
     window.events.restored += api._apply_window
 
     def on_start():
@@ -3862,25 +3886,24 @@ def main():
         # The placement first: it is right in every state, including the
         # ones the check below has to refuse - minimised, hidden in the tray.
         try:
-            exact = api._remember_place()
+            api._remember_place()
         except Exception:
-            exact = None
+            pass
         try:
-            where = {'w': window.width, 'h': window.height,
-                     'x': window.x, 'y': window.y}
+            # Only the position: the size is the placement's, as a share of
+            # the screen, and a pixel count here would undo that.
+            where = {'x': window.x, 'y': window.y}
             # Only if it is somewhere. A window being torn down reports
             # coordinates from the far side of nowhere - -21332 was the real
             # number - and a position like that is remembered faithfully and
             # then restored, at which point the app opens off every screen
             # there is and the person has no way to know why. Nothing is
             # written rather than something that cannot be come back from.
-            #
-            # Nor if it is maximised: it then reports the monitor's size as
-            # its own, and that is not the size to come back to on restore.
             if all(-8000 < where[k] < 20000 for k in ('x', 'y')) \
-                    and where['w'] >= 300 and where['h'] >= 400 \
-                    and not (exact and exact.get('max')):
+                    and window.width >= 300 and window.height >= 400:
                 settings.update(where)
+                settings.pop('w', None)
+                settings.pop('h', None)
                 save_settings(settings)
         except Exception:
             pass

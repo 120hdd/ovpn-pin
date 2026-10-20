@@ -539,6 +539,7 @@ def main():
         '--add-data', f'{proxy_source}{sep}.',
         '--hidden-import', 'winproxy',
         '--hidden-import', 'winwindow',
+        '--hidden-import', 'oneinstance',
         '--hidden-import', 'windscribe',
         '--hidden-import', 'engine',
         '--hidden-import', 'countries',

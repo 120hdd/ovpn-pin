@@ -14,13 +14,23 @@ restored one whatever state the window is in, and SetWindowPlacement is its
 other half. The rectangle is checked against the monitors that exist now
 before it is used, because the one it was saved on may have been unplugged.
 
+The size is kept as a share of the screen rather than as pixels. A window
+the right size on a 1080p monitor is a postage stamp on a 4K one and taller
+than the whole screen on a 768-line laptop, so the work area it was saved
+against rides along with the rectangle, and the rectangle is scaled by how
+much the screen has changed when it comes back.
+
+The window is never maximised. It is a narrow dashboard, and filled out to a
+whole monitor it is a small card in a sea of background. WS_MAXIMIZEBOX is
+taken away for good - that takes the button, the double-click on the title
+bar and the snap to the top of the screen - whether or not it is locked.
+
 Locking is done with the frame rather than by catching messages. Taking away
-WS_THICKFRAME takes the resize edges, taking away WS_MAXIMIZEBOX takes the
-maximise button and the double-click on the title bar, and removing Move and
-Size from the system menu takes the drag - DefWindowProc will not move a
-window whose menu has no Move in it. A window procedure written in Python
-would do the same, at the price of the interpreter running for every mouse
-move the window ever gets.
+WS_THICKFRAME takes the resize edges, and removing Move and Size from the
+system menu takes the drag - DefWindowProc will not move a window whose menu
+has no Move in it. A window procedure written in Python would do the same,
+at the price of the interpreter running for every mouse move the window ever
+gets.
 
 Every function here takes an HWND and does nothing without one. Nothing here
 is needed for the app to work; all of it is needed for it to be pleasant.
@@ -46,12 +56,11 @@ SWP_NOACTIVATE = 0x0010
 SWP_FRAMECHANGED = 0x0020
 
 SW_SHOWNORMAL = 1
-SW_SHOWMINIMIZED = 2
-SW_SHOWMAXIMIZED = 3
-WPF_RESTORETOMAXIMIZED = 0x0002
 
 MONITOR_DEFAULTTONULL = 0
 MONITOR_DEFAULTTONEAREST = 2
+
+SPI_GETWORKAREA = 0x0030
 
 DWMWA_EXTENDED_FRAME_BOUNDS = 9
 
@@ -140,6 +149,10 @@ if os.name == 'nt':
                                     ctypes.c_long, wintypes.HWND,
                                     wintypes.DWORD, ctypes.c_void_p,
                                     wintypes.DWORD)
+    _SystemParametersInfoW = _proto(_user32, 'SystemParametersInfoW',
+                                    wintypes.BOOL, wintypes.UINT,
+                                    wintypes.UINT, ctypes.c_void_p,
+                                    wintypes.UINT)
 
 
 def find(title):
@@ -179,12 +192,58 @@ def alive(hwnd):
     return bool(_user32 and hwnd and _IsWindow(hwnd))
 
 
+def _work(rc):
+    """The work area of the monitor nearest a rectangle - the screen less
+    the taskbar - or None."""
+    info = MONITORINFO()
+    info.cbSize = ctypes.sizeof(MONITORINFO)
+    mon = _MonitorFromRect(ctypes.byref(rc), MONITOR_DEFAULTTONEAREST)
+    if not mon or not _GetMonitorInfoW(mon, ctypes.byref(info)):
+        return None
+    return info.rcWork
+
+
+def _primary_work():
+    rc = wintypes.RECT()
+    if not _SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rc), 0):
+        return None
+    return rc
+
+
+def _units():
+    """How many of the pixels the monitor calls report make one of the
+    pixels pywebview is given a size in.
+
+    pywebview multiplies the size it is handed by the display scale, so it
+    wants pixels as they were at 100%. The monitor calls answer in real
+    pixels to a process that is DPI-aware and in 100% pixels to one that is
+    not, and which this process is depends on whether pywebview has got to
+    declaring it yet - so it is asked rather than assumed.
+    """
+    try:
+        ctx = _user32.GetThreadDpiAwarenessContext
+        ctx.restype = ctypes.c_void_p
+        of = _user32.GetAwarenessFromDpiAwarenessContext
+        of.restype, of.argtypes = ctypes.c_int, [ctypes.c_void_p]
+        aware = of(ctx()) != 0
+    except (AttributeError, OSError):
+        # Older than Windows 10 1607.
+        aware = bool(_user32.IsProcessDPIAware())
+    if not aware:
+        return 1.0
+    try:
+        # The same number pywebview multiplies by.
+        return ctypes.windll.shcore.GetScaleFactorForDevice(0) / 100 or 1.0
+    except (AttributeError, OSError):
+        return 1.0
+
+
 def placement(hwnd):
     """Where the window goes when it is put back, as something JSON keeps.
 
-    The rectangle is the restored one in every state. Minimised from a
-    maximised window still counts as maximised, which is what the flag that
-    rides along with a minimised placement is there to say.
+    The rectangle is the restored one in every state, and 'screen' is the
+    size of the work area it was on, so that it can be scaled to fit the
+    screen that is there next time.
     """
     if not alive(hwnd):
         return None
@@ -195,11 +254,12 @@ def placement(hwnd):
     rc = wp.rcNormalPosition
     if rc.right - rc.left < MIN_W or rc.bottom - rc.top < MIN_H:
         return None
-    maximised = wp.showCmd == SW_SHOWMAXIMIZED or (
-        wp.showCmd == SW_SHOWMINIMIZED
-        and bool(wp.flags & WPF_RESTORETOMAXIMIZED))
+    work = _work(rc)
+    if not work:
+        return None
     return {'left': rc.left, 'top': rc.top, 'right': rc.right,
-            'bottom': rc.bottom, 'max': maximised}
+            'bottom': rc.bottom,
+            'screen': [work.right - work.left, work.bottom - work.top]}
 
 
 def _onscreen(rc):
@@ -207,12 +267,9 @@ def _onscreen(rc):
     one - the nearest, and shrunk to its work area if it is bigger."""
     if _MonitorFromRect(ctypes.byref(rc), MONITOR_DEFAULTTONULL):
         return rc
-    info = MONITORINFO()
-    info.cbSize = ctypes.sizeof(MONITORINFO)
-    mon = _MonitorFromRect(ctypes.byref(rc), MONITOR_DEFAULTTONEAREST)
-    if not mon or not _GetMonitorInfoW(mon, ctypes.byref(info)):
+    work = _work(rc)
+    if not work:
         return rc
-    work = info.rcWork
     w = min(rc.right - rc.left, work.right - work.left)
     h = min(rc.bottom - rc.top, work.bottom - work.top)
     left = min(max(rc.left, work.left), work.right - w)
@@ -220,21 +277,84 @@ def _onscreen(rc):
     return wintypes.RECT(left, top, left + w, top + h)
 
 
-def place(hwnd, saved):
-    """Put the window back where placement() said it was."""
-    if not alive(hwnd) or not isinstance(saved, dict):
-        return False
+def _restored(saved):
+    """The rectangle placement() saved, scaled to the screen as it is now
+    and put on one that exists; or None if there is nothing usable.
+
+    One factor for both sides, taken from the height: the window keeps its
+    shape on a screen of a different shape rather than being stretched to
+    match it. A placement saved before the screen was kept with it has
+    nothing to scale by and is not used - its size is from when the window
+    was a fixed number of pixels, which is the thing being got away from.
+    """
+    if not isinstance(saved, dict):
+        return None
     try:
         rc = wintypes.RECT(*(int(saved[k]) for k in
                              ('left', 'top', 'right', 'bottom')))
+        was_w, was_h = (int(v) for v in saved['screen'])
     except (KeyError, TypeError, ValueError):
+        return None
+    if rc.right - rc.left < MIN_W or rc.bottom - rc.top < MIN_H \
+            or was_w <= 0 or was_h <= 0:
+        return None
+    work = _work(rc)
+    if work:
+        fx = (work.right - work.left) / was_w
+        fy = (work.bottom - work.top) / was_h
+        if fx != 1 or fy != 1:
+            left = work.left + round((rc.left - work.left) * fx)
+            top = work.top + round((rc.top - work.top) * fy)
+            rc = wintypes.RECT(left, top,
+                               left + round((rc.right - rc.left) * fy),
+                               top + round((rc.bottom - rc.top) * fy))
+    return _onscreen(rc)
+
+
+def opening(saved, aspect, share, floor):
+    """The size to open at and the smallest it may be made, both in
+    pywebview's units: ((w, h), (min_w, min_h)), or None off Windows.
+
+    The saved rectangle if there is one, scaled to the screen as it is now.
+    Otherwise `share` of the primary screen's height, at `aspect` width to
+    height. Never smaller than `floor`, unless the screen is, and never
+    bigger than the screen.
+    """
+    if not _user32:
+        return None
+    try:
+        units = _units()
+        rc = _restored(saved)
+        work = _work(rc) if rc else _primary_work()
+        if not work:
+            return None
+        ww = (work.right - work.left) / units
+        wh = (work.bottom - work.top) / units
+        least = (min(floor[0], ww), min(floor[1], wh))
+        if rc:
+            w = (rc.right - rc.left) / units
+            h = (rc.bottom - rc.top) / units
+        else:
+            h = wh * share
+            w = h * aspect
+        w = min(max(w, least[0]), ww)
+        h = min(max(h, least[1]), wh)
+        return (round(w), round(h)), (int(least[0]), int(least[1]))
+    except Exception:
+        return None
+
+
+def place(hwnd, saved):
+    """Put the window back where placement() said it was."""
+    if not alive(hwnd):
         return False
-    if rc.right - rc.left < MIN_W or rc.bottom - rc.top < MIN_H:
+    rc = _restored(saved)
+    if not rc:
         return False
     wp = WINDOWPLACEMENT()
     wp.length = ctypes.sizeof(WINDOWPLACEMENT)
-    wp.showCmd = SW_SHOWMAXIMIZED if saved.get('max') else SW_SHOWNORMAL
-    wp.rcNormalPosition = _onscreen(rc)
+    wp.showCmd = SW_SHOWNORMAL
+    wp.rcNormalPosition = rc
     return bool(_SetWindowPlacement(hwnd, ctypes.byref(wp)))
 
 
@@ -251,6 +371,9 @@ def _frame(hwnd):
 def lock(hwnd, on):
     """Hold the window where it is and at the size it is, or let it go.
 
+    Either way it cannot be maximised: the maximise box goes in both, and
+    this is what takes it away in the first place.
+
     Safe to repeat. Changing the frame changes how much of the window rect
     is invisible border, so the window is nudged afterwards to keep the
     edges you can see exactly where they were - otherwise locking would grow
@@ -259,20 +382,25 @@ def lock(hwnd, on):
     if not alive(hwnd):
         return False
     style = _GetStyle(hwnd, GWL_STYLE)
+    want = style & ~WS_MAXIMIZEBOX
     if on:
-        want = style & ~(WS_THICKFRAME | WS_MAXIMIZEBOX)
+        want &= ~WS_THICKFRAME
         menu = _GetSystemMenu(hwnd, False)
         if menu:
             for command in (SC_MOVE, SC_SIZE, SC_MAXIMIZE):
                 _RemoveMenu(menu, command, MF_BYCOMMAND)
     else:
-        want = style | WS_THICKFRAME | WS_MAXIMIZEBOX
+        want |= WS_THICKFRAME
         if want == style:
-            # Never locked, so nothing to undo - and this runs on every
-            # restore, so it should not be touching the menu each time.
+            # Nothing to undo - and this runs on every restore, so it should
+            # not be touching the menu each time.
             return True
-        # True puts the default system menu back, Move and Size with it.
+        # True puts the default system menu back, Move and Size with it,
+        # and Maximize, which is taken straight back out.
         _GetSystemMenu(hwnd, True)
+        menu = _GetSystemMenu(hwnd, False)
+        if menu:
+            _RemoveMenu(menu, SC_MAXIMIZE, MF_BYCOMMAND)
     _DrawMenuBar(hwnd)
     if want == style:
         return True
