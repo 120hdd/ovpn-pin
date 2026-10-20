@@ -59,6 +59,7 @@ private enum class Who(val key: String, val label: String) {
 @Composable
 fun AddAccount(
     open: Boolean,
+    provider: String,
     onClose: () -> Unit,
     addSurfshark: suspend (String, String, String) -> Said,
     beginWindscribe: suspend (String, String, String) -> Pair<Said, Pair<String, Captcha>?>,
@@ -75,6 +76,9 @@ fun AddAccount(
     var puzzle by remember { mutableStateOf<Pair<String, Captcha>?>(null) }
     val scope = rememberCoroutineScope()
 
+    LaunchedEffect(open, provider) {
+        if (open) who = if (provider == Who.WINDSCRIBE.key) Who.WINDSCRIBE else Who.SURFSHARK
+    }
     LaunchedEffect(open) {
         if (!open) {
             user = ""; password = ""; twoFa = ""; label = ""; said = null; busy = false; puzzle = null

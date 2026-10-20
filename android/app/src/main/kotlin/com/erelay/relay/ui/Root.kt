@@ -74,6 +74,8 @@ fun Root(core: RelayCore) {
     var over by rememberSaveable { mutableStateOf(Over.NONE) }
     var over2 by rememberSaveable { mutableStateOf(Over2.NONE) }
     var notice by remember { mutableStateOf("") }
+    // Which provider the add-account sheet opens on: the card it came from.
+    var addFor by rememberSaveable { mutableStateOf("surfshark") }
     var said by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
     var pendingCode by rememberSaveable { mutableStateOf("auto") }
     // How long the last tunnel carried, for the line after it closes.
@@ -217,7 +219,7 @@ fun Root(core: RelayCore) {
             countryCount = countries.size, pinPlan = pinPlan, pinRun = pinRun,
             deadCount = dead.dead, asideCount = dead.aside,
             onClose = { over = Over.NONE; notice = "" },
-            onAddAccount = { over2 = Over2.ADD_ACCOUNT },
+            onAddAccount = { provider -> addFor = provider; over2 = Over2.ADD_ACCOUNT },
             onImport = { importer.launch(null) },
             onDrop = { over = Over.DROP },
             notice = notice,
@@ -241,7 +243,7 @@ fun Root(core: RelayCore) {
             onImport = { over2 = Over2.NONE; importer.launch(null) },
             onClose = { over2 = Over2.NONE })
 
-        AddAccount(over2 == Over2.ADD_ACCOUNT,
+        AddAccount(over2 == Over2.ADD_ACCOUNT, provider = addFor,
             onClose = { over2 = Over2.NONE },
             addSurfshark = { label, user, pass -> core.addSurfshark(label, user, pass) },
             beginWindscribe = { label, user, pass -> core.beginWindscribe(label, user, pass) },

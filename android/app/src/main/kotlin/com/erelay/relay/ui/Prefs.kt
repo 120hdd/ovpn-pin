@@ -69,7 +69,7 @@ fun Prefs(
     deadCount: Int,
     asideCount: Int,
     onClose: () -> Unit,
-    onAddAccount: () -> Unit,
+    onAddAccount: (String) -> Unit,
     onImport: () -> Unit,
     onDrop: () -> Unit,
     notice: String,
@@ -112,7 +112,7 @@ fun Prefs(
 @Composable
 private fun SignIn(
     core: RelayCore, accounts: List<Account>, cards: Map<String, ProviderCard>,
-    onAddAccount: () -> Unit, notice: String,
+    onAddAccount: (String) -> Unit, notice: String,
 ) {
     val scope = rememberCoroutineScope()
     var said by remember { mutableStateOf<Said?>(null) }
@@ -128,7 +128,7 @@ private fun SignIn(
         for (a in accounts) AccountRow(a,
             onUse = { scope.launch { said = core.useAccount(a.id) } },
             onRemove = { scope.launch { said = core.removeAccount(a.id) } })
-        ButtonRow { Btn("Add an account", onAddAccount) }
+        ButtonRow { Btn("Add an account", { onAddAccount(Accounts.SURFSHARK) }) }
     }
 
     Pane(icon = Glyph.globe, title = "Servers from each provider") {
@@ -139,7 +139,7 @@ private fun SignIn(
                 said = null
                 scope.launch {
                     said = when (action) {
-                        "sign-in" -> { onAddAccount(); null }
+                        "sign-in" -> { onAddAccount(p); null }
                         "servers" -> if (p == Accounts.SURFSHARK) core.surfsharkServers()
                                      else core.windscribeServers(freeOnly = false)
                         "pin" -> core.pinFor(p).let { if (it.ok) Said(true,
