@@ -80,9 +80,17 @@ fun Prefs(
     notice: String,
     feel: com.erelay.relay.data.Feel,
     onFeel: (com.erelay.relay.data.Feel) -> Unit,
+    /** Where to open: "menu", "sign-in" or "connection". */
+    start: String = "menu",
 ) {
     var screen by rememberSaveable { mutableStateOf(Screen.MENU) }
-    LaunchedEffect(open) { if (!open) screen = Screen.MENU }
+    LaunchedEffect(open, start) {
+        screen = if (!open) Screen.MENU else when (start) {
+            "sign-in" -> Screen.SIGN_IN
+            "connection" -> Screen.CONNECTION
+            else -> Screen.MENU
+        }
+    }
     LaunchedEffect(open, screen) {
         if (open) {
             core.refreshAccounts()
@@ -102,7 +110,7 @@ fun Prefs(
                     if (s != Screen.ABOUT) Divider()
                 }
             }
-            Screen.SIGN_IN -> SignIn(core, accounts, cards, onAddAccount, notice)
+            Screen.SIGN_IN -> SignIn(core, accounts, cards, pinRun, onAddAccount, notice)
             Screen.CONNECTION -> Connection(core, tunnel, allowLan)
             Screen.SERVERS -> Servers(core, serverCount, countryCount, pinPlan, pinRun,
                 deadCount, asideCount, onImport, onDrop)
@@ -116,7 +124,7 @@ fun Prefs(
 
 @Composable
 private fun SignIn(
-    core: RelayCore, accounts: List<Account>, cards: Map<String, ProviderCard>,
+    core: RelayCore, accounts: List<Account>, cards: Map<String, ProviderCard>, run: PinRun,
     onAddAccount: (String) -> Unit, notice: String,
 ) {
     val scope = rememberCoroutineScope()
@@ -136,7 +144,11 @@ private fun SignIn(
         ButtonRow { Btn("Add an account", { onAddAccount(Accounts.SURFSHARK) }) }
     }
 
-    Pane(icon = Glyph.globe, title = "Servers from each provider") {
+    Pane(icon = Glyph.globe, title = "Servers from each provider",
+        help = "Each provider in three steps, one button each: sign in, get its server " +
+            "list, then pin it - resolve every server to its real address over " +
+            "DNS-over-HTTPS, since this line's resolver forges them. After that the button " +
+            "keeps the list up to date.") {
         for (p in listOf(Accounts.SURFSHARK, Accounts.WINDSCRIBE)) {
             val card = cards[p] ?: ProviderCard()
             ProviderStep(p, card, busy = busy == p) { action ->
@@ -147,8 +159,9 @@ private fun SignIn(
                         "sign-in" -> { onAddAccount(p); null }
                         "servers" -> if (p == Accounts.SURFSHARK) core.surfsharkServers()
                                      else core.windscribeServers(freeOnly = false)
-                        "pin" -> core.pinFor(p).let { if (it.ok) Said(true,
-                            "Ready to pin - Settings → Servers.") else it }
+                        // Pinned right here: point the run at this provider's pile and
+                        // start it, and the progress shows under the cards.
+                        "pin" -> core.pinFor(p).let { if (it.ok) core.startPin().takeIf { s -> !s.ok } else it }
                         "refresh" -> core.windscribeRefresh()
                         else -> null
                     }
@@ -156,7 +169,31 @@ private fun SignIn(
                 }
             }
         }
+        if (run.running || run.finished.isNotEmpty()) PinRunView(run) { core.cancelPin() }
         said?.let { SaidLine(it.text, bad = !it.ok) }
+    }
+}
+
+/** A pin run as it goes: a bar, the counts, the last address, and Stop. */
+@Composable
+private fun PinRunView(run: PinRun, onStop: () -> Unit) {
+    Spacer(Modifier.height(10.dp))
+    Divider()
+    Spacer(Modifier.height(10.dp))
+    if (run.running) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Pinning", style = Type.strong.copy(fontSize = 14.sp), modifier = Modifier.weight(1f))
+            Btn("Stop", onStop, danger = true)
+        }
+        Spacer(Modifier.height(8.dp))
+        Progress(run.done, run.total)
+        Text("${run.done} of ${run.total} · ${run.reachable} answering · ${run.unreachable} not" +
+            if (run.forged > 0) " · ${run.forged} forged answers seen" else "",
+            style = Type.mono, modifier = Modifier.padding(top = 6.dp))
+        if (run.last.isNotEmpty()) Text(run.last, style = Type.mono.copy(color = Tone.textMuted),
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
+    } else {
+        SaidLine(run.finished)
     }
 }
 

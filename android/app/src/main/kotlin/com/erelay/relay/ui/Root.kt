@@ -75,6 +75,10 @@ fun Root(core: RelayCore) {
     var over by rememberSaveable { mutableStateOf(Over.NONE) }
     var over2 by rememberSaveable { mutableStateOf(Over2.NONE) }
     var notice by remember { mutableStateOf("") }
+    // The welcome page, put away for this session by any answer to it.
+    var welcomed by rememberSaveable { mutableStateOf(false) }
+    // Which page Settings opens on: the menu from the gear, a page from the welcome.
+    var prefsStart by rememberSaveable { mutableStateOf("menu") }
     // Which provider the add-account sheet opens on: the card it came from.
     var addFor by rememberSaveable { mutableStateOf("surfshark") }
     var said by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
@@ -176,6 +180,10 @@ fun Root(core: RelayCore) {
 
     val names = remember(countries) { countries.associate { it.code to it.name } }
     val hasCredentials = accounts.any { it.signedIn } || core.hasCredentials
+    // Nothing to connect with or through: no account, no servers, no server of
+    // its own. That is a first run, and it gets a question rather than a
+    // Connect button that cannot work.
+    val showWelcome = loaded && !welcomed && !hasCredentials && serverCount == 0 && !tunnel.ready
 
     val (hint, hintBad) = said ?: hintOf(conn, way, seen, seenFailed, loaded, serverCount,
         countries.size, hasCredentials, picked, names, closedMinutes)
@@ -191,10 +199,10 @@ fun Root(core: RelayCore) {
                 serverCount = serverCount, loaded = loaded, hasCredentials = hasCredentials,
                 deadCount = dead.dead, hint = hint, hintBad = hintBad, feel = feel,
             ),
-            orbPaused = over != Over.NONE || over2 != Over2.NONE || !foreground,
+            orbPaused = over != Over.NONE || over2 != Over2.NONE || !foreground || showWelcome,
             onLog = { over = Over.LOG },
             onDrop = { over = Over.DROP },
-            onSettings = { over = Over.PREFS },
+            onSettings = { prefsStart = "menu"; over = Over.PREFS },
             onWay = { core.setWay(it) },
             onPick = { over = Over.PICKER },
             onAct = {
@@ -207,6 +215,19 @@ fun Root(core: RelayCore) {
             // A fresh race through a fresh exit: the service drops the old
             // tunnel itself when asked to start another.
             onReconnect = { if (conn.mode == Mode.ON) connect(if (way == Way.SERVER) "auto" else picked) },
+        )
+
+        Welcome(
+            open = showWelcome,
+            onProvider = { provider -> addFor = provider; over2 = Over2.ADD_ACCOUNT },
+            onServer = {
+                core.setWay(Way.SERVER)
+                welcomed = true
+                prefsStart = "connection"
+                over = Over.PREFS
+            },
+            onImport = { importer.launch(null) },
+            onSkip = { welcomed = true },
         )
 
         Picker(
@@ -241,6 +262,7 @@ fun Root(core: RelayCore) {
             onImport = { importer.launch(null) },
             onDrop = { over = Over.DROP },
             notice = notice,
+            start = prefsStart,
             feel = feel,
             onFeel = { core.setFeel(it) },
         )
@@ -266,15 +288,18 @@ fun Root(core: RelayCore) {
             addSurfshark = { label, user, pass -> core.addSurfshark(label, user, pass) },
             beginWindscribe = { label, user, pass -> core.beginWindscribe(label, user, pass) },
             finishWindscribe = { token, solution, xs, ys, code -> core.finishWindscribe(token, solution, xs, ys, code) },
-            onDone = { msg -> notice = msg; over2 = Over2.NONE })
+            onDone = { msg ->
+                // On to the next step - getting the servers - on the page that has it.
+                notice = msg
+                over2 = Over2.NONE
+                welcomed = true
+                prefsStart = "sign-in"
+                over = Over.PREFS
+            })
     }
     }
 
-    // No account and nothing to connect through: the desktop opens Settings
-    // on the way up rather than leaving a Connect button that cannot work.
-    LaunchedEffect(loaded) {
-        if (loaded && !hasCredentials && way == Way.PROVIDER && over == Over.NONE) over = Over.PREFS
-    }
+
 
     LaunchedEffect(Unit) { scope.launch { core.refreshList() } }
 }
