@@ -1,6 +1,11 @@
 package com.erelay.relay.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -215,7 +220,10 @@ private fun ProviderStep(provider: String, card: ProviderCard, busy: Boolean, ac
     }
     if (provider == Accounts.WINDSCRIBE && card.account) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("The proxy credential expires now and then.", style = Type.small, modifier = Modifier.weight(1f))
+            Spacer(Modifier.weight(1f))
+            InfoTip("Windscribe's proxy credential expires now and then. When its exits start " +
+                "refusing the account, this fetches a fresh one with the session already held - " +
+                "no puzzle.")
             Btn("Refresh credential", { act("refresh") }, enabled = !busy)
         }
     }
@@ -247,14 +255,14 @@ private fun Connection(core: RelayCore, tunnel: TunnelPlan, allowLan: Boolean) {
     var busy by remember { mutableStateOf(false) }
 
     Pane(icon = Glyph.tower, title = "Your own tunnel",
+        help = "A server of your own behind Cloudflare. The phone speaks the tunnel itself - " +
+            "there is no client to install here. The tunnel password opens it; the API " +
+            "password is for the server's own settings.",
         pill = when {
             busy -> "asking"
             tunnel.ready -> "ready"
             else -> "not set"
         }, pillGood = tunnel.ready) {
-        Text("A server of your own behind Cloudflare. The phone speaks the tunnel itself - " +
-            "there is no client to install here.", style = Type.small)
-        Spacer(Modifier.height(10.dp))
         Field(domain, { domain = it }, "yourdomain.com", mono = true)
         Spacer(Modifier.height(8.dp))
         Field(password, { password = it },
@@ -291,9 +299,12 @@ private fun Connection(core: RelayCore, tunnel: TunnelPlan, allowLan: Boolean) {
         Spacer(Modifier.height(12.dp))
         Divider()
         Spacer(Modifier.height(12.dp))
-        Text("Setting up the server", style = Type.strong.copy(fontSize = 14.sp))
-        Text("One line to paste into an SSH session on it. The provider account stays as " +
-            "placeholders, so it never lands in a shell history.", style = Type.small)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Setting up the server", style = Type.strong.copy(fontSize = 14.sp))
+            InfoTip("One line to paste into an SSH session on the server: it carries the " +
+                "installer inside itself and runs it. The provider account stays as " +
+                "placeholders, so it never lands in a shell history.")
+        }
         ButtonRow {
             Btn("Copy the install command", {
                 val cmd = core.installCommand(domain)
@@ -314,12 +325,12 @@ private fun Servers(
     val scope = rememberCoroutineScope()
     var said by remember { mutableStateOf<Said?>(null) }
 
-    Pane(icon = Glyph.folder, title = "Server folder", pill = "$serverCount servers · $countryCount countries",
-        pillGood = serverCount > 0) {
+    Pane(icon = Glyph.folder, title = "Server folder", pill = "$serverCount · $countryCount countries",
+        pillGood = serverCount > 0,
+        help = "Configs pinned to real addresses live here, in the app's own folder. Import a " +
+            "folder of .ovpn files from the phone - they are copied in - or get them from a " +
+            "provider under Sign-in.") {
         Text(core.dataFolder, style = Type.mono, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Spacer(Modifier.height(6.dp))
-        Text("Configs pinned to real addresses live here. Import a folder of .ovpn files from " +
-            "the phone, or get them from a provider under Sign-in.", style = Type.small)
         ButtonRow { Btn("Import a folder…", onImport, icon = Glyph.folder) }
     }
 
@@ -328,17 +339,20 @@ private fun Servers(
             run.running -> "pinning"
             plan.total > 0 -> "${plan.total} waiting"
             else -> null
-        }, pillGood = run.running || plan.total > 0) {
-        Text("A downloaded config names a host, and on this line the resolver answers for that " +
-            "host with a forged address. Pinning resolves each one over DNS-over-HTTPS and " +
-            "writes the real address in.", style = Type.small)
-        Spacer(Modifier.height(10.dp))
+        }, pillGood = run.running || plan.total > 0,
+        help = "A downloaded config names a host, and on this line the resolver answers for " +
+            "that host with a forged address. Pinning resolves each one over DNS-over-HTTPS " +
+            "and writes the real address in. Direct asks from here; Through the tunnel asks " +
+            "from wherever the tunnel comes out.") {
         Segment(listOf("direct", "proxy"), plan.route.ifEmpty { "direct" },
             { if (it == "direct") "Direct" else "Through the tunnel" },
             { r -> scope.launch { core.setPinRoute(route = r) } }, enabled = !run.running)
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Addresses per host", style = Type.body.copy(color = Tone.text), modifier = Modifier.weight(1f))
+            Text("Addresses per host", style = Type.body.copy(color = Tone.text))
+            InfoTip("A host can answer at several addresses. Each one becomes its own config, " +
+                "so more here means more exits to race and a longer pin.")
+            Spacer(Modifier.weight(1f))
             IconButton(Glyph.minus, "Fewer", { scope.launch { core.setPinRoute(maxIps = plan.maxIps - 1) } },
                 size = 34.dp, enabled = !run.running && plan.maxIps > 1)
             Text(plan.maxIps.toString(), style = Type.mono.copy(color = Tone.text, fontSize = 14.sp),
@@ -347,7 +361,10 @@ private fun Servers(
                 size = 34.dp, enabled = !run.running && plan.maxIps < 32)
         }
         Spacer(Modifier.height(8.dp))
-        ToggleRow("Check each address answers", null, plan.test) { on ->
+        ToggleRow("Check each address answers",
+            "Before writing a config, ask its address whether it takes a connection, and " +
+                "leave out the ones that do not. Slower, and the folder only holds exits that " +
+                "were alive when pinned.", plan.test) { on ->
             scope.launch { core.setPinRoute(test = on) }
         }
         for (b in plan.blockers) SaidLine(b.say, bad = true)
@@ -376,21 +393,23 @@ private fun Servers(
     }
 
     Pane(icon = Glyph.archive, title = "Exits that stopped answering",
-        pill = if (deadCount > 0) "$deadCount" else null, pillGood = false) {
+        pill = if (deadCount > 0) "$deadCount" else null, pillGood = false,
+        help = "Exits that refused or timed out the last time the bolt on a country tested " +
+            "them. Setting them aside keeps the race off them; they can be put back.") {
         Text(when {
-            deadCount > 0 -> "$deadCount exits refused or timed out the last time they were " +
-                "tested. Setting them aside keeps the race off them."
-            asideCount > 0 -> "$asideCount set aside earlier. They can be put back."
-            else -> "None. Tap the bolt on a row of the country list to test its exits."
+            deadCount > 0 -> "$deadCount to set aside."
+            asideCount > 0 -> "$asideCount set aside earlier."
+            else -> "None."
         }, style = Type.small)
         if (deadCount > 0 || asideCount > 0) ButtonRow { Btn("Review them", onDrop) }
     }
 
-    Pane(icon = Glyph.gauge, title = "Timing servers") {
-        Text("The desktop times a server by raising a real OpenVPN tunnel through it. A phone " +
-            "cannot: there is no OpenVPN here, and only one VPN may be up at a time - this app " +
-            "is that one. What the phone measures instead is how quickly each exit's proxy " +
-            "answers, which is the bolt on each row of the country list.", style = Type.small)
+    Pane(icon = Glyph.gauge, title = "Timing servers",
+        help = "The desktop times a server by raising a real OpenVPN tunnel through it. A " +
+            "phone cannot: there is no OpenVPN here, and only one VPN may be up at a time - " +
+            "this app is that one. What the phone measures instead is how quickly each " +
+            "exit's proxy answers, which is the bolt on each row of the country list.") {
+        Text("The bolt on a country times its exits.", style = Type.small)
     }
 }
 
@@ -406,31 +425,70 @@ private fun Progress(done: Int, total: Int) {
 
 @Composable
 private fun Look(feel: com.erelay.relay.data.Feel, onFeel: (com.erelay.relay.data.Feel) -> Unit) {
-    val palette = com.erelay.relay.ui.theme.Palette.of(feel.theme)
-    Pane(icon = Glyph.layers, title = "Theme") {
-        Segment(com.erelay.relay.ui.theme.Palette.entries, palette, { it.label },
-            { onFeel(feel.copy(theme = it.key)) })
-        Spacer(Modifier.height(10.dp))
-        Text(when (palette) {
-            com.erelay.relay.ui.theme.Palette.MIDNIGHT ->
-                "The desktop's own: near-black with violet in it."
-            com.erelay.relay.ui.theme.Palette.GRAPHITE ->
-                "Neutral grey, no colour cast. The desktop's other dark set."
-            com.erelay.relay.ui.theme.Palette.BLACK ->
-                "True black. On an OLED screen those pixels are switched off, which " +
-                    "saves battery on a phone that keeps a tunnel up all evening."
-        }, style = Type.small)
+    val chosen = com.erelay.relay.ui.theme.Palette.of(feel.theme)
+    Pane(icon = Glyph.layers, title = "Theme",
+        help = "The page and every surface on it. Text and the status colours stay the same " +
+            "in all of them, so a status reads the same however dark the page. Black " +
+            "switches an OLED screen's pixels off, which saves battery on a phone that keeps " +
+            "a tunnel up all evening.") {
+        for (row in com.erelay.relay.ui.theme.Palette.entries.chunked(4)) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (p in row) Swatch(p, p == chosen, Modifier.weight(1f)) {
+                    onFeel(feel.copy(theme = p.key))
+                }
+            }
+        }
+    }
+
+    Pane(icon = Glyph.sparkle, title = "Orb colours",
+        help = "Traffic light: red when not connected, yellow while connecting, green when " +
+            "connected - the state reads at a glance from across a room. Desktop: the " +
+            "desktop app's own colours, lavender at rest.") {
+        Segment(listOf("signal", "desktop"), feel.orbColors,
+            { if (it == "signal") "Traffic light" else "Desktop" },
+            { onFeel(feel.copy(orbColors = it)) })
     }
 
     Pane(icon = Glyph.activity, title = "Touch") {
         ToggleRow("Haptic feedback",
             "A light tick under each press, and a buzz when the tunnel comes up or fails.",
             feel.haptics) { onFeel(feel.copy(haptics = it)) }
-        Spacer(Modifier.height(16.dp))
-        ToggleRow("Tap the orb to connect",
+        Spacer(Modifier.height(8.dp))
+        ToggleRow("Tap the orb",
             "The sphere works like the Connect button: tap to connect, tap again to " +
-                "disconnect. Only the sphere itself, not the space around it.",
+                "disconnect. Hold it while connected to reconnect through a fresh exit. Only " +
+                "the sphere itself, not the space around it.",
             feel.orbTap) { onFeel(feel.copy(orbTap = it)) }
+    }
+
+    if (android.os.Build.VERSION.SDK_INT >= 33) {
+        val context = androidx.compose.ui.platform.LocalContext.current
+        var tileSaid by remember { mutableStateOf("") }
+        Pane(icon = Glyph.bolt, title = "Quick settings",
+            help = "Relay as a tile in the panel you pull down from the top of the screen: " +
+                "one press connects to your last pick, another disconnects. Long-press the " +
+                "tile to open the app.") {
+            ButtonRow {
+                Btn("Add the Relay tile", {
+                    val bar = context.getSystemService(android.app.StatusBarManager::class.java)
+                    bar?.requestAddTileService(
+                        android.content.ComponentName(context, com.erelay.relay.RelayTile::class.java),
+                        "Relay",
+                        android.graphics.drawable.Icon.createWithResource(context, com.erelay.relay.R.drawable.ic_relay),
+                        context.mainExecutor,
+                    ) { result ->
+                        tileSaid = when (result) {
+                            android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED -> "Added."
+                            android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED -> "It is already there."
+                            android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_NOT_ADDED -> ""
+                            else -> "This phone did not offer to add it. Edit the quick-settings panel and drag Relay in."
+                        }
+                    }
+                }, icon = Glyph.plus)
+            }
+            SaidLine(tileSaid)
+        }
     }
 
     Pane(icon = Glyph.gauge, title = "Motion") {
@@ -438,10 +496,40 @@ private fun Look(feel: com.erelay.relay.data.Feel, onFeel: (com.erelay.relay.dat
             "Off draws it once and leaves it still - less for the GPU to do. It still " +
                 "changes colour with the connection.",
             feel.orbMotion) { onFeel(feel.copy(orbMotion = it)) }
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(8.dp))
         ToggleRow("Show the traffic meter",
             "The live wave of what is going up and down while connected.",
             feel.meter) { onFeel(feel.copy(meter = it)) }
+    }
+}
+
+/** One theme as a little picture of itself: its page, a card on it, its light. */
+@Composable
+private fun Swatch(
+    p: com.erelay.relay.ui.theme.Palette, on: Boolean, modifier: Modifier, onPick: () -> Unit,
+) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(64.dp)
+                .press(shape = RoundedCornerShape(12.dp), sink = true,
+                    feel = HapticFeedbackType.SegmentTick, onClick = onPick)
+                .clip(RoundedCornerShape(12.dp))
+                .background(p.bg)
+                .background(Brush.radialGradient(
+                    listOf(p.glow.copy(alpha = (p.glow.alpha * 3f).coerceAtMost(1f)), Color.Transparent),
+                    center = Offset(80f, 0f), radius = 160f))
+                .border(if (on) 2.dp else 1.dp, if (on) Tone.ok else Tone.border, RoundedCornerShape(12.dp))
+                .padding(8.dp),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            Box(Modifier.fillMaxWidth().height(18.dp).clip(RoundedCornerShape(5.dp)).background(p.surface)
+                .border(1.dp, Tone.divider, RoundedCornerShape(5.dp)))
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(p.label, style = Type.small.copy(color = if (on) Tone.text else Tone.textMuted,
+            fontWeight = if (on) FontWeight.W600 else FontWeight.W400), maxLines = 1)
     }
 }
 
@@ -449,13 +537,12 @@ private fun Look(feel: com.erelay.relay.data.Feel, onFeel: (com.erelay.relay.dat
 
 @Composable
 private fun About(core: RelayCore) {
-    Pane(icon = Glyph.info, title = "This copy") {
+    Pane(icon = Glyph.info, title = "This copy",
+        help = "Accounts are kept with a key the Android keystore holds; configs, pins and " +
+            "test results are plain files in the data folder.") {
         Line("App", "Relay for Android ${core.appVersion}")
         Line("Core", core.version)
         Line("Data", core.dataFolder)
-        Spacer(Modifier.height(10.dp))
-        Text("Accounts are kept with a key the Android keystore holds; configs, pins and test " +
-            "results are plain files in the data folder above.", style = Type.small)
     }
 }
 

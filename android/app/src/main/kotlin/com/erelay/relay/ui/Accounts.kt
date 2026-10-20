@@ -10,6 +10,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -29,6 +30,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
@@ -87,13 +89,15 @@ fun AddAccount(
 
     Sheet(open, "Sign-in", "Add an account", onClose) {
         Spacer(Modifier.height(6.dp))
-        Segment(Who.entries, who, { it.label }, { who = it; said = null }, enabled = !busy)
-        Spacer(Modifier.height(14.dp))
-        Text(if (who == Who.SURFSHARK)
-            "The service username and password from Surfshark's manual-setup page - not the " +
-                "email you log in with."
-        else "Your Windscribe username and password. Windscribe will ask you to solve a puzzle; " +
-            "it is tried once, never again behind your back.", style = Type.small)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Segment(Who.entries, who, { it.label }, { who = it; said = null }, Modifier.weight(1f),
+                enabled = !busy)
+            InfoTip(if (who == Who.SURFSHARK)
+                "The service username and password from Surfshark's manual-setup page - not " +
+                    "the email you log in with. They change when you reset them there."
+            else "Your Windscribe username and password. Windscribe asks you to solve a " +
+                "puzzle; the sign-in is tried once, and never again behind your back.")
+        }
         Spacer(Modifier.height(12.dp))
         Field(user, { user = it }, if (who == Who.SURFSHARK) "Service username" else "Username")
         Spacer(Modifier.height(8.dp))

@@ -41,6 +41,8 @@ data class Feel(
     val orbTap: Boolean = true,
     val orbMotion: Boolean = true,
     val meter: Boolean = true,
+    /** "signal": red, yellow, green. "desktop": app.css's lavender at rest. */
+    val orbColors: String = "signal",
 )
 
 /** An address and the country it is in, as whereAmI and seenAs answer. */

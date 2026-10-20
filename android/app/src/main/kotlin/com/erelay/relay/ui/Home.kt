@@ -107,6 +107,7 @@ fun Home(
     onPick: () -> Unit,
     onAct: () -> Unit,
     onCopy: (String) -> Unit,
+    onReconnect: () -> Unit = {},
 ) {
     Backdrop {
         BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
@@ -122,7 +123,7 @@ fun Home(
                     .padding(horizontal = 16.dp),
             ) {
                 Header(s, onLog, onDrop, onSettings)
-                Hero(s, orbPaused, onCopy, onAct, roomy, if (roomy) Modifier.weight(1f) else Modifier)
+                Hero(s, orbPaused, onCopy, onAct, onReconnect, roomy, if (roomy) Modifier.weight(1f) else Modifier)
                 Spacer(Modifier.height(12.dp))
                 StatusCard(s, onWay, onPick, onAct)
                 Text(
@@ -172,7 +173,7 @@ private val ROUTE = mapOf(
 )
 
 @Composable
-private fun Hero(s: HomeState, orbPaused: Boolean, onCopy: (String) -> Unit, onAct: () -> Unit, roomy: Boolean, modifier: Modifier) {
+private fun Hero(s: HomeState, orbPaused: Boolean, onCopy: (String) -> Unit, onAct: () -> Unit, onReconnect: () -> Unit, roomy: Boolean, modifier: Modifier) {
     val mode = s.conn.mode
     val accent by animateColorAsState(toneOf(mode).accent, tween(460), label = "routeDot")
     Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -180,17 +181,25 @@ private fun Hero(s: HomeState, orbPaused: Boolean, onCopy: (String) -> Unit, onA
             Modifier.fillMaxWidth().then(if (roomy) Modifier.weight(1f) else Modifier.height(236.dp)),
             contentAlignment = Alignment.Center,
         ) {
-            val orb = minOf(maxWidth * 0.86f, maxHeight - 26.dp).coerceIn(200.dp, 380.dp)
-            Box(Modifier.size(orb + 26.dp), contentAlignment = Alignment.Center) {
-                val tappable = s.feel.orbTap && (mode == Mode.BUSY || mode == Mode.ON || s.canStart)
-                OrbStage(mode, paceOf(s.traffic), orbPaused,
-                    Modifier.offset(y = if (mode == Mode.ON) (-4).dp else 6.dp), size = orb,
-                    still = !s.feel.orbMotion, onTap = if (tappable) onAct else null)
-                Row(Modifier.align(Alignment.TopCenter), verticalAlignment = Alignment.CenterVertically) {
+            // The label has a row of its own above the sphere rather than
+            // sitting over the top of its stage, so however small the orb
+            // gets - the meter takes its share of this height - the two never
+            // touch. The orb is sized to what is left under it.
+            val label = 34.dp
+            val orb = minOf(maxWidth * 0.86f, maxHeight - label).coerceIn(180.dp, 380.dp)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Row(Modifier.height(label), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(5.dp).clip(CircleShape).background(accent))
                     Spacer(Modifier.width(7.dp))
-                    Text(ROUTE.getValue(mode), style = Type.eyebrow.copy(color = Tone.textMuted, fontWeight = FontWeight.W700))
+                    val tappable = s.feel.orbTap && (mode == Mode.BUSY || mode == Mode.ON || s.canStart)
+                    Text(if (tappable && (mode == Mode.OFF || mode == Mode.FAIL)) "PRESS TO CONNECT"
+                         else ROUTE.getValue(mode),
+                        style = Type.eyebrow.copy(color = Tone.textMuted, fontWeight = FontWeight.W700))
                 }
+                val tappable = s.feel.orbTap && (mode == Mode.BUSY || mode == Mode.ON || s.canStart)
+                OrbStage(mode, paceOf(s.traffic), orbPaused, size = orb,
+                    still = !s.feel.orbMotion, onTap = if (tappable) onAct else null,
+                    onHold = if (tappable && mode == Mode.ON) onReconnect else null)
             }
         }
 
@@ -360,7 +369,7 @@ private fun StatusCard(s: HomeState, onWay: (Way) -> Unit, onPick: () -> Unit, o
                 Text("CONNECTION STATUS", style = Type.eyebrow)
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    StatusDot(mode, statusColor)
+                    StatusDot(mode, if (mode == Mode.OFF) toneOf(mode).accent else statusColor)
                     Spacer(Modifier.width(10.dp))
                     AnimatedContent(status.word, transitionSpec = {
                         fadeIn(tween(Shape.ENTER_MS)) togetherWith fadeOut(tween(Shape.FADE_MS))
@@ -390,13 +399,13 @@ private fun StatusCard(s: HomeState, onWay: (Way) -> Unit, onPick: () -> Unit, o
         }
 
         Spacer(Modifier.height(14.dp))
-        Segment(Way.entries, s.way, { it.label }, onWay, enabled = mode != Mode.BUSY)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Segment(Way.entries, s.way, { it.label }, onWay, Modifier.weight(1f), enabled = mode != Mode.BUSY)
+            InfoTip(WAY_SAID.getValue(s.way))
+        }
         val ready = s.way == Way.PROVIDER || s.tunnelReady
-        AnimatedContent(s.way to ready, transitionSpec = {
-            fadeIn(tween(Shape.ENTER_MS)) togetherWith fadeOut(tween(Shape.FADE_MS))
-        }, label = "wayNote") { (way, ok) ->
-            Text(if (ok) WAY_SAID.getValue(way) else WAY_NEEDS_TUNNEL,
-                style = Type.small.copy(color = if (ok) Tone.textOff else Tone.fail),
+        AnimatedVisibility(!ready) {
+            Text(WAY_NEEDS_TUNNEL, style = Type.small.copy(color = Tone.fail),
                 modifier = Modifier.padding(top = 8.dp, start = 2.dp, end = 2.dp))
         }
 
@@ -420,7 +429,7 @@ private fun StatusDot(mode: Mode, color: Color) {
                 drawCircle(Brush.radialGradient(listOf(color.copy(alpha = 0.5f), Color.Transparent)),
                     radius = size.minDimension * 1.4f)
             }
-            drawCircle(color.copy(alpha = a * if (mode == Mode.OFF) 0.4f else 1f))
+            drawCircle(color.copy(alpha = a * if (mode == Mode.OFF) 0.75f else 1f))
         },
     )
 }

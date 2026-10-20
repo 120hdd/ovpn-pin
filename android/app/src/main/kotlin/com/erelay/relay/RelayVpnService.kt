@@ -62,6 +62,14 @@ class RelayVpnService : VpnService() {
         const val TAG = "Relay"
         const val ACTION_START = "com.erelay.relay.START"
         const val ACTION_STOP = "com.erelay.relay.STOP"
+
+        /**
+         * Where the traffic was measured to come out, from the window's
+         * seen-as check. The notification names this rather than the
+         * country the server was sold as, which is not always where it is.
+         */
+        const val ACTION_SEEN = "com.erelay.relay.SEEN"
+        const val EXTRA_SEEN_COUNTRY = "seenCountry"
         const val EXTRA_USER = "user"
         const val EXTRA_PASSWORD = "password"
 
@@ -126,6 +134,9 @@ class RelayVpnService : VpnService() {
 
         /** When the current tunnel came up, in epoch seconds, or 0. */
         @Volatile var since: Long = 0
+
+        /** The measured exit country, two letters, or empty until checked. */
+        @Volatile var seenCountry: String = ""
             private set
 
         /**
@@ -156,6 +167,15 @@ class RelayVpnService : VpnService() {
         // service may well be running with no window to have done it.
         AppFiles.announce(applicationContext)
 
+        if (intent?.action == ACTION_SEEN) {
+            // Only a better word for the notification: the tunnel is not
+            // touched, which is why this is checked before anything else.
+            if (exitAddress.isNotEmpty()) {
+                seenCountry = intent.getStringExtra(EXTRA_SEEN_COUNTRY).orEmpty()
+                notificationManager().notify(NOTIFICATION, notification(status))
+            }
+            return START_STICKY
+        }
         if (intent?.action == ACTION_STOP) {
             stopTunnel()
             stopSelf()
@@ -408,13 +428,23 @@ class RelayVpnService : VpnService() {
             say("racing ${c.count()} exits")
             // Long literals, not Int. gomobile maps Go's int to Java long,
             // and Kotlin does not widen an Int to fill a Long parameter.
-            val winner = c.raceIn(country, 6000L, 8L, object : Progress {
-                override fun onProgress(n: Long, of: Long) {
-                    asked = n.toInt()
-                    total = of.toInt()
-                    say("asked $n of $of")
-                }
-            })
+            // The race keeps reporting after it has a winner - the exits
+            // still in flight answer late - and each report used to overwrite
+            // the status, so a connected tunnel read "asked 8 of 353" in the
+            // notification and the window. Only the race's own lifetime counts.
+            val racing = java.util.concurrent.atomic.AtomicBoolean(true)
+            val winner = try {
+                c.raceIn(country, 6000L, 8L, object : Progress {
+                    override fun onProgress(n: Long, of: Long) {
+                        if (!racing.get()) return
+                        asked = n.toInt()
+                        total = of.toInt()
+                        say("asked $n of $of")
+                    }
+                })
+            } finally {
+                racing.set(false)
+            }
 
             say("opening the tunnel via ${winner.name}")
 
@@ -453,6 +483,7 @@ class RelayVpnService : VpnService() {
     }
 
     private fun stopTunnel() {
+        seenCountry = ""
         try {
             client?.stopTunnel()
         } catch (e: Exception) {
@@ -518,6 +549,31 @@ class RelayVpnService : VpnService() {
         say("failed: $text")
     }
 
+    /**
+     * The status line, said for a person rather than a log: a title that is
+     * the state, and the detail under it. The log keeps the raw line.
+     */
+    private fun spoken(text: String): Pair<String, String> {
+        val place = when {
+            seenCountry.isNotEmpty() -> com.erelay.relay.ui.countryName(seenCountry)
+            exitProvider.isNotEmpty() -> com.erelay.relay.ui.countryName(exitName.take(2))
+            exitName.contains("server + exit") -> "your server's exit"
+            exitAddress.isNotEmpty() -> "your server"
+            else -> ""
+        }
+        return when {
+            text.startsWith("connected") -> "Connected to ${place.ifEmpty { "Relay" }}" to
+                (if (exitProvider.isNotEmpty()) "$exitName · ${tookMs} ms" else exitAddress)
+            text.startsWith("failed") -> "Could not connect" to
+                text.removePrefix("failed: ").replaceFirstChar { it.uppercase() }
+            text.startsWith("asked") -> "Connecting…" to "Asked ${asked} of $total exits"
+            text.startsWith("racing") -> "Connecting…" to text.replaceFirstChar { it.uppercase() }
+            text.startsWith("opening") || text.startsWith("finding") ||
+                text.startsWith("checking") -> "Connecting…" to text.replaceFirstChar { it.uppercase() }
+            else -> "Relay" to text.replaceFirstChar { it.uppercase() }
+        }
+    }
+
     private fun notificationManager() =
         getSystemService(NotificationManager::class.java)
 
@@ -528,17 +584,25 @@ class RelayVpnService : VpnService() {
             )
         }
         val open = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
+            this, 0, Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        // Disconnect from the shade, without opening anything.
+        val stop = PendingIntent.getService(
+            this, 1, Intent(this, RelayVpnService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         // NotificationCompat rather than Notification.Builder: the
         // channel-taking constructor is API 26 and minSdk here is 24, and the
         // compat one does the right thing on both without a version branch.
+        val (title, body) = spoken(text)
         return NotificationCompat.Builder(this, CHANNEL)
-            .setContentTitle("Relay")
-            .setContentText(text)
+            .setContentTitle(title)
+            .setContentText(body)
             .setSmallIcon(R.drawable.ic_relay)
             .setContentIntent(open)
+            .addAction(0, "Disconnect", stop)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()

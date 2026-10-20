@@ -480,8 +480,9 @@ fun SourceSheet(
             }
         }
         if (sources.isEmpty()) Text("Nothing has been read yet.", style = Type.body)
-        ButtonRow { Btn("Import a folder…", onImport, icon = Glyph.folder) }
-        Text("A picked folder is copied into the app's own; the copy is what is read.",
-            style = Type.small, modifier = Modifier.padding(top = 10.dp))
+        ButtonRow {
+            Btn("Import a folder…", onImport, icon = Glyph.folder)
+            InfoTip("A picked folder is copied into the app's own; the copy is what is read.")
+        }
     }
 }

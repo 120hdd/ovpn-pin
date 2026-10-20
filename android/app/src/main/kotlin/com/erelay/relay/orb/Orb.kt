@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -27,6 +28,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.semantics.contentDescription
@@ -48,7 +50,7 @@ import kotlin.math.sin
 @Composable
 fun OrbStage(
     mode: Mode, flow: Float, paused: Boolean, modifier: Modifier = Modifier, size: Dp = 210.dp,
-    still: Boolean = false, onTap: (() -> Unit)? = null,
+    still: Boolean = false, onTap: (() -> Unit)? = null, onHold: (() -> Unit)? = null,
 ) {
     val tone = toneOf(mode)
     val accent by animateColorAsState(tone.accent, tween(460), label = "accent")
@@ -100,7 +102,7 @@ fun OrbStage(
             ring(163f * unit, 170f * unit, 0f, if (still) 40f else inner.value, 0.62f, accent, flow, unit)
         }
 
-        val colors = remember(mode) {
+        val colors = remember(mode, com.erelay.relay.ui.theme.Tone.signal) {
             floatArrayOf(
                 tone.a.red, tone.a.green, tone.a.blue,
                 tone.b.red, tone.b.green, tone.b.blue,
@@ -124,9 +126,7 @@ fun OrbStage(
             Box(
                 Modifier
                     .size(size * 0.64f)
-                    .press(shape = CircleShape, source = tapSource,
-                        feel = androidx.compose.ui.hapticfeedback.HapticFeedbackType.Confirm,
-                        onClick = onTap)
+                    .orbPress(tapSource, onTap, onHold)
                     .semantics { contentDescription = when (mode) {
                         Mode.ON -> "Disconnect"
                         Mode.BUSY -> "Cancel"
@@ -154,4 +154,36 @@ private fun DrawScope.ring(
             center = bead, radius = glowR + r), radius = glowR + r, center = bead)
         drawCircle(accent.copy(alpha = alpha), radius = r, center = bead)
     }
+}
+
+/**
+ * The sphere's own touch: a tap is the Connect button, a hold (while
+ * connected) is reconnect - a fresh race to a fresh exit, without the two
+ * presses of disconnect-then-connect. Each gets its own haptic, so a hold
+ * that landed is felt as different from a tap.
+ */
+private fun Modifier.orbPress(
+    source: androidx.compose.foundation.interaction.MutableInteractionSource,
+    onTap: () -> Unit,
+    onHold: (() -> Unit)?,
+): Modifier = composed {
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val buzz = com.erelay.relay.ui.LocalFeel.current.haptics
+    @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+    combinedClickable(
+        interactionSource = source,
+        indication = null,
+        onLongClick = onHold?.let { hold ->
+            {
+                if (buzz) haptics.performHapticFeedback(
+                    androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                hold()
+            }
+        },
+        onClick = {
+            if (buzz) haptics.performHapticFeedback(
+                androidx.compose.ui.hapticfeedback.HapticFeedbackType.Confirm)
+            onTap()
+        },
+    )
 }

@@ -46,6 +46,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.composed
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -219,6 +221,7 @@ fun Pane(
     title: String? = null,
     pill: String? = null,
     pillGood: Boolean = true,
+    help: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
@@ -239,7 +242,9 @@ fun Pane(
                     ) { Icon(icon, null, Modifier.size(16.dp), tint = Tone.textMuted) }
                     Spacer(Modifier.width(10.dp))
                 }
-                Text(title, style = Type.strong, modifier = Modifier.weight(1f))
+                Text(title, style = Type.strong)
+                if (help != null) InfoTip(help)
+                Spacer(Modifier.weight(1f))
                 if (pill != null) Pill(pill, good = pillGood)
             }
             Spacer(Modifier.height(12.dp))
@@ -360,18 +365,14 @@ fun Toggle(on: Boolean, onChange: (Boolean) -> Unit, enabled: Boolean = true) {
     }
 }
 
-/** A labelled row with a toggle at the end, and a line of explanation under it. */
+/** A labelled row with a toggle at the end, and its explanation behind an (i). */
 @Composable
-fun ToggleRow(title: String, note: String?, on: Boolean, onChange: (Boolean) -> Unit) {
-    Column {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(title, style = Type.strong, modifier = Modifier.weight(1f))
-            Toggle(on, onChange)
-        }
-        if (note != null) {
-            Spacer(Modifier.height(8.dp))
-            Text(note, style = Type.small)
-        }
+fun ToggleRow(title: String, help: String?, on: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(title, style = Type.strong)
+        if (help != null) InfoTip(help)
+        Spacer(Modifier.weight(1f))
+        Toggle(on, onChange)
     }
 }
 
@@ -429,6 +430,69 @@ fun SaidLine(text: String, bad: Boolean = false, modifier: Modifier = Modifier) 
 @Composable
 fun Divider() {
     Box(Modifier.fillMaxWidth().height(1.dp).background(Tone.divider))
+}
+
+/**
+ * An (i) that opens the explanation of the thing beside it. The words used to
+ * sit under every option as a paragraph; now they wait to be asked for, and
+ * the screen shows the options.
+ *
+ * The card opens under the button, kept inside the window with a 16dp
+ * margin whichever side of the screen the button is on, and goes when
+ * anything outside it is touched.
+ */
+@Composable
+fun InfoTip(text: String, modifier: Modifier = Modifier) {
+    var open by remember { mutableStateOf(false) }
+    Box(modifier) {
+        IconButton(Glyph.info, "What is this?", { open = !open }, size = 36.dp,
+            tint = if (open) Tone.ok else Tone.textOff)
+        if (open) {
+            val margin = with(androidx.compose.ui.platform.LocalDensity.current) { 16.dp.roundToPx() }
+            androidx.compose.ui.window.Popup(
+                popupPositionProvider = remember(margin) { BelowAnchor(margin) },
+                onDismissRequest = { open = false },
+                properties = androidx.compose.ui.window.PopupProperties(focusable = true),
+            ) {
+                val shown = remember { androidx.compose.animation.core.MutableTransitionState(false) }
+                    .apply { targetState = true }
+                AnimatedVisibility(shown,
+                    enter = fadeIn(tween(Shape.ENTER_MS, easing = Shape.ease)) +
+                        androidx.compose.animation.scaleIn(tween(Shape.ENTER_MS, easing = Shape.ease),
+                            initialScale = 0.94f)) {
+                    Box(
+                        Modifier
+                            .widthIn(max = 320.dp)
+                            .shadow(18.dp, RoundedCornerShape(14.dp))
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Tone.controlActive)
+                            .border(1.dp, Tone.ok.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
+                            .tap { open = false }
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                    ) {
+                        Text(text, style = Type.body.copy(color = Tone.text))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Under the anchor, nudged sideways to stay inside the window. */
+private class BelowAnchor(private val margin: Int) : androidx.compose.ui.window.PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: androidx.compose.ui.unit.IntRect,
+        windowSize: androidx.compose.ui.unit.IntSize,
+        layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+        popupContentSize: androidx.compose.ui.unit.IntSize,
+    ): androidx.compose.ui.unit.IntOffset {
+        val centred = anchorBounds.center.x - popupContentSize.width / 2
+        val x = centred.coerceIn(margin, (windowSize.width - popupContentSize.width - margin).coerceAtLeast(margin))
+        val below = anchorBounds.bottom + margin / 4
+        val y = if (below + popupContentSize.height <= windowSize.height - margin) below
+            else (anchorBounds.top - popupContentSize.height - margin / 4).coerceAtLeast(margin)
+        return androidx.compose.ui.unit.IntOffset(x, y)
+    }
 }
 
 /** The rows of the settings menu: a title, a line under it, a chevron. */

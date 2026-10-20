@@ -41,7 +41,22 @@ enum class Palette(
         Color(0xFF272A2D), Color(0xFF2E3135), Color(0x14FFFFFF)),
     /** True black: the pixels of an OLED screen switched off. */
     BLACK("black", "Black", Color(0xFF000000), Color(0xFF0E0E12), Color(0xFF18181F),
-        Color(0xFF202029), Color(0xFF2A2A34), Color(0x1A483AC2));
+        Color(0xFF202029), Color(0xFF2A2A34), Color(0x1A483AC2)),
+    /** Deep navy, a cold blue light at the top. */
+    OCEAN("ocean", "Ocean", Color(0xFF060B16), Color(0xFF0F1828), Color(0xFF172236),
+        Color(0xFF1E2B42), Color(0xFF26344E), Color(0x332A6FDB)),
+    /** Near-black green. */
+    FOREST("forest", "Forest", Color(0xFF060E0B), Color(0xFF0F1A16), Color(0xFF16241F),
+        Color(0xFF1D2D27), Color(0xFF25372F), Color(0x2E1F9D6B)),
+    /** Aubergine. */
+    PLUM("plum", "Plum", Color(0xFF0E0812), Color(0xFF1B1222), Color(0xFF261A2F),
+        Color(0xFF30213B), Color(0xFF3A2946), Color(0x38A23AC2)),
+    /** Warm, embers in a dark room. */
+    EMBER("ember", "Ember", Color(0xFF110A08), Color(0xFF1E1512), Color(0xFF2A1D18),
+        Color(0xFF34241E), Color(0xFF3F2C25), Color(0x33D9622B)),
+    /** Blue-grey, like slate in the rain. */
+    SLATE("slate", "Slate", Color(0xFF0C0F13), Color(0xFF161B21), Color(0xFF1F262E),
+        Color(0xFF27303A), Color(0xFF303A45), Color(0x24607D9B));
 
     companion object {
         fun of(key: String?) = entries.firstOrNull { it.key == key } ?: MIDNIGHT
@@ -57,6 +72,9 @@ enum class Palette(
  */
 object Tone {
     var palette by mutableStateOf(Palette.MIDNIGHT)
+
+    /** Traffic-light orb colours rather than the desktop's. */
+    var signal by mutableStateOf(true)
 
     val bg get() = palette.bg
     val surface get() = palette.surface
@@ -92,15 +110,32 @@ object Tone {
 /** The orb's colours per state: `--blob-a/b/c`, `--blob-glow`, `--state-accent`. */
 data class StateTone(val a: Color, val b: Color, val c: Color, val glow: Color, val accent: Color)
 
-fun toneOf(mode: Mode): StateTone = when (mode) {
-    Mode.OFF -> StateTone(Color(0xFF9C8CFF), Color(0xFF4CE2D2), Color(0xFF483AC2),
-        Color(102, 90, 231, (0.48f * 255).toInt()), Color(0xFF8C82FF))
-    Mode.BUSY -> StateTone(Color(0xFFFFCB67), Color(0xFFFF778E), Color(0xFF9B4BDA),
-        Color(255, 156, 83, (0.42f * 255).toInt()), Color(0xFFFFC761))
+private fun glow(r: Int, g: Int, b: Int, a: Float) = Color(r, g, b, (a * 255).toInt())
+
+/**
+ * The look per state. Two sets: the traffic light (red off, yellow working,
+ * green on - read at a glance, across a room) and the desktop's own app.css
+ * colours, lavender at rest. Which one is Look and feel's choice, read from
+ * [Tone.signal] so a change repaints at once.
+ */
+fun toneOf(mode: Mode): StateTone = if (Tone.signal) when (mode) {
+    Mode.OFF -> StateTone(Color(0xFFFF8A8A), Color(0xFFFF5A6E), Color(0xFF8E1D2E),
+        glow(255, 80, 96, 0.40f), Color(0xFFFF6B7A))
+    Mode.BUSY -> StateTone(Color(0xFFFFE27A), Color(0xFFFFC24B), Color(0xFFB9791A),
+        glow(255, 200, 70, 0.42f), Color(0xFFFFD261))
     Mode.ON -> StateTone(Color(0xFF71F1BD), Color(0xFF3DD4EE), Color(0xFF087E6A),
-        Color(48, 218, 171, (0.42f * 255).toInt()), Color(0xFF61EFBF))
+        glow(48, 218, 171, 0.42f), Color(0xFF61EFBF))
+    Mode.FAIL -> StateTone(Color(0xFFFF4D7A), Color(0xFFC2185B), Color(0xFF4E0A26),
+        glow(220, 40, 90, 0.42f), Color(0xFFFF4D7A))
+} else when (mode) {
+    Mode.OFF -> StateTone(Color(0xFF9C8CFF), Color(0xFF4CE2D2), Color(0xFF483AC2),
+        glow(102, 90, 231, 0.48f), Color(0xFF8C82FF))
+    Mode.BUSY -> StateTone(Color(0xFFFFCB67), Color(0xFFFF778E), Color(0xFF9B4BDA),
+        glow(255, 156, 83, 0.42f), Color(0xFFFFC761))
+    Mode.ON -> StateTone(Color(0xFF71F1BD), Color(0xFF3DD4EE), Color(0xFF087E6A),
+        glow(48, 218, 171, 0.42f), Color(0xFF61EFBF))
     Mode.FAIL -> StateTone(Color(0xFFFF8495), Color(0xFFB968E7), Color(0xFF8B2849),
-        Color(223, 70, 106, (0.36f * 255).toInt()), Color(0xFFFF8F9B))
+        glow(223, 70, 106, 0.36f), Color(0xFFFF8F9B))
 }
 
 /** Radii and timings, also the desktop's. */

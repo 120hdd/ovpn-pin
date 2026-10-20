@@ -136,6 +136,7 @@ class RelayCore(private val app: Application) {
         orbTap = prefs.getBoolean("orbTap", true),
         orbMotion = prefs.getBoolean("orbMotion", true),
         meter = prefs.getBoolean("meter", true),
+        orbColors = prefs.getString("orbColors", "signal") ?: "signal",
     )
 
     fun setFeel(next: Feel) {
@@ -145,6 +146,7 @@ class RelayCore(private val app: Application) {
             .putBoolean("orbTap", next.orbTap)
             .putBoolean("orbMotion", next.orbMotion)
             .putBoolean("meter", next.meter)
+            .putString("orbColors", next.orbColors)
             .apply()
         _feel.value = next
     }
@@ -266,6 +268,14 @@ class RelayCore(private val app: Application) {
                 _seenFailed.value = true
             } else {
                 _seen.value = place
+                try {
+                    app.startService(Intent(app, RelayVpnService::class.java)
+                        .setAction(RelayVpnService.ACTION_SEEN)
+                        .putExtra(RelayVpnService.EXTRA_SEEN_COUNTRY, place.country))
+                } catch (e: Exception) {
+                    // The notification keeps the claimed country; nothing else depends on it.
+                    Log.w(RelayVpnService.TAG, "seen: ${e.message}")
+                }
             }
         }
     }
@@ -484,6 +494,19 @@ class RelayCore(private val app: Application) {
     fun consent(): Intent? = VpnService.prepare(app)
 
     fun consentRefused() = RelayVpnService.report(app, "failed: permission refused")
+
+    /**
+     * Android 13 hides every notification until the app is allowed to post
+     * them - including the VPN's own, which is the only way to see the tunnel
+     * with the window closed. Asked once, on the first connect; a no is a no.
+     */
+    fun shouldAskNotifications(): Boolean =
+        android.os.Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(app, android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED &&
+            !prefs.getBoolean("askedNotifications", false)
+
+    fun askedNotifications() = prefs.edit().putBoolean("askedNotifications", true).apply()
 
     /**
      * Start the service toward [code]. The consent dialog has to have been

@@ -69,6 +69,7 @@ fun Root(core: RelayCore) {
     val feel by core.feel.collectAsStateWithLifecycle()
     androidx.compose.runtime.SideEffect {
         com.erelay.relay.ui.theme.Tone.palette = com.erelay.relay.ui.theme.Palette.of(feel.theme)
+        com.erelay.relay.ui.theme.Tone.signal = feel.orbColors != "desktop"
     }
 
     var over by rememberSaveable { mutableStateOf(Over.NONE) }
@@ -132,10 +133,7 @@ fun Root(core: RelayCore) {
         }
     }
 
-    fun connect(code: String) {
-        pendingCode = code
-        said = null
-        core.ready().let { if (!it.ok) { said = it.text to true; return } }
+    fun consentThenConnect(code: String) {
         val ask = core.consent()
         if (ask != null) {
             consent.launch(ask)
@@ -143,6 +141,23 @@ fun Root(core: RelayCore) {
             val out = core.connect(code)
             if (!out.ok) said = out.text to true
         }
+    }
+
+    val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        // Whatever the answer, the connect it interrupted goes ahead.
+        consentThenConnect(pendingCode)
+    }
+
+    fun connect(code: String) {
+        pendingCode = code
+        said = null
+        core.ready().let { if (!it.ok) { said = it.text to true; return } }
+        if (core.shouldAskNotifications()) {
+            core.askedNotifications()
+            notifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        consentThenConnect(code)
     }
 
     // A folder of configs, from Android's own picker. Copied in by the core.
@@ -189,6 +204,9 @@ fun Root(core: RelayCore) {
                 }
             },
             onCopy = ::copy,
+            // A fresh race through a fresh exit: the service drops the old
+            // tunnel itself when asked to start another.
+            onReconnect = { if (conn.mode == Mode.ON) connect(if (way == Way.SERVER) "auto" else picked) },
         )
 
         Picker(

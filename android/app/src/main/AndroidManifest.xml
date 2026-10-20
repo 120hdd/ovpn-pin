@@ -38,7 +38,23 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Long-pressing the quick-settings tile opens the window. -->
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
+            </intent-filter>
         </activity>
+
+        <!-- The quick-settings tile: one press to connect, one to stop. -->
+        <service
+            android:name=".RelayTile"
+            android:exported="true"
+            android:icon="@drawable/ic_relay"
+            android:label="Relay"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
         <!--
             BIND_VPN_SERVICE is enforced by the system: only Android itself
