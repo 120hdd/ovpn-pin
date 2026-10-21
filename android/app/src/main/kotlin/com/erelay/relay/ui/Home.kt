@@ -46,6 +46,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
@@ -185,8 +187,21 @@ private fun Hero(s: HomeState, orbPaused: Boolean, onCopy: (String) -> Unit, onA
             // sitting over the top of its stage, so however small the orb
             // gets - the meter takes its share of this height - the two never
             // touch. The orb is sized to what is left under it.
+            //
+            // Sized by scale, not by layout. When the meter slides in on
+            // connect the space left changes every frame, and an orb laid out
+            // at each new size snapped smaller - and made its GL surface
+            // reallocate its buffers mid-animation, which was the stutter on
+            // every connect and disconnect. The surface keeps the largest
+            // size it has needed and the shrink is a smooth scale of it.
             val label = 34.dp
-            val orb = minOf(maxWidth * 0.86f, maxHeight - label).coerceIn(180.dp, 380.dp)
+            val target = minOf(maxWidth * 0.86f, maxHeight - label).coerceIn(180.dp, 380.dp)
+            var full by remember { mutableStateOf(target) }
+            if (target > full) full = target
+            // Slow and soft on purpose: the shrink is part of the moment the
+            // tunnel comes up, not a layout catching up with itself.
+            val shown by androidx.compose.animation.core.animateDpAsState(target,
+                tween(900, easing = androidx.compose.animation.core.FastOutSlowInEasing), label = "orbSize")
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Row(Modifier.height(label), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(5.dp).clip(CircleShape).background(accent))
@@ -197,16 +212,29 @@ private fun Hero(s: HomeState, orbPaused: Boolean, onCopy: (String) -> Unit, onA
                         style = Type.eyebrow.copy(color = Tone.textMuted, fontWeight = FontWeight.W700))
                 }
                 val tappable = s.feel.orbTap && (mode == Mode.BUSY || mode == Mode.ON || s.canStart)
-                OrbStage(mode, paceOf(s.traffic), orbPaused, size = orb,
-                    still = !s.feel.orbMotion, onTap = if (tappable) onAct else null,
-                    onHold = if (tappable && mode == Mode.ON) onReconnect else null)
+                Box(Modifier.size(shown), contentAlignment = Alignment.Center) {
+                    OrbStage(mode, paceOf(s.traffic), orbPaused,
+                        Modifier
+                            .requiredSize(full)
+                            .graphicsLayer {
+                                val k = shown / full
+                                scaleX = k
+                                scaleY = k
+                            },
+                        size = full,
+                        still = !s.feel.orbMotion, onTap = if (tappable) onAct else null,
+                        onHold = if (tappable && mode == Mode.ON) onReconnect else null)
+                }
             }
         }
 
         AnimatedVisibility(
             visible = mode == Mode.ON && s.traffic.live && s.feel.meter,
-            enter = fadeIn(tween(Shape.ENTER_MS)) + expandVertically(tween(Shape.ENTER_MS)),
-            exit = fadeOut(tween(Shape.FADE_MS)) + shrinkVertically(tween(Shape.ENTER_MS)),
+            // Paced with the orb, which gives up the room it takes.
+            enter = fadeIn(tween(700, delayMillis = 150)) +
+                expandVertically(tween(900, easing = androidx.compose.animation.core.FastOutSlowInEasing)),
+            exit = fadeOut(tween(250)) +
+                shrinkVertically(tween(900, easing = androidx.compose.animation.core.FastOutSlowInEasing)),
         ) {
             Flux(s.traffic, Modifier.padding(horizontal = 6.dp, vertical = 8.dp))
         }

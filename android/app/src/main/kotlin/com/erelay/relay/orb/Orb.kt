@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -77,6 +78,17 @@ fun OrbStage(
         modifier.size(size).graphicsLayer { scaleX = squish; scaleY = squish },
         contentAlignment = Alignment.Center,
     ) {
+        // One shader per colour, made when the colour changes rather than on
+        // every frame: a gradient of radius 1 at the origin, moved and scaled
+        // into place when drawn. Building a fresh RadialGradient per frame per
+        // glow was the biggest piece of app work in each frame.
+        val glowBrush = remember(glow) {
+            Brush.radialGradient(listOf(glow, Color.Transparent), center = Offset.Zero, radius = 1f)
+        }
+        val beadBrush = remember(accent) {
+            Brush.radialGradient(listOf(accent.copy(alpha = 0.55f), Color.Transparent),
+                center = Offset.Zero, radius = 1f)
+        }
         Canvas(Modifier.fillMaxSize()) {
             val unit = this.size.width / 210f
             // Still: the rings and glow hold one pose with the sphere.
@@ -85,21 +97,19 @@ fun OrbStage(
 
             // The glow: a 150 disc of --blob-glow, breathing between 0.88 and
             // 1.13. A radial falloff stands in for the CSS blur.
-            val scale = 0.88f + 0.25f * breathe
-            val alpha = (0.68f + 0.28f * breathe) * 0.5f
-            drawCircle(
-                Brush.radialGradient(
-                    listOf(glow.copy(alpha = glow.alpha * alpha), Color.Transparent),
-                    center = center, radius = 120f * unit * scale),
-                radius = 120f * unit * scale)
+            val glowR = 120f * unit * (0.88f + 0.25f * breathe)
+            withTransform({ translate(center.x, center.y); scale(glowR, glowR, Offset.Zero) }) {
+                drawCircle(glowBrush, radius = 1f, center = Offset.Zero,
+                    alpha = (0.68f + 0.28f * breathe) * 0.5f)
+            }
 
             // The halo: a 145 ring that grows and fades, peaking at 0.3.
             val hs = 0.82f + 0.48f * halo
             val ha = if (halo < 0.5f) halo / 0.5f * 0.3f else (1 - halo) / 0.5f * 0.3f
             drawCircle(accent.copy(alpha = ha), radius = 72.5f * unit * hs, style = Stroke(1f * unit))
 
-            ring(190f * unit, 184f * unit, -12f, if (still) 210f else outer.value, 1f, accent, flow, unit)
-            ring(163f * unit, 170f * unit, 0f, if (still) 40f else inner.value, 0.62f, accent, flow, unit)
+            ring(190f * unit, 184f * unit, -12f, if (still) 210f else outer.value, 1f, accent, beadBrush, flow, unit)
+            ring(163f * unit, 170f * unit, 0f, if (still) 40f else inner.value, 0.62f, accent, beadBrush, flow, unit)
         }
 
         val colors = remember(mode, com.erelay.relay.ui.theme.Tone.signal) {
@@ -140,7 +150,7 @@ fun OrbStage(
 /** One orbit ring, an ellipse turned by [tilt], with its bead at [angle]. */
 private fun DrawScope.ring(
     w: Float, h: Float, tilt: Float, angle: Float, alpha: Float,
-    accent: Color, flow: Float, unit: Float,
+    accent: Color, beadBrush: Brush, flow: Float, unit: Float,
 ) {
     rotate(tilt) {
         drawOval(com.erelay.relay.ui.theme.Tone.wash.copy(alpha = (if (com.erelay.relay.ui.theme.Tone.light) 0.16f else 0.105f) * alpha),
@@ -149,9 +159,10 @@ private fun DrawScope.ring(
         val rad = Math.toRadians(angle.toDouble())
         val bead = Offset(center.x + (w / 2) * cos(rad).toFloat(), center.y + (h / 2) * sin(rad).toFloat())
         val r = (3f + flow * 1.25f) * unit
-        val glowR = (11f + flow * 15f) * unit / 2
-        drawCircle(Brush.radialGradient(listOf(accent.copy(alpha = 0.55f * alpha), Color.Transparent),
-            center = bead, radius = glowR + r), radius = glowR + r, center = bead)
+        val glowR = (11f + flow * 15f) * unit / 2 + r
+        withTransform({ translate(bead.x, bead.y); scale(glowR, glowR, Offset.Zero) }) {
+            drawCircle(beadBrush, radius = 1f, center = Offset.Zero, alpha = alpha)
+        }
         drawCircle(accent.copy(alpha = alpha), radius = r, center = bead)
     }
 }

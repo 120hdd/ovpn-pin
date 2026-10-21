@@ -172,7 +172,14 @@ the sheets that rise over it composite like anything else.
 ```sh
 ./build-android.sh                                # relay.aar, into android/app/libs
 cd ../android && ./gradlew :app:assembleDebug     # the APK
+cd ../android && ./gradlew :app:assembleFast      # the same, at release speed
 ```
+
+`fast` is the release build - R8, not debuggable - under the debug build's id
+and key, so it installs over a phone set up with the debug build and keeps
+its accounts. Judge how the app feels on that one: Compose in a debuggable
+build recomposes several times slower, and on a phone that was the
+difference between a smooth connect and a stuttering one.
 
 Or take one that was built for you. Every push builds an APK
 ([.github/workflows/android.yml](../.github/workflows/android.yml)) and a `v*`

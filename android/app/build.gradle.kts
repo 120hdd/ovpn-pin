@@ -61,8 +61,23 @@ android {
             applicationIdSuffix = ".debug"
         }
         release {
-            isMinifyEnabled = false
+            // R8 matters to how this feels, not only to its size: Compose in a
+            // debuggable, unoptimised build recomposes several times slower,
+            // and that was the stutter on every connect.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName(if (signed) "release" else "debug")
+        }
+        // A release-speed build that installs over the debug one: the same
+        // application id and the same debug key, so it keeps that install's
+        // accounts and configs. For feeling how the app really runs on a
+        // phone that has been set up with the debug build.
+        create("fast") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".debug"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
         }
     }
 
