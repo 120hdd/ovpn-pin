@@ -146,7 +146,13 @@ private fun Header(s: HomeState, onLog: () -> Unit, onDrop: () -> Unit, onSettin
         Spacer(Modifier.width(10.dp))
         Text("RELAY", style = Type.strong.copy(fontWeight = FontWeight.W700, letterSpacing = 2.4.sp))
         Grow()
-        Pill("PRIVATE", good = true, dot = true)
+        // Green only when it is true. A badge that always says PRIVATE says
+        // nothing; this one is the first thing a glance at the app reads.
+        when (s.conn.mode) {
+            Mode.ON -> Pill("PRIVATE", dot = true, color = Tone.ok)
+            Mode.BUSY -> Pill("CONNECTING", dot = true, color = Tone.work)
+            else -> Pill("EXPOSED", dot = true, color = Tone.fail)
+        }
         Spacer(Modifier.width(4.dp))
         Box {
             IconButton(Glyph.activity, "What is using the connection", onLog)

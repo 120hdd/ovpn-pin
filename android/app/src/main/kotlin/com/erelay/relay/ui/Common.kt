@@ -254,8 +254,9 @@ fun Pane(
 }
 
 @Composable
-fun Pill(text: String, good: Boolean = true, dot: Boolean = false) {
-    val c = if (good) Tone.ok else Tone.textOff
+fun Pill(text: String, good: Boolean = true, dot: Boolean = false,
+         color: androidx.compose.ui.graphics.Color? = null) {
+    val c = color ?: if (good) Tone.ok else Tone.textOff
     Row(
         Modifier
             .clip(CircleShape)

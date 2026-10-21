@@ -52,8 +52,10 @@ import kotlin.math.sin
 fun OrbStage(
     mode: Mode, flow: Float, paused: Boolean, modifier: Modifier = Modifier, size: Dp = 210.dp,
     still: Boolean = false, onTap: (() -> Unit)? = null, onHold: (() -> Unit)? = null,
+    /** Colours other than the state's own: the resting set on screens before a connection exists. */
+    toneOverride: com.erelay.relay.ui.theme.StateTone? = null,
 ) {
-    val tone = toneOf(mode)
+    val tone = toneOverride ?: toneOf(mode)
     val accent by animateColorAsState(tone.accent, tween(460), label = "accent")
     val glow by animateColorAsState(tone.glow, tween(460), label = "glow")
 
@@ -112,7 +114,7 @@ fun OrbStage(
             ring(163f * unit, 170f * unit, 0f, if (still) 40f else inner.value, 0.62f, accent, beadBrush, flow, unit)
         }
 
-        val colors = remember(mode, com.erelay.relay.ui.theme.Tone.signal) {
+        val colors = remember(mode, com.erelay.relay.ui.theme.Tone.signal, toneOverride) {
             floatArrayOf(
                 tone.a.red, tone.a.green, tone.a.blue,
                 tone.b.red, tone.b.green, tone.b.blue,

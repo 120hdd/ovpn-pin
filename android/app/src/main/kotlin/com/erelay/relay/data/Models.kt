@@ -45,6 +45,15 @@ data class Feel(
     val orbColors: String = "signal",
 )
 
+/** Getting a newly signed-in provider's servers ready: fetch, then pin. */
+data class Setup(
+    val running: Boolean = false,
+    /** "servers", "pinning", "done" or "failed". */
+    val step: String = "",
+    val provider: String = "",
+    val error: String = "",
+)
+
 /** An address and the country it is in, as whereAmI and seenAs answer. */
 data class Place(val ip: String, val country: String)
 

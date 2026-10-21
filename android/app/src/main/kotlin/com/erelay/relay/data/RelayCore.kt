@@ -26,6 +26,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -126,6 +127,60 @@ class RelayCore(private val app: Application) {
     val pinPlan: StateFlow<PinPlan> = _pinPlan.asStateFlow()
     private val _pinRun = MutableStateFlow(PinRun())
     val pinRun: StateFlow<PinRun> = _pinRun.asStateFlow()
+
+    private val _introSeen = MutableStateFlow(prefs.getBoolean("introSeen", false))
+    val introSeen: StateFlow<Boolean> = _introSeen.asStateFlow()
+
+    fun markIntroSeen() {
+        prefs.edit().putBoolean("introSeen", true).apply()
+        _introSeen.value = true
+    }
+
+    private val _setup = MutableStateFlow(Setup())
+    val setup: StateFlow<Setup> = _setup.asStateFlow()
+
+    /**
+     * Make a signed-in provider usable: fetch its published servers, then pin
+     * them to real addresses, one after the other. An account on its own is
+     * not something to connect with - the folder it races is empty until
+     * both have run - so this runs on its own the moment an account is
+     * added, rather than waiting for somebody to find two buttons in Settings.
+     *
+     * Every signed-in provider with no servers yet, or just [only].
+     */
+    suspend fun prepareServers(only: String? = null): Said = withContext(io) {
+        if (_setup.value.running) return@withContext Said.no("Already getting servers ready.")
+        val todo = listOf(Accounts.SURFSHARK, Accounts.WINDSCRIBE).filter { p ->
+            if (only != null) p == only
+            else credentials(p) != null && (_cards.value[p]?.servers ?: 0) == 0
+        }
+        for (p in todo) {
+            _setup.value = Setup(running = true, step = "servers", provider = p)
+            val got = if (p == Accounts.SURFSHARK) surfsharkServers() else windscribeServers(freeOnly = false)
+            if (!got.ok) {
+                _setup.value = Setup(step = "failed", provider = p, error = got.text)
+                return@withContext got
+            }
+            _setup.value = Setup(running = true, step = "pinning", provider = p)
+            val aimed = pinFor(p)
+            if (aimed.ok) {
+                val started = startPin()
+                if (!started.ok) {
+                    _setup.value = Setup(step = "failed", provider = p, error = started.text)
+                    return@withContext started
+                }
+                pinRun.first { !it.running }
+            }
+            refreshList()
+        }
+        if (_serverCount.value == 0) {
+            val why = _pinRun.value.finished.ifEmpty { "No server answered. Try again in a moment." }
+            _setup.value = Setup(step = "failed", error = why)
+            return@withContext Said.no(why)
+        }
+        _setup.value = Setup(step = "done")
+        Said.OK
+    }
 
     private val _feel = MutableStateFlow(readFeel())
     val feel: StateFlow<Feel> = _feel.asStateFlow()

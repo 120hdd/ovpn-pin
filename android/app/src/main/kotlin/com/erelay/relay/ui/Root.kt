@@ -26,6 +26,9 @@ import com.erelay.relay.data.RelayCore
 import com.erelay.relay.data.Way
 import kotlinx.coroutines.launch
 
+/** What the window is, before it can be the main screen. */
+enum class Gate { LOADING, INTRO, WELCOME, SETUP, READY }
+
 /** Which sheet is over the main screen, if any. */
 enum class Over { NONE, PICKER, PREFS, LOG, DROP }
 
@@ -75,8 +78,6 @@ fun Root(core: RelayCore) {
     var over by rememberSaveable { mutableStateOf(Over.NONE) }
     var over2 by rememberSaveable { mutableStateOf(Over2.NONE) }
     var notice by remember { mutableStateOf("") }
-    // The welcome page, put away for this session by any answer to it.
-    var welcomed by rememberSaveable { mutableStateOf(false) }
     // Which page Settings opens on: the menu from the gear, a page from the welcome.
     var prefsStart by rememberSaveable { mutableStateOf("menu") }
     // Which provider the add-account sheet opens on: the card it came from.
@@ -184,14 +185,51 @@ fun Root(core: RelayCore) {
     // Nothing to connect with or through: no account, no servers, no server of
     // its own. That is a first run, and it gets a question rather than a
     // Connect button that cannot work.
-    val showWelcome = loaded && !welcomed && !hasCredentials && serverCount == 0 && !tunnel.ready
+    val introSeen by core.introSeen.collectAsStateWithLifecycle()
+    val setup by core.setup.collectAsStateWithLifecycle()
+    // Usable means something to connect with: an account with servers to race,
+    // or a server of its own. Until then the window is the way to get there,
+    // not a Connect button that cannot work.
+    val usable = (hasCredentials && serverCount > 0) || tunnel.ready
+    val gate = when {
+        !loaded -> Gate.LOADING
+        usable -> Gate.READY
+        !introSeen -> Gate.INTRO
+        hasCredentials -> Gate.SETUP
+        else -> Gate.WELCOME
+    }
+    // Signed in with nothing to race: fetch and pin, without being asked.
+    LaunchedEffect(gate) {
+        if (gate == Gate.SETUP && !setup.running && setup.step != "failed") core.prepareServers()
+    }
+    val showWelcome = gate != Gate.READY
 
     val (hint, hintBad) = said ?: hintOf(conn, way, seen, seenFailed, loaded, serverCount,
         countries.size, hasCredentials, picked, names, closedMinutes)
 
     androidx.compose.runtime.CompositionLocalProvider(LocalFeel provides feel) {
     Box(Modifier.fillMaxSize()) {
-        Home(
+        when (gate) {
+            Gate.LOADING -> Backdrop {}
+            Gate.INTRO -> Intro(paused = !foreground || over2 != Over2.NONE) { core.markIntroSeen() }
+            Gate.WELCOME -> Welcome(
+                paused = !foreground || over != Over.NONE || over2 != Over2.NONE,
+                onProvider = { provider -> addFor = provider; over2 = Over2.ADD_ACCOUNT },
+                onServer = {
+                    core.setWay(Way.SERVER)
+                    prefsStart = "connection"
+                    over = Over.PREFS
+                },
+            )
+            Gate.SETUP -> SetupScreen(
+                setup = setup, run = pinRun,
+                paused = !foreground || over2 != Over2.NONE,
+                onRetry = { scope.launch { core.prepareServers() } },
+                onOtherAccount = { over2 = Over2.ADD_ACCOUNT },
+            )
+            Gate.READY -> Unit
+        }
+        if (gate == Gate.READY) Home(
             HomeState(
                 conn = conn, realIp = realIp, realIpAsked = realIpAsked, seen = seen,
                 seenFailed = seenFailed, traffic = traffic, way = way,
@@ -216,19 +254,6 @@ fun Root(core: RelayCore) {
             // A fresh race through a fresh exit: the service drops the old
             // tunnel itself when asked to start another.
             onReconnect = { if (conn.mode == Mode.ON) connect(if (way == Way.SERVER) "auto" else picked) },
-        )
-
-        Welcome(
-            open = showWelcome,
-            onProvider = { provider -> addFor = provider; over2 = Over2.ADD_ACCOUNT },
-            onServer = {
-                core.setWay(Way.SERVER)
-                welcomed = true
-                prefsStart = "connection"
-                over = Over.PREFS
-            },
-            onImport = { importer.launch(null) },
-            onSkip = { welcomed = true },
         )
 
         Picker(
@@ -290,12 +315,12 @@ fun Root(core: RelayCore) {
             beginWindscribe = { label, user, pass -> core.beginWindscribe(label, user, pass) },
             finishWindscribe = { token, solution, xs, ys, code -> core.finishWindscribe(token, solution, xs, ys, code) },
             onDone = { msg ->
-                // On to the next step - getting the servers - on the page that has it.
+                // A new account is fetched and pinned at once. On a first run
+                // the setup screen shows it; added later from Settings, the
+                // progress shows under Sign-in's provider cards.
                 notice = msg
                 over2 = Over2.NONE
-                welcomed = true
-                prefsStart = "sign-in"
-                over = Over.PREFS
+                scope.launch { core.prepareServers(addFor) }
             })
     }
     }

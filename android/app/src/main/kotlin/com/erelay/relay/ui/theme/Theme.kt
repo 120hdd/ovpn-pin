@@ -152,6 +152,14 @@ fun toneOf(mode: Mode): StateTone = if (Tone.signal) when (mode) {
         glow(223, 70, 106, 0.36f), Color(0xFFFF8F9B))
 }
 
+/**
+ * The orb's colours when it is not showing a connection at all - the intro,
+ * the welcome, the setup. The desktop's own resting lavender and teal: red
+ * would say "not connected" to somebody who has not been asked to connect.
+ */
+fun restTone(): StateTone = StateTone(Color(0xFF9C8CFF), Color(0xFF4CE2D2), Color(0xFF483AC2),
+    glow(102, 90, 231, 0.48f), Color(0xFF8C82FF))
+
 /** Radii and timings, also the desktop's. */
 object Shape {
     val card = 20.dp
