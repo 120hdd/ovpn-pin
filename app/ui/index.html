@@ -1,5 +1,10 @@
 <!doctype html>
-<html lang="en">
+<!-- data-boot is taken off once boot() knows whether this copy has seen
+     the intro and has anything to connect with. Until then the main screen
+     is not drawn: it used to be shown for a moment, Connect button and all,
+     and then covered by the welcome - a flash of somewhere you had not got
+     to yet. -->
+<html lang="en" data-boot="wait">
 <head>
 <meta charset="utf-8">
 <title>Relay</title>
@@ -1174,17 +1179,6 @@
     </section>
 
     <section class="pane pane--line" style="--i:2">
-      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-archive"/></svg></span>
-      <span class="pane__copy">
-        <h3 class="pane__title">Minimise to tray</h3>
-        <p class="pane__why">Minimising puts Relay in the tray by the clock
-          instead of on the taskbar. Click the icon there to bring it back.</p>
-      </span>
-      <button class="toggle" id="winTray" type="button" data-option="minToTray"
-              role="switch" aria-checked="true"><span></span></button>
-    </section>
-
-    <section class="pane pane--line" style="--i:3">
       <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg></span>
       <span class="pane__copy">
         <h3 class="pane__title">Always on top</h3>
@@ -1194,7 +1188,7 @@
               role="switch" aria-checked="false"><span></span></button>
     </section>
 
-    <section class="pane" style="--i:4">
+    <section class="pane" style="--i:3">
       <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-x"/></svg></span>
       <span class="pane__copy">
         <h3 class="pane__title">The close button</h3>
@@ -1213,7 +1207,7 @@
       </span>
     </section>
 
-    <section class="pane pane--line" style="--i:5">
+    <section class="pane pane--line" style="--i:4">
       <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-socket"/></svg></span>
       <span class="pane__copy">
         <h3 class="pane__title">Stay connected after closing</h3>

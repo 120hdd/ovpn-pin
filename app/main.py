@@ -155,10 +155,10 @@ WINDOW_H = 740
 WINDOW_SHARE = 0.85          # of the work area's height
 WINDOW_MIN = (380, 640)      # unless the screen itself is smaller
 
-# The window's own switches, all in the tray menu. Minimising to the tray is
-# on unless turned off: the window is a dashboard for a connection that lives
-# in the tray anyway, and a taskbar button for it is one more thing open.
-WINDOW_DEFAULTS = {'lockWindow': False, 'minToTray': True, 'onTop': False}
+# The window's own switches, in the tray menu and in Settings alike. What
+# the close button does is not among them: it has three answers rather than
+# two and lives in the settings file on its own (onClose).
+WINDOW_DEFAULTS = {'lockWindow': False, 'onTop': False}
 
 
 def app_version():
@@ -2014,6 +2014,7 @@ class Api:
         key = key if key in known else 'midnight'
         self._settings['theme'] = key
         save_settings(self._settings)
+        menu_theme(key)
         return {'ok': True, 'theme': key}
 
     def setOrbColors(self, kind='signal'):
@@ -2535,6 +2536,26 @@ def short(text, limit=40):
     return text if len(text) <= limit else text[:limit - 1].rstrip() + '…'
 
 
+# The themes with a light background. Everything the page draws comes
+# from its own variables; the tray menu is drawn by Windows out of one of
+# two palettes, so each theme is sorted into the nearer of them.
+LIGHT_THEMES = ('white',)
+
+
+def menu_theme(theme):
+    """Dark or light for the tray menu, to match the theme the page is in.
+
+    Nine themes against the two Windows has. Worth doing anyway: before
+    this, a White copy opened a black menu and every dark copy a white one,
+    since the menu followed the system's setting and nothing else in the app
+    does.
+    """
+    try:
+        winwindow.menus(theme not in LIGHT_THEMES)
+    except Exception:
+        traceback.print_exc()
+
+
 def elapsed(seconds):
     """12 min, 1 h 05 min - how long a connection has been up, for a line
     that is read at a glance."""
@@ -2584,6 +2605,9 @@ class Tray:
             return False
         Item, Menu = pystray.MenuItem, pystray.Menu
         api = self.api
+        # Before the menu exists, so the first right-click is already in the
+        # theme rather than in the system's idea of one.
+        menu_theme(api._settings.get('theme', 'midnight'))
 
         # pystray calls an action with as many of (icon, item) as it takes,
         # counting them from the function's code - so every action here takes
@@ -2607,7 +2631,6 @@ class Tray:
             Item('Favourites', Menu(self._favourite_items)),
             Menu.SEPARATOR,
             switch('lockWindow', 'Lock position'),
-            switch('minToTray', 'Minimise to tray'),
             switch('onTop', 'Always on top'),
             Menu.SEPARATOR,
             Item('Quit', self._quit))
@@ -3988,16 +4011,6 @@ def main():
                 traceback.print_exc()
         api._apply_window()
 
-    def minimised():
-        # Only with a tray icon to come back from. Hiding the window without
-        # one would leave nothing on screen that can bring it back.
-        if not api._window_option('minToTray') or not tray.icon:
-            return
-        # Now as well as at close: an app that lives in the tray is an app
-        # that gets ended by a shutdown, and a shutdown may not wait for it.
-        api._remember_place()
-        window.hide()
-
     def maximised():
         # There is no maximise button, but Win+Up and a few other ways in
         # are the system's rather than the frame's. Put it straight back.
@@ -4006,7 +4019,11 @@ def main():
         except Exception:
             traceback.print_exc()
 
-    window.events.minimized += minimised
+    # Minimise minimises - to the taskbar, where the button says what it
+    # does. Putting Relay away in the tray is the close button's question
+    # (closeRequest), and a minimise that vanished into the tray as well
+    # left no way to get the window off the screen and keep it on the
+    # taskbar.
     window.events.maximized += maximised
     window.events.restored += api._apply_window
 
@@ -4027,6 +4044,14 @@ def main():
                 step()
             except Exception:
                 traceback.print_exc()
+        # A driven copy closes itself when it is finished, and its close
+        # goes through the same handler a person's does - which now asks
+        # whether to go to the tray, of a window with nobody at it. The
+        # check then waited for an answer for as long as it was left. So a
+        # copy that is being driven is leaving from the start.
+        if any(flag in sys.argv for flag in ('--ui-check', '--ui-drive',
+                                            '--ui-layout', '--ui-perf')):
+            api._leaving = True
         if '--ui-check' in sys.argv:
             threading.Thread(target=ui_check, args=(window,),
                              daemon=True).start()

@@ -5380,3 +5380,9 @@ canvas.blob__body {
 .seg--close { margin-top: 10px; }
 .seg--close[data-close='tray'] .seg__slide { transform: translateX(calc(100% + 2.7px)); }
 .seg--close[data-close='exit'] .seg__slide { transform: translateX(calc(200% + 5.4px)); }
+
+/* Nothing of the main screen until the first run has been settled - see
+   data-boot in index.html. The header stays: it is the window's own frame,
+   with the only close button there is, and a window that cannot be closed
+   while it waits for an answer is worse than a bare one. */
+:root[data-boot='wait'] .app > :not(.bar) { visibility: hidden; }

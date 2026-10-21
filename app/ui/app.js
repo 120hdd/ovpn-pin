@@ -2602,7 +2602,15 @@ async function refreshSweep(folder) {
 
 /* ---------------------------------------------------------------- start */
 
-async function boot() {
+/* The main screen, which has been waiting behind data-boot (index.html).
+   Called once the first run has been settled - either because there is
+   nothing of it to do, or because the sheet that does it is already up in
+   front. Harmless twice. */
+function ready() {
+  delete document.documentElement.dataset.boot;
+}
+
+async function bootSteps() {
   const info = await window.pywebview.api.boot();
   state.countries = info.countries || [];
   state.picked = info.picked || 'auto';
@@ -2614,21 +2622,26 @@ async function boot() {
   });
   paintPrefs(info);
 
+  // Nothing to connect with, so the welcome goes up now - before the
+  // intro rather than after it. Opened afterwards, it arrived a beat late:
+  // the intro takes a moment to fade and the main screen it uncovered was
+  // on screen for that moment, Connect button and all.
+  const welcome = !info.hasCredentials && !info.tunnelReady;
+  if (welcome) openWelcome();
   if (!info.introSeen) await runIntro();
+  ready();
 
   if (!info.hasCredentials) {
     setStatus('NOT SET UP', 'fail', 'No sign-in details yet', '');
     setHint('Add an account, or your own server, and this can connect.', true);
     render();
-    // Nothing to connect with: ask how it will connect, rather than open
-    // Settings on a page of options. A copy with its own server set up
-    // already has an answer and goes to the main screen.
+    // Nothing to connect with: the welcome above asks how it will
+    // connect, rather than opening Settings on a page of options. A copy
+    // with its own server set up already has an answer and carries on to
+    // the main screen.
     paintUse(info);
     acctRefresh().catch(() => {});
-    if (!info.tunnelReady) {
-      openWelcome();
-      return;
-    }
+    if (welcome) return;
   }
   if (info.recovered) {
     setHint('The app did not close properly last time. Windows proxy settings have been put back.');
@@ -3161,6 +3174,16 @@ initConnectionCore();
 // and a settings sheet opened in the first second should already have it.
 wireInfoButtons();
 wireFolds();
+async function boot() {
+  try {
+    await bootSteps();
+  } finally {
+    // Whatever happened - a step that threw, Python not answering - the
+    // window is not left as a header over nothing.
+    ready();
+  }
+}
+
 window.addEventListener('pywebviewready', boot);
 if (window.pywebview && window.pywebview.api) boot();
 

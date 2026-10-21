@@ -30,13 +30,16 @@ its own header, with minimise and close in it, and moves the window when
 that header is dragged. Locking the position is the page no longer treating
 its header as somewhere to drag from.
 
-Every function here takes an HWND and does nothing without one. Nothing here
-is needed for the app to work; all of it is needed for it to be pleasant.
+Every function here takes an HWND and does nothing without one - except
+menus(), at the end, which sets a preference that belongs to the process.
+Nothing here is needed for the app to work; all of it is needed for it to be
+pleasant.
 """
 
 import ctypes
 import ctypes.wintypes as wintypes
 import os
+import sys
 
 GWL_STYLE = -16
 WS_CAPTION = 0x00C00000
@@ -61,6 +64,16 @@ MONITOR_DEFAULTTONEAREST = 2
 
 SPI_GETWORKAREA = 0x0030
 
+# uxtheme's dark mode, which has never been given names in a header and is
+# reached by ordinal. 135 is SetPreferredAppMode and 136 FlushMenuThemes on
+# Windows 10 1809 and later; on 1809 itself 135 is a different call that
+# takes a flag, so neither is touched below build 18362.
+UX_SET_APP_MODE = 135
+UX_FLUSH_MENU_THEMES = 136
+APPMODE_FORCEDARK = 2
+APPMODE_FORCELIGHT = 3
+MENU_DARK_BUILD = 18362
+
 # Smaller than this is not a window anybody meant to leave behind; it is
 # the remains of one being torn down.
 MIN_W, MIN_H = 300, 400
@@ -82,7 +95,8 @@ class MONITORINFO(ctypes.Structure):
                 ('dwFlags', wintypes.DWORD)]
 
 
-_user32 = _dwm = None
+_user32 = _dwm = _uxtheme = None
+_SetAppMode = _FlushMenuThemes = None
 if os.name == 'nt':
     # Prototypes spelled out, because the defaults are int, and an int is
     # half of a 64-bit handle - the call works on the first machine and
@@ -140,6 +154,19 @@ if os.name == 'nt':
                                     wintypes.BOOL, wintypes.UINT,
                                     wintypes.UINT, ctypes.c_void_p,
                                     wintypes.UINT)
+
+    try:
+        if sys.getwindowsversion().build >= MENU_DARK_BUILD:
+            _uxtheme = ctypes.WinDLL('uxtheme')
+            _SetAppMode = _uxtheme[UX_SET_APP_MODE]
+            _SetAppMode.restype, _SetAppMode.argtypes = (ctypes.c_int,
+                                                         [ctypes.c_int])
+            _FlushMenuThemes = _uxtheme[UX_FLUSH_MENU_THEMES]
+            _FlushMenuThemes.restype, _FlushMenuThemes.argtypes = None, []
+    except (OSError, AttributeError):
+        # An ordinal that is not there on this build. Menus stay as Windows
+        # would have drawn them, which is the old behaviour.
+        pass
 
 
 def find(title):
@@ -390,4 +417,33 @@ def borderless(hwnd):
     round_ = wintypes.DWORD(DWMWCP_ROUND)
     _DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
                            ctypes.byref(round_), ctypes.sizeof(round_))
+    return True
+
+
+def menus(dark):
+    """Dark or light for the menus Windows draws for us, the tray's above all.
+
+    The one thing on screen the page cannot reach. A tray menu is a real
+    Win32 menu, drawn by Windows out of the system's own colours, so a White
+    copy of the app had a black menu and a Midnight one a white menu - the
+    one surface that contradicted whichever theme was on.
+
+    Windows offers exactly two answers here, not nine: an app says which of
+    dark and light its menus are and the system draws them. So the theme is
+    sorted into one of the two (main.py), and this says which. Everything
+    finer - the accent, the rounding - is the shell's.
+
+    The only function here that takes no window, because the preference is
+    the process's and the menu belongs to the tray icon rather than to us.
+    """
+    if not (_SetAppMode and _FlushMenuThemes):
+        return False
+    try:
+        _SetAppMode(APPMODE_FORCEDARK if dark else APPMODE_FORCELIGHT)
+        # Without this the mode is only read the next time Windows builds a
+        # menu theme from scratch, which for a menu already shown once is
+        # never.
+        _FlushMenuThemes()
+    except OSError:
+        return False
     return True
