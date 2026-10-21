@@ -2094,7 +2094,6 @@ function drawPin(p) {
   }
 }
 
-window.onPin = drawPin;
 
 /* One chip, and it is a verb: a pinned folder is worth nothing until
    something is reading from it. */
@@ -2588,27 +2587,21 @@ async function boot() {
   });
   paintPrefs(info);
 
+  if (!info.introSeen) await runIntro();
+
   if (!info.hasCredentials) {
     setStatus('NOT SET UP', 'fail', 'No sign-in details yet', '');
-    setHint('Put your Surfshark service username and password in Settings, and this can connect.', true);
+    setHint('Add an account, or your own server, and this can connect.', true);
     render();
-    // The sheet is about to be opened without anyone pressing the cog, so
-    // the two things in it that only refreshPrefs ever painted have to be
-    // painted here as well. Left unpainted, "Connect through" showed its
-    // markup defaults - both boxes live and empty - and ticking Surfshark
-    // before there was an account to tick it for got a refusal that then sat
-    // under the roster in red for the rest of the session.
+    // Nothing to connect with: ask how it will connect, rather than open
+    // Settings on a page of options. A copy with its own server set up
+    // already has an answer and goes to the main screen.
     paintUse(info);
     acctRefresh().catch(() => {});
-    // Opened rather than pointed at. There is exactly one thing to do from
-    // here and one place to do it, and making somebody find the cog first is
-    // asking them to guess at a step the app already knows.
-    $('prefs').showModal();
-    refreshSweep();
-    refreshPin(true);
-    // Straight at the one thing there is to do from here.
-    setTimeout(() => $('acctAdd').focus(), 60);
-    return;
+    if (!info.tunnelReady) {
+      openWelcome();
+      return;
+    }
   }
   if (info.recovered) {
     setHint('The app did not close properly last time. Windows proxy settings have been put back.');
@@ -2623,6 +2616,9 @@ async function boot() {
     if (!info.recovered) setHint(`${state.countries.length} countries ready.`);
     render();
   }
+  // Signed in, but an account with no servers yet: get them ready now.
+  const lacking = providersWithoutServers(info);
+  if (lacking.length && s.state !== 'on') prepareServers(lacking[0]);
   // Asked for once the window is already usable: it is a network round trip
   // and nothing on screen depends on it arriving.
   window.pywebview.api.whoami();
@@ -3432,7 +3428,8 @@ async function wsSubmit() {
   if (r.credentials) {
     said($('acctSaid'), 'Signed in as ' + r.username + '. The proxy credential '
       + 'is on file' + (r.remembered ? ' and the password is remembered' : '')
-      + ' - now press Get servers.', 'good');
+      + '.', 'good');
+    prepareServers('windscribe');
   } else {
     said($('acctSaid'), 'Signed in as ' + r.username + ', but the proxy '
       + 'credential did not come back: ' + r.error, 'bad');
@@ -3694,6 +3691,15 @@ function acctPaint() {
       use.addEventListener('click', () => acctUse(row.id, use));
       act.appendChild(use);
     }
+    // Fetch and pin this account's servers from right here, as the Android
+    // app's account cards do - not two screens away.
+    const pinIt = document.createElement('button');
+    pinIt.className = 'btn btn--quiet btn--auto';
+    pinIt.type = 'button';
+    pinIt.textContent = 'Pin';
+    pinIt.title = 'Get this provider\'s servers and pin them';
+    pinIt.addEventListener('click', () => prepareServers(row.provider));
+    act.appendChild(pinIt);
     const drop = document.createElement('button');
     drop.className = 'btn btn--quiet btn--auto';
     drop.type = 'button';
@@ -3798,6 +3804,9 @@ $('acctSave').addEventListener('click', async () => {
     said($('acctSaid'), `Saved and in use: ${r.label}.`, 'good');
     await acctRefresh();
     await refreshPrefs();
+    // An account is not yet something to connect with: get its servers and
+    // pin them now, rather than wait for somebody to find the buttons.
+    prepareServers('surfshark');
     return;
   }
 
@@ -5291,3 +5300,155 @@ $('srcBrowse').addEventListener('click', async (e) => {
   // list and the settings file agreeing about which pool is on.
   await useSource(`folder:${r.folder}`);
 });
+
+
+/* ------------------------------------------------------------ first run */
+
+/* The intro: five slides, the first time this copy opens. Resolves when it
+   is finished with, by Skip or Get started, and says so to Python so it is
+   never shown again. */
+function runIntro() {
+  return new Promise((done) => {
+    const dlg = $('introDlg');
+    const slides = [...dlg.querySelectorAll('.intro__slide')];
+    const dots = [...$('introDots').children];
+    let at = 0;
+    const go = (to) => {
+      at = to;
+      slides.forEach((s, i) => {
+        s.classList.toggle('is-here', i === at);
+        s.classList.toggle('is-gone', i < at);
+        s.style.setProperty('--tint', s.dataset.tint);
+      });
+      dots.forEach((d, i) => d.classList.toggle('is-here', i === at));
+      $('introNext').textContent = at === slides.length - 1 ? 'Get started' : 'Next';
+    };
+    const finish = () => {
+      window.pywebview.api.markIntroSeen();
+      shut(dlg);
+      done();
+    };
+    $('introNext').onclick = () => (at < slides.length - 1 ? go(at + 1) : finish());
+    $('introSkip').onclick = finish;
+    dlg.addEventListener('cancel', (e) => { e.preventDefault(); finish(); }, { once: true });
+    // However it goes away, the rest of boot goes on.
+    dlg.addEventListener('close', () => done(), { once: true });
+    go(0);
+    dlg.showModal();
+  });
+}
+
+/* The welcome: nothing to connect with, so ask how it will connect. Each
+   answer goes straight to the place that sets it up. */
+function openWelcome() {
+  const dlg = $('welcomeDlg');
+  if (!dlg.open) dlg.showModal();
+}
+
+// Not dismissed with Escape: behind it is a Connect button with nothing to
+// connect through. It goes when there is something - an account, a server.
+$('welcomeDlg').addEventListener('cancel', (e) => e.preventDefault());
+
+for (const b of $('welcomeDlg').querySelectorAll('[data-provider]')) {
+  b.addEventListener('click', () => {
+    acctSetProvider(b.dataset.provider);
+    acctShowForm(true);
+  });
+}
+
+$('welcomeServer').addEventListener('click', () => {
+  shut($('welcomeDlg'));
+  $('prefs').showModal();
+  showScreen('connection');
+  refreshPrefs();
+});
+
+/* The setup: an account's servers fetched and then pinned, with each step
+   shown as it happens. What the Android app does on its own after a sign-in
+   - and what this app used to leave to two buttons in Settings. */
+const setup = { provider: null, finish: null };
+
+function setupAt(step, at) {
+  const row = $('setupDlg').querySelector(`.steps__row[data-step="${step}"]`);
+  row.dataset.at = at;
+}
+
+function setupFail(why) {
+  $('setupTitle').textContent = 'Setup did not finish';
+  $('setupError').textContent = why || 'Something went wrong.';
+  $('setupError').hidden = false;
+  $('setupAgain').hidden = false;
+  $('setupDlg').querySelector('.logo-mark').classList.remove('logo-mark--spin');
+  setup.finish = null;
+}
+
+async function prepareServers(provider) {
+  const dlg = $('setupDlg');
+  const name = provider === 'windscribe' ? 'Windscribe' : 'Surfshark';
+  setup.provider = provider;
+  $('setupTitle').textContent = 'Getting your servers ready';
+  $('setupSigned').textContent = `Signed in to ${name}`;
+  $('setupServers').textContent = `Getting ${name}'s server list`;
+  $('setupError').hidden = true;
+  $('setupAgain').hidden = true;
+  $('setupDetail').textContent = '';
+  $('setupBar').style.width = '2%';
+  dlg.querySelector('.logo-mark').classList.add('logo-mark--spin');
+  setupAt('servers', 'now');
+  setupAt('pinning', 'todo');
+  shut($('welcomeDlg'));
+  if (!dlg.open) dlg.showModal();
+
+  const got = await (provider === 'windscribe'
+    ? window.pywebview.api.windscribeServers()
+    : window.pywebview.api.surfsharkServers());
+  if (!got || !got.ok) { setupFail(got && got.error); return false; }
+  setupAt('servers', 'done');
+  setupAt('pinning', 'now');
+
+  const aimed = await window.pywebview.api.pinForProvider(provider);
+  if (!aimed || !aimed.ok) { setupFail(aimed && aimed.error); return false; }
+  const finished = new Promise((resolve) => { setup.finish = resolve; });
+  const started = await window.pywebview.api.startPin();
+  if (!started || !started.ok) { setupFail(started && started.error); return false; }
+  const p = await finished;
+
+  await refreshPrefs();
+  if (p.error) { setupFail(p.error); return false; }
+  if (!p.written) { setupFail('No server answered. Try again in a moment.'); return false; }
+  setupAt('pinning', 'done');
+  $('setupTitle').textContent = 'Ready';
+  $('setupDetail').textContent = `${p.written} servers pinned`;
+  dlg.querySelector('.logo-mark').classList.remove('logo-mark--spin');
+  if (state.mode === 'off') {
+    setStatus('DISCONNECTED', 'off', '', '');
+    setHint(`${state.countries.length} countries ready.`);
+  }
+  render();
+  setTimeout(() => shut(dlg), 1200);
+  return true;
+}
+
+/* Pin progress goes where it always went - the Servers screen - and, while
+   a setup is waiting on it, to the setup sheet too. */
+window.onPin = (p) => {
+  drawPin(p);
+  if (!setup.finish || !p) return;
+  if (p.phase === 'result' && p.total) {
+    $('setupBar').style.width = `${Math.max(2, Math.round((p.done / p.total) * 100))}%`;
+    $('setupDetail').textContent = `${p.done} of ${p.total}`;
+  } else if (p.phase === 'finished') {
+    const finish = setup.finish;
+    setup.finish = null;
+    finish(p);
+  }
+};
+
+$('setupRetry').addEventListener('click', () => prepareServers(setup.provider));
+$('setupClose').addEventListener('click', () => shut($('setupDlg')));
+
+/* Which signed-in providers have nothing to connect through yet. */
+function providersWithoutServers(info) {
+  const ps = (info && info.providerState) || {};
+  return Object.keys(ps).filter((k) => ps[k].account && !ps[k].servers);
+}

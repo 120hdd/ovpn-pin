@@ -239,6 +239,15 @@ def _shut_prefs_working(p):
          "document.getElementById('prefs').close()")
 
 
+def _first(dlg):
+    def enter(p):
+        p.do(f"document.getElementById('{dlg}').showModal()", 2.6)
+
+    def leave(p):
+        p.do(f"document.getElementById('{dlg}').close()")
+    return enter, leave
+
+
 def _log(p):
     p.click('#logOpen', 0.6)
 
@@ -350,6 +359,10 @@ SCENES = [
     ('prefs', _prefs, _shut_prefs),
     ('prefs-working', _prefs_working, _shut_prefs_working),
     ('log', _log, _shut_log),
+    ('intro', lambda p: p.do("runIntro()", 2.6),
+     lambda p: p.do("document.getElementById('introDlg').close()")),
+    ('welcome', *_first('welcomeDlg')),
+    ('setup', *_first('setupDlg')),
     ('source', _source, _shut_source),
     ('dropped', _dropped, _shut_dropped),
 ]
@@ -536,7 +549,10 @@ def run(window, only=None, verbose=False):
         # A copy with no account opens Settings by itself at boot. Left open,
         # every main-screen state below was a photograph of the sheet, and
         # its audit was of the sheet - clean, and about the wrong thing.
-        p.do("for (const d of document.querySelectorAll('dialog[open]')) d.close()", 0.6)
+        # Twice: closing the intro lets boot go on, and boot then opens the
+        # welcome on a copy with nothing set up.
+        for _ in range(2):
+            p.do("for (const d of document.querySelectorAll('dialog[open]')) d.close()", 1.0)
 
         for name, enter, leave in SCENES:
             visit(name, enter, leave)

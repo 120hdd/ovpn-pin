@@ -1208,6 +1208,137 @@
      of them, and unfolding all of that inside a list of accounts pushed the
      list off the screen at the moment you most wanted to see it - which is
      what "is this one already here" needs. -->
+<!-- First run, as the Android app has it.
+
+     The intro: what Relay is, in five slides, the first time it opens. The
+     welcome: a copy with nothing to connect with is asked how it will
+     connect, rather than shown a Connect button that cannot work. The
+     setup: once an account is in, its servers are fetched and pinned
+     without anybody needing to find two buttons in Settings. -->
+<dialog class="sheet sheet--first sheet--intro" id="introDlg">
+  <header class="first__top">
+    <button class="btn btn--quiet btn--auto" id="introSkip" type="button">Skip</button>
+  </header>
+  <div class="intro__track" id="introTrack">
+    <section class="intro__slide" data-tint="#8c82ff">
+      <div class="intro__art"><svg class="logo-mark logo-mark--draw" viewBox="0 0 256 256" aria-hidden="true">
+        <circle class="logo-mark__disc" cx="128" cy="128" r="56"/>
+        <path class="logo-mark__ring" pathLength="1" d="M226.48 110.64 A100 100 0 1 1 145.36 29.52"/>
+        <circle class="logo-mark__bead" cx="221.3" cy="34.7" r="16"/>
+      </svg></div>
+      <h2 class="first__title">Relay</h2>
+      <p class="first__say">A private way out from a line that forges DNS answers and
+        filters VPNs - one click to connect, and it tells you exactly where your
+        traffic comes out.</p>
+    </section>
+    <section class="intro__slide" data-tint="#ffc761">
+      <div class="intro__art"><span class="intro__badge"><svg class="ico" aria-hidden="true"><use href="#i-bolt"/></svg></span></div>
+      <h2 class="first__title">The first exit that answers</h2>
+      <p class="first__say">Relay asks dozens of your provider's exits at once and
+        connects through whichever answers first. Pick a country, or let it race
+        them all.</p>
+    </section>
+    <section class="intro__slide" data-tint="#61efbf">
+      <div class="intro__art"><span class="intro__badge"><svg class="ico" aria-hidden="true"><use href="#i-pin"/></svg></span></div>
+      <h2 class="first__title">Pinned to real addresses</h2>
+      <p class="first__say">This line's resolver answers with forged addresses. Relay
+        looks every server up over DNS-over-HTTPS and keeps the address that is
+        really it.</p>
+    </section>
+    <section class="intro__slide" data-tint="#3dd4ee">
+      <div class="intro__art"><span class="intro__badge"><svg class="ico" aria-hidden="true"><use href="#i-tower"/></svg></span></div>
+      <h2 class="first__title">Or your own server</h2>
+      <p class="first__say">Have a server of your own behind Cloudflare? Relay speaks
+        its tunnel directly - quicker and steadier, with uploads that do not
+        stall.</p>
+    </section>
+    <section class="intro__slide" data-tint="#ff8fb8">
+      <div class="intro__art"><span class="intro__badge"><svg class="ico" aria-hidden="true"><use href="#i-star"/></svg></span></div>
+      <h2 class="first__title">One click, anywhere</h2>
+      <p class="first__say">Click the orb or the Connect button, or use the tray icon
+        by the clock. Hold the orb to reconnect.</p>
+    </section>
+  </div>
+  <footer class="first__foot">
+    <div class="intro__dots" id="introDots" aria-hidden="true">
+      <i></i><i></i><i></i><i></i><i></i>
+    </div>
+    <button class="btn first__go" id="introNext" type="button" autofocus>Next</button>
+  </footer>
+</dialog>
+
+<dialog class="sheet sheet--first" id="welcomeDlg">
+  <div class="first__body">
+    <div class="first__art"><svg class="logo-mark logo-mark--draw" viewBox="0 0 256 256" aria-hidden="true">
+        <circle class="logo-mark__disc" cx="128" cy="128" r="56"/>
+        <path class="logo-mark__ring" pathLength="1" d="M226.48 110.64 A100 100 0 1 1 145.36 29.52"/>
+        <circle class="logo-mark__bead" cx="221.3" cy="34.7" r="16"/>
+      </svg></div>
+    <h2 class="first__title">Welcome to Relay</h2>
+    <p class="first__say">How will you connect? Relay needs one of these before it can
+      carry anything - more can be added later under Settings.</p>
+    <div class="choice">
+      <div class="choice__head">
+        <span class="choice__glyph"><svg class="ico" aria-hidden="true"><use href="#i-key"/></svg></span>
+        <span class="choice__copy">
+          <span class="choice__name">A VPN account</span>
+          <span class="choice__note">Sign in, and Relay gets the provider's servers and
+            pins them to real addresses for you.</span>
+        </span>
+      </div>
+      <div class="choice__pair">
+        <button class="btn first__go" type="button" data-provider="surfshark">Surfshark</button>
+        <button class="btn first__go" type="button" data-provider="windscribe">Windscribe</button>
+      </div>
+    </div>
+    <button class="choice choice--row" id="welcomeServer" type="button">
+      <span class="choice__head">
+        <span class="choice__glyph"><svg class="ico" aria-hidden="true"><use href="#i-tower"/></svg></span>
+        <span class="choice__copy">
+          <span class="choice__name">My own server</span>
+          <span class="choice__note">A server of yours behind Cloudflare. Set its domain
+            and password.</span>
+        </span>
+      </span>
+    </button>
+  </div>
+</dialog>
+
+<dialog class="sheet sheet--first" id="setupDlg">
+  <div class="first__body">
+    <div class="first__art"><svg class="logo-mark logo-mark--spin" viewBox="0 0 256 256" aria-hidden="true">
+        <circle class="logo-mark__disc" cx="128" cy="128" r="56"/>
+        <path class="logo-mark__ring" pathLength="1" d="M226.48 110.64 A100 100 0 1 1 145.36 29.52"/>
+        <circle class="logo-mark__bead" cx="221.3" cy="34.7" r="16"/>
+      </svg></div>
+    <h2 class="first__title" id="setupTitle">Getting your servers ready</h2>
+    <p class="first__say">Once, for each account. After this Relay connects in a second.</p>
+    <ol class="steps">
+      <li class="steps__row" data-step="signed" data-at="done">
+        <i class="steps__tick" aria-hidden="true"></i>
+        <span class="steps__copy"><span class="steps__name" id="setupSigned">Signed in</span></span>
+      </li>
+      <li class="steps__row" data-step="servers" data-at="todo">
+        <i class="steps__tick" aria-hidden="true"></i>
+        <span class="steps__copy"><span class="steps__name" id="setupServers">Getting the server list</span></span>
+      </li>
+      <li class="steps__row" data-step="pinning" data-at="todo">
+        <i class="steps__tick" aria-hidden="true"></i>
+        <span class="steps__copy">
+          <span class="steps__name">Pinning each server to its real address</span>
+          <span class="steps__detail mono" id="setupDetail"></span>
+          <span class="steps__bar" aria-hidden="true"><i id="setupBar"></i></span>
+        </span>
+      </li>
+    </ol>
+    <p class="note note--bad" id="setupError" hidden></p>
+    <div class="choice__pair" id="setupAgain" hidden>
+      <button class="btn first__go" id="setupRetry" type="button">Try again</button>
+      <button class="btn btn--quiet" id="setupClose" type="button">Close</button>
+    </div>
+  </div>
+</dialog>
+
 <dialog class="sheet sheet--add" id="acctDlg">
   <header class="sheet__top">
     <span class="sheet__heading">

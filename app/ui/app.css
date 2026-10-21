@@ -5040,3 +5040,134 @@ canvas.blob__body {
   border-color: rgba(255, 199, 97, 0.3);
   color: var(--work);
 }
+
+/* ------------------------------------------------------------ first run */
+
+/* The mark, drawing itself in: the ring traced round from its start, the
+   disc swelling in its middle, then the bead leaving through the gap - the
+   Android intro's animation, in CSS. */
+.logo-mark { width: 100%; height: 100%; display: block; overflow: visible; }
+.logo-mark__disc { fill: #f4f6fa; transform-origin: 128px 128px; }
+.logo-mark__ring { fill: none; stroke: var(--ok); stroke-width: 20; stroke-linecap: round; }
+.logo-mark__bead { fill: var(--ok); transform-origin: 221px 35px; }
+
+.logo-mark--draw .logo-mark__ring {
+  stroke-dasharray: 1 1.2;
+  stroke-dashoffset: 1;
+  animation: mark-ring 2s cubic-bezier(0.4, 0, 0.2, 1) 0.15s forwards;
+}
+.logo-mark--draw .logo-mark__disc {
+  transform: scale(0);
+  animation: mark-disc 1.3s cubic-bezier(0.34, 1.56, 0.64, 1) 0.7s forwards;
+}
+.logo-mark--draw .logo-mark__bead {
+  opacity: 0;
+  transform: translate(-24px, 24px) scale(0.4);
+  animation: mark-bead 0.9s cubic-bezier(0.22, 1, 0.36, 1) 2s forwards;
+}
+@keyframes mark-ring { to { stroke-dashoffset: 0; } }
+@keyframes mark-disc { to { transform: scale(1); } }
+@keyframes mark-bead { to { opacity: 1; transform: none; } }
+
+/* Working: the ring turns, slowly, while the servers are got ready. */
+.logo-mark--spin { animation: mark-turn 2.4s linear infinite; }
+.logo-mark--spin .logo-mark__disc { animation: mark-breathe 1.6s ease-in-out infinite alternate; }
+@keyframes mark-turn { to { transform: rotate(360deg); } }
+@keyframes mark-breathe { from { transform: scale(0.9); } to { transform: scale(1); } }
+
+.sheet--first[open] { align-items: center; }
+.first__top { align-self: stretch; display: flex; justify-content: flex-end; padding: 14px 16px 0; }
+.first__top .btn { height: 34px; padding: 0 14px; }
+.first__body {
+  width: 100%; max-width: 420px; flex: 1;
+  display: flex; flex-direction: column; align-items: center;
+  padding: 28px 20px 20px; overflow-y: auto;
+}
+.first__art { width: 132px; height: 132px; margin: 6px 0 18px; }
+.first__title { margin: 0; font-size: 22px; font-weight: 700; text-align: center; }
+.first__say {
+  margin: 8px 0 20px; color: var(--text-muted); font-size: 13px; line-height: 1.55;
+  text-align: center;
+}
+.first__go {
+  height: 44px;
+  border: 0;
+  border-radius: 13px;
+  color: #07140f;
+  background: linear-gradient(90deg, #61efbf, #3dd4ee);
+  font-size: 14px;
+  font-weight: 700;
+}
+.first__go:hover { filter: brightness(1.06); }
+.first__foot {
+  align-self: stretch; display: flex; flex-direction: column; gap: 16px;
+  padding: 0 20px 20px;
+}
+
+.intro__track { flex: 1; width: 100%; position: relative; overflow: hidden; }
+.intro__slide {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 0 28px; text-align: center;
+  opacity: 0; transform: translateX(40px);
+  transition: opacity 360ms ease, transform 480ms cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+}
+.intro__slide.is-here { opacity: 1; transform: none; pointer-events: auto; }
+.intro__slide.is-gone { transform: translateX(-40px); }
+.intro__art { width: 150px; height: 150px; margin-bottom: 26px; display: grid; place-items: center; }
+.intro__badge {
+  width: 96px; height: 96px; border-radius: 50%; display: grid; place-items: center;
+  color: var(--tint); background: color-mix(in srgb, var(--tint), transparent 84%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--tint), transparent 70%),
+              0 0 60px color-mix(in srgb, var(--tint), transparent 70%);
+}
+.intro__badge .ico { width: 40px; height: 40px; }
+.intro__dots { display: flex; justify-content: center; gap: 7px; }
+.intro__dots i {
+  width: 7px; height: 7px; border-radius: 4px; background: rgba(255, 255, 255, 0.18);
+  transition: width 380ms cubic-bezier(0.22, 1, 0.36, 1), background 300ms ease;
+}
+.intro__dots i.is-here { width: 24px; background: var(--ok); }
+
+.choice {
+  width: 100%; margin-bottom: 12px; padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 16px;
+  background: rgba(255, 255, 255, 0.03); color: inherit; font: inherit; text-align: left;
+}
+.choice--row { cursor: pointer; }
+.choice--row:hover { background: rgba(255, 255, 255, 0.05); }
+.choice__head { display: flex; align-items: center; gap: 12px; }
+.choice__glyph {
+  width: 36px; height: 36px; flex: none; display: grid; place-items: center;
+  border-radius: 10px; color: var(--ok); background: rgba(97, 239, 191, 0.1);
+}
+.choice__copy { display: flex; flex-direction: column; gap: 2px; }
+.choice__name { font-size: 14px; font-weight: 700; }
+.choice__note { color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+.choice__pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; width: 100%; }
+
+.steps { list-style: none; margin: 4px 0 12px; padding: 0; width: 100%; }
+.steps__row { display: flex; gap: 12px; padding: 8px 0; }
+.steps__tick {
+  width: 20px; height: 20px; flex: none; margin-top: 1px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08); position: relative;
+}
+.steps__row[data-at='now'] .steps__tick {
+  background: rgba(97, 239, 191, 0.18); box-shadow: inset 0 0 0 1px var(--ok);
+  animation: status-pulse 1.2s ease-out infinite;
+}
+.steps__row[data-at='done'] .steps__tick { background: var(--ok); }
+.steps__row[data-at='done'] .steps__tick::after {
+  content: ''; position: absolute; left: 7px; top: 4px; width: 5px; height: 9px;
+  border: solid #07140f; border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.steps__copy { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.steps__name { font-size: 13px; font-weight: 600; color: var(--text-muted); }
+.steps__row[data-at='now'] .steps__name,
+.steps__row[data-at='done'] .steps__name { color: var(--text); }
+.steps__detail { font-size: 11px; color: var(--text-muted); }
+.steps__detail:empty { display: none; }
+.steps__bar { display: none; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.steps__row[data-at='now'] .steps__bar { display: block; }
+.steps__bar i { display: block; height: 100%; width: 2%; background: var(--ok); transition: width 300ms ease; }

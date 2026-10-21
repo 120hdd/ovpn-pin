@@ -663,6 +663,9 @@ class Api:
                 'keepOnClose': bool(self._settings.get('keepOnClose')),
                 'window': self._window_options(),
                 'orbColors': self._settings.get('orbColors', 'signal'),
+                'introSeen': bool(self._settings.get('introSeen')),
+                'tunnelReady': bool(self._settings.get('tunnelDomain')
+                                    and self._settings.get('tunnelPassword')),
                 'mode': self._settings.get('mode', 'surfshark'),
                 'hasCredentials': self._has_credentials(),
                 'username': self._engine.username(),
@@ -1988,6 +1991,12 @@ class Api:
         self._settings['sortBy'] = kind
         save_settings(self._settings)
         return {'ok': True, 'sortBy': kind}
+
+    def markIntroSeen(self):
+        """The intro is shown once, the first time this copy opens."""
+        self._settings['introSeen'] = True
+        save_settings(self._settings)
+        return {'ok': True}
 
     def setOrbColors(self, kind='signal'):
         """Traffic light or the desktop's own lavender and teal."""
