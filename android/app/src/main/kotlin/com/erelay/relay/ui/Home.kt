@@ -326,9 +326,14 @@ private fun Side(
             }
         }
         Spacer(Modifier.height(8.dp))
-        Text(ip, style = Type.ip.copy(color = ipColor,
-            textDecoration = if (struck) TextDecoration.LineThrough else null),
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
+        // An address is no use with its end cut off, and a phone with a large
+        // font setting did exactly that. It steps down in size until it fits.
+        androidx.compose.foundation.text.BasicText(ip,
+            style = Type.ip.copy(color = ipColor,
+                textDecoration = if (struck) TextDecoration.LineThrough else null),
+            maxLines = 1,
+            autoSize = androidx.compose.foundation.text.TextAutoSize.StepBased(
+                minFontSize = 10.sp, maxFontSize = Type.ip.fontSize, stepSize = 0.5.sp))
         Spacer(Modifier.height(4.dp))
         Text(place, style = Type.small.copy(color = Tone.textMuted), maxLines = 1,
             overflow = TextOverflow.Ellipsis)

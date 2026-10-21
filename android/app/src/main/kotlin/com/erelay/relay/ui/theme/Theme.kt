@@ -127,14 +127,16 @@ data class StateTone(val a: Color, val b: Color, val c: Color, val glow: Color, 
 private fun glow(r: Int, g: Int, b: Int, a: Float) = Color(r, g, b, (a * 255).toInt())
 
 /**
- * The look per state. Two sets: the traffic light (red off, yellow working,
- * green on - read at a glance, across a room) and the desktop's own app.css
+ * The look per state. Two sets: the traffic light (silver off, yellow
+ * working, green on, red failed - read at a glance, across a room) and the desktop's own app.css
  * colours, lavender at rest. Which one is Look and feel's choice, read from
  * [Tone.signal] so a change repaints at once.
  */
 fun toneOf(mode: Mode): StateTone = if (Tone.signal) when (mode) {
-    Mode.OFF -> StateTone(Color(0xFFFF8A8A), Color(0xFFFF5A6E), Color(0xFF8E1D2E),
-        glow(255, 80, 96, 0.40f), Color(0xFFFF6B7A))
+    // Silver at rest: not connected is the ordinary state, not an alarm. Red
+    // is kept for a connection that failed, so it still means something.
+    Mode.OFF -> StateTone(Color(0xFFDDE1E8), Color(0xFF9AA1AE), Color(0xFF454B58),
+        glow(170, 178, 192, 0.30f), Color(0xFFB4BBC7))
     Mode.BUSY -> StateTone(Color(0xFFFFE27A), Color(0xFFFFC24B), Color(0xFFB9791A),
         glow(255, 200, 70, 0.42f), Color(0xFFFFD261))
     Mode.ON -> StateTone(Color(0xFF71F1BD), Color(0xFF3DD4EE), Color(0xFF087E6A),

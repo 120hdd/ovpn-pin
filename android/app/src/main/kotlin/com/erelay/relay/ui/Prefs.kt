@@ -481,8 +481,8 @@ private fun Look(feel: com.erelay.relay.data.Feel, onFeel: (com.erelay.relay.dat
     }
 
     Pane(icon = Glyph.sparkle, title = "Orb colours",
-        help = "Traffic light: red when not connected, yellow while connecting, green when " +
-            "connected - the state reads at a glance from across a room. Desktop: the " +
+        help = "Traffic light: silver when not connected, yellow while connecting, green when " +
+            "connected, red if it failed - the state reads at a glance from across a room. Desktop: the " +
             "desktop app's own colours, lavender at rest.") {
         Segment(listOf("signal", "desktop"), feel.orbColors,
             { if (it == "signal") "Traffic light" else "Desktop" },

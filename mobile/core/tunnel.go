@@ -33,7 +33,6 @@ import (
 	"net/netip"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	tun "github.com/sagernet/sing-tun"
@@ -286,7 +285,7 @@ func (h *handler) carry(ctx context.Context, conn net.Conn, source, destination 
 
 	upstream, spare, err := h.exit.Open(destination.String(), 15*time.Second)
 	if err != nil {
-		h.hosts.closed(row, 0, 0)
+		h.hosts.closed(row)
 		return err
 	}
 	defer upstream.Close()
@@ -296,14 +295,16 @@ func (h *handler) carry(ctx context.Context, conn net.Conn, source, destination 
 	// a corruption that only shows up as a page that half loads.
 	if len(spare) > 0 {
 		if _, err := conn.Write(spare); err != nil {
+			h.hosts.closed(row)
 			return err
 		}
+		h.hosts.moved(row, 0, int64(len(spare)))
 	}
 
-	// io.Copy already returns what it moved, so the counting is free - no
-	// wrapper reader, no extra allocation per chunk, nothing in the path of
-	// the bytes themselves.
-	var up, down atomic.Int64
+	// Counted as the bytes pass, through a writer that adds each chunk to
+	// the row - so the meter moves during a download, not after it.
+	toExit := counted{w: upstream, h: h.hosts, row: row}
+	toApp := counted{w: conn, h: h.hosts, row: row, down: true}
 	done := make(chan error, 2)
 	go func() {
 		// The first thing a client sends is where its name is, if it has
@@ -312,36 +313,25 @@ func (h *handler) carry(ctx context.Context, conn net.Conn, source, destination 
 		//
 		// Only the client-to-exit direction, and only the first message.
 		// Everything else goes straight through io.Copy as before.
-		var moved int64
 		if first, err := firstBytes(conn); err == nil && len(first) > 0 {
 			if name := sniFrom(first); name != "" {
 				h.hosts.rename(destination.String(),
 					net.JoinHostPort(name, strconv.Itoa(int(destination.Port))))
 			}
-			n, werr := upstream.Write(first)
-			moved += int64(n)
-			if werr != nil {
-				up.Store(moved)
+			if _, werr := toExit.Write(first); werr != nil {
 				done <- werr
 				return
 			}
 		}
-		n, err := io.Copy(upstream, conn)
-		up.Store(moved + n)
+		_, err := io.Copy(toExit, conn)
 		done <- err
 	}()
-	go func() { n, err := io.Copy(conn, upstream); down.Store(n); done <- err }()
+	go func() { _, err := io.Copy(toApp, upstream); done <- err }()
 
-	// Both halves have to finish before the counts are read, and that is not
-	// fussiness - it was wrong. select returns on whichever copier ends
-	// first, and the deferred record then read a counter the other one had
-	// not written yet. In practice the client closes first, so the upload was
-	// counted and the download was always zero:
-	//
-	//	149.154.167.91:5222   down 0 B   up 2.33 KB
-	//
-	// Closing upstream is what ends the other copy, so waiting for it is
-	// bounded: one read that is already failing.
+	// Both halves finish before the row is marked closed, so it is never
+	// shown as idle while one copier is still adding to it. Closing upstream
+	// is what ends the other copy, so waiting for it is bounded: one read
+	// that is already failing.
 	var first error
 	select {
 	case first = <-done:
@@ -352,7 +342,7 @@ func (h *handler) carry(ctx context.Context, conn net.Conn, source, destination 
 	conn.Close()
 	<-done
 
-	h.hosts.closed(row, up.Load(), down.Load())
+	h.hosts.closed(row)
 	return first
 }
 
