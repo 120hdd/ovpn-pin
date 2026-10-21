@@ -51,11 +51,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.erelay.relay.data.Mode
-import com.erelay.relay.orb.OrbStage
 import com.erelay.relay.ui.theme.Tone
 import com.erelay.relay.ui.theme.Type
-import com.erelay.relay.ui.theme.restTone
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -131,14 +128,13 @@ fun Intro(paused: Boolean, onDone: () -> Unit) {
                         scaleY = k
                     }) {
                         if (s.icon == null) {
-                            // The orb lives on the first slide only: one GL view at a time.
-                            OrbStage(Mode.OFF, 0f, paused = paused || pager.currentPage != 0,
-                                size = 240.dp, toneOverride = restTone())
+                            // The mark draws itself in: the first thing a new install sees.
+                            RelayMark(Modifier.size(200.dp), animate = true)
                         } else {
                             Badge(s.icon, s.tint, active = pager.currentPage == page && !paused)
                         }
                     }
-                    Spacer(Modifier.height(if (s.icon == null) 8.dp else 40.dp))
+                    Spacer(Modifier.height(40.dp))
                     Column(
                         Modifier.graphicsLayer {
                             val a = pager.away(page)

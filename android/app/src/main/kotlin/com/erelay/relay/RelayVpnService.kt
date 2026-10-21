@@ -582,7 +582,7 @@ class RelayVpnService : VpnService() {
         }
         return when {
             text.startsWith("connected") -> "Connected to ${place.ifEmpty { "Relay" }}" to
-                (if (exitProvider.isNotEmpty()) "$exitName · ${tookMs} ms" else exitAddress)
+                (if (exitProvider.isNotEmpty()) exitName else exitAddress)
             text.startsWith("failed") -> "Could not connect" to
                 text.removePrefix("failed: ").replaceFirstChar { it.uppercase() }
             text.startsWith("asked") -> "Connecting…" to "Asked ${asked} of $total exits"
@@ -616,9 +616,15 @@ class RelayVpnService : VpnService() {
         // channel-taking constructor is API 26 and minSdk here is 24, and the
         // compat one does the right thing on both without a version branch.
         val (title, body) = spoken(text)
+        // Connected, the header counts up how long for: the platform's own
+        // chronometer, ticking without a notification update every second.
+        val up = text.startsWith("connected") && since > 0
         return NotificationCompat.Builder(this, CHANNEL)
             .setContentTitle(title)
             .setContentText(body)
+            .setShowWhen(up)
+            .setUsesChronometer(up)
+            .setWhen(if (up) since * 1000 else System.currentTimeMillis())
             .setSmallIcon(R.drawable.ic_relay)
             .setContentIntent(open)
             .addAction(0, "Disconnect", stop)
