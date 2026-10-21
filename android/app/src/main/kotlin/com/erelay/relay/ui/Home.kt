@@ -146,14 +146,6 @@ private fun Header(s: HomeState, onLog: () -> Unit, onDrop: () -> Unit, onSettin
         Spacer(Modifier.width(10.dp))
         Text("RELAY", style = Type.strong.copy(fontWeight = FontWeight.W700, letterSpacing = 2.4.sp))
         Grow()
-        // Green only when it is true. A badge that always says PRIVATE says
-        // nothing; this one is the first thing a glance at the app reads.
-        when (s.conn.mode) {
-            Mode.ON -> Pill("PRIVATE", dot = true, color = Tone.ok)
-            Mode.BUSY -> Pill("CONNECTING", dot = true, color = Tone.work)
-            else -> Pill("EXPOSED", dot = true, color = Tone.fail)
-        }
-        Spacer(Modifier.width(4.dp))
         Box {
             IconButton(Glyph.activity, "What is using the connection", onLog)
             if (s.traffic.live && s.traffic.downRate + s.traffic.upRate > 512) {
@@ -391,8 +383,7 @@ private fun StatusCard(s: HomeState, onWay: (Way) -> Unit, onPick: () -> Unit, o
     val statusColor by animateColorAsState(when (mode) {
         Mode.ON -> Tone.ok
         Mode.BUSY -> Tone.work
-        Mode.FAIL -> Tone.fail
-        Mode.OFF -> Tone.text
+        Mode.FAIL, Mode.OFF -> Tone.fail
     }, tween(300), label = "status")
 
     Column(
@@ -408,7 +399,7 @@ private fun StatusCard(s: HomeState, onWay: (Way) -> Unit, onPick: () -> Unit, o
                 Text("CONNECTION STATUS", style = Type.eyebrow)
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    StatusDot(mode, if (mode == Mode.OFF) toneOf(mode).accent else statusColor)
+                    StatusDot(mode, statusColor)
                     Spacer(Modifier.width(10.dp))
                     AnimatedContent(status.word, transitionSpec = {
                         fadeIn(tween(Shape.ENTER_MS)) togetherWith fadeOut(tween(Shape.FADE_MS))
@@ -468,7 +459,7 @@ private fun StatusDot(mode: Mode, color: Color) {
                 drawCircle(Brush.radialGradient(listOf(color.copy(alpha = 0.5f), Color.Transparent)),
                     radius = size.minDimension * 1.4f)
             }
-            drawCircle(color.copy(alpha = a * if (mode == Mode.OFF) 0.75f else 1f))
+            drawCircle(color.copy(alpha = a))
         },
     )
 }
