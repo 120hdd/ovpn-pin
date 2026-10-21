@@ -803,6 +803,29 @@ function paintWindowOptions(opts) {
    adding and removing the class is all locking takes. */
 for (const h of document.querySelectorAll('.sheet__heading')) h.classList.add('drag-zone');
 
+/* A sheet covers the whole window, header and all, so each one carries the
+   window's own minimise and close in a strip along its top - the strip is
+   also something to drag the window by. */
+for (const sheet of document.querySelectorAll('dialog.sheet')) {
+  const bar = document.createElement('div');
+  bar.className = 'winbar drag-zone';
+  for (const [label, icon, act, extra] of [
+    ['Minimise', '#i-minus', 'minimizeWindow', ''],
+    ['Close', '#i-x', 'closeWindow', ' icon--shut'],
+  ]) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `icon icon--win${extra}`;
+    // Named for the window, so it is never mistaken for the sheet's own
+    // close button by a screen reader or by anything finding buttons by name.
+    b.setAttribute('aria-label', `${label} window`);
+    b.innerHTML = `<svg class="ico" aria-hidden="true"><use href="${icon}"/></svg>`;
+    b.addEventListener('click', () => window.pywebview.api[act]());
+    bar.appendChild(b);
+  }
+  sheet.prepend(bar);
+}
+
 function paintDrag(locked) {
   for (const el of document.querySelectorAll('.drag-zone')) {
     el.classList.toggle('pywebview-drag-region', !locked);

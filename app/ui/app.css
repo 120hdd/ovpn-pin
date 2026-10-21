@@ -1317,8 +1317,15 @@ canvas.blob__body {
 /* The core lifts as the meter opens under it. One movement, two things
    moving in it, and the room the meter needs is made by the thing that was
    already in the way rather than found somewhere else. */
-.blob-stage { transition: top 460ms var(--ease); }
-.hero[data-state='on'] .blob-stage { top: -12px; }
+.blob-stage {
+  /* In the middle of the room between the label over it and the address
+     cards under it (about 88px), rather than hard under the label: centred
+     in what is left, never closer to the top than 24px. */
+  --stage-top: max(24px, calc((100% - 88px - 210px) / 2 + 12px));
+  top: var(--stage-top);
+  transition: top 460ms var(--ease);
+}
+.hero[data-state='on'] .blob-stage { top: calc(var(--stage-top) - 13px); }
 
 /* The satellites answer the line. Both dots swell and burn a little harder
    the harder the connection is working - which is the only bit of chrome in
@@ -5329,3 +5336,12 @@ canvas.blob__body {
   border-color: var(--surface); background: #c9ccd4;
 }
 :root[data-theme='white'] .side__cap i { background: #a2a6b2; }
+
+/* The window's own buttons along the top of every sheet. */
+.winbar {
+  flex: none;
+  align-self: stretch;
+  display: flex; justify-content: flex-end; align-items: center; gap: 2px;
+  height: 34px; padding: 4px 10px 0;
+}
+.winbar .icon { width: 30px; height: 28px; }

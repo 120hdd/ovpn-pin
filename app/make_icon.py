@@ -20,9 +20,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, 'assets', 'app.ico')
 PNG = os.path.join(HERE, 'assets', 'app.png')
 
-PANEL = (11, 13, 20, 255)
 DISC = (244, 246, 250, 255)
 RING = (97, 239, 191, 255)
+EDGE = (150, 158, 172, 255)
 
 # The grid. The ring runs clockwise from 10 degrees above three o'clock to
 # 10 degrees right of twelve; the bead sits on the opening's bisector, a
@@ -49,6 +49,10 @@ def mark(d, s, inset):
         d.ellipse([x - r, y - r, x + r, y + r], fill=fill)
 
     dot(cx, cy, DISC_R * k, DISC)
+    # A grey edge on the disc: with no panel behind it, a white disc on a
+    # light taskbar is not there at all.
+    r = DISC_R * k
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=EDGE, width=max(1, round(8 * k)))
     r, w = RING_R * k, RING_W * k
     d.arc([cx - r - w / 2, cy - r - w / 2, cx + r + w / 2, cy + r + w / 2],
           RING_FROM, RING_TO, fill=RING, width=max(1, round(w)))
@@ -60,12 +64,12 @@ def mark(d, s, inset):
 
 def draw(size):
     # 4x supersampling, then one clean resize, each size on its own.
+    # The mark on its own, with nothing behind it: Windows shows icons on
+    # the taskbar's own colour, and a dark square there is a tile nobody
+    # asked for. The square is the Android launcher's, which needs a shape.
     s = size * 4
     img = Image.new('RGBA', (s, s), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle([0, 0, s - 1, s - 1], radius=int(s * 0.22), fill=PANEL)
-    # Below 32px the panel's margin is pixels the mark cannot spare.
-    mark(d, s, inset=s * (0.10 if size <= 24 else 0.15))
+    mark(ImageDraw.Draw(img), s, inset=s * 0.03)
     return img.resize((size, size), Image.LANCZOS)
 
 
