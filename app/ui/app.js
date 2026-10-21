@@ -810,8 +810,8 @@ for (const sheet of document.querySelectorAll('dialog.sheet')) {
   const bar = document.createElement('div');
   bar.className = 'winbar drag-zone';
   for (const [label, icon, act, extra] of [
-    ['Minimise', '#i-minus', 'minimizeWindow', ''],
-    ['Close', '#i-x', 'closeWindow', ' icon--shut'],
+    ['Minimise', '#i-minus', () => window.pywebview.api.minimizeWindow(), ''],
+    ['Close', '#i-x', closeRequest, ' icon--shut'],
   ]) {
     const b = document.createElement('button');
     b.type = 'button';
@@ -820,7 +820,7 @@ for (const sheet of document.querySelectorAll('dialog.sheet')) {
     // close button by a screen reader or by anything finding buttons by name.
     b.setAttribute('aria-label', `${label} window`);
     b.innerHTML = `<svg class="ico" aria-hidden="true"><use href="${icon}"/></svg>`;
-    b.addEventListener('click', () => window.pywebview.api[act]());
+    b.addEventListener('click', act);
     bar.appendChild(b);
   }
   sheet.prepend(bar);
@@ -834,7 +834,7 @@ function paintDrag(locked) {
 paintDrag(false);
 
 $('winMin').addEventListener('click', () => window.pywebview.api.minimizeWindow());
-$('winClose').addEventListener('click', () => window.pywebview.api.closeWindow());
+$('winClose').addEventListener('click', () => closeRequest());
 
 window.onWindowOptions = (opts) => paintWindowOptions(opts || {});
 
@@ -1742,6 +1742,8 @@ function paintPrefs(info) {
   if (info.orbColors) state.orbColors = info.orbColors;
   paintOrbColors();
   if (info.theme) applyTheme(info.theme);
+  state.onClose = info.onClose || '';
+  paintOnClose();
   if (info.window) paintWindowOptions(info.window);
   $('keepOnClose').setAttribute('aria-checked', String(!!info.keepOnClose));
   if (info.port) state.port = info.port;
@@ -5530,3 +5532,57 @@ function applyTheme(key) {
     box.appendChild(b);
   }
 })();
+
+
+/* ------------------------------------------------------- closing the window */
+
+/* The X asks Python what it means now - put away, quit, or ask - so that it
+   and Alt+F4 answer the same way. Nothing closes until that is settled. */
+async function closeRequest() {
+  const r = await window.pywebview.api.closeRequest();
+  if (r && r.do === 'exit') return window.pywebview.api.quitApp();
+  if (r && r.do === 'tray') return window.pywebview.api.hideWindow();
+  return askClose();
+}
+
+function askClose() {
+  const d = $('askClose');
+  $('askRemember').checked = true;
+  if (!d.open) d.showModal();
+}
+
+/* Alt+F4, or anything else that closed the window from underneath us. */
+window.onAskClose = askClose;
+
+async function answerClose(kind) {
+  $('askClose').close();
+  if ($('askRemember').checked) {
+    state.onClose = kind;
+    paintOnClose();
+    await window.pywebview.api.setOnClose(kind);
+  }
+  if (kind === 'tray') window.pywebview.api.hideWindow();
+  else window.pywebview.api.quitApp();
+}
+
+$('askTray').addEventListener('click', () => answerClose('tray'));
+$('askQuit').addEventListener('click', () => answerClose('exit'));
+// Escape leaves the window as it was, which is the one answer that is not a
+// decision - so it is neither remembered nor acted on.
+$('askClose').addEventListener('cancel', () => $('askClose').close());
+
+function paintOnClose() {
+  const seg = $('onClose');
+  seg.dataset.close = state.onClose || '';
+  for (const b of seg.querySelectorAll('.seg__opt')) {
+    b.setAttribute('aria-pressed', String((b.dataset.close || '') === seg.dataset.close));
+  }
+}
+
+for (const b of $('onClose').querySelectorAll('.seg__opt')) {
+  b.addEventListener('click', async () => {
+    state.onClose = b.dataset.close || '';
+    paintOnClose();
+    await window.pywebview.api.setOnClose(state.onClose);
+  });
+}

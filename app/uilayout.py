@@ -359,6 +359,8 @@ SCENES = [
     ('prefs', _prefs, _shut_prefs),
     ('prefs-working', _prefs_working, _shut_prefs_working),
     ('log', _log, _shut_log),
+    ('ask-close', lambda p: p.do("askClose()", 0.6),
+     lambda p: p.do("document.getElementById('askClose').close()")),
     # The light theme is the one that turns colours over rather than
     # tinting them, so it is the one that can lose a word against its page.
     ('main-white', lambda p: p.do("applyTheme('white'); window.pywebview.api.setTheme('white')", 0.6),

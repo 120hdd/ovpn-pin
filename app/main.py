@@ -463,6 +463,13 @@ class Api:
         self._testing = False
         self._tunnel = None
         self._tunnel_key = None
+        # Set once the tray exists: leaving for good is one action, wherever
+        # it is asked for.
+        self._quit = None
+        # Set while that action is under way. Quitting closes the window,
+        # and without this the close would be answered with "put it in the
+        # tray" and refused - an app that could not be quit at all.
+        self._leaving = False
 
     # -- talking to the page ----------------------------------------------
 
@@ -663,6 +670,7 @@ class Api:
                 'keepOnClose': bool(self._settings.get('keepOnClose')),
                 'window': self._window_options(),
                 'orbColors': self._settings.get('orbColors', 'signal'),
+                'onClose': self._settings.get('onClose', ''),
                 'theme': self._settings.get('theme', 'midnight'),
                 'introSeen': bool(self._settings.get('introSeen')),
                 'tunnelReady': bool(self._settings.get('tunnelDomain')
@@ -2390,13 +2398,45 @@ class Api:
             self._window.minimize()
         return {'ok': True}
 
-    def closeWindow(self):
-        """The header's own close button. The same close as the frame's
-        was: the window goes and the closing handler does its work; quitting
-        the app and its connection is still the tray's."""
+    def hideWindow(self):
+        """Out of the way, into the tray. The connection is untouched: this
+        is the window going, not the app."""
+        try:
+            self._remember_place()
+        except Exception:
+            pass
         if self._window:
-            threading.Thread(target=self._window.destroy, daemon=True).start()
+            self._window.hide()
         return {'ok': True}
+
+    def quitApp(self):
+        """Really leave - the tray's Quit, reachable from the window too."""
+        if self._quit:
+            threading.Thread(target=self._quit, daemon=True).start()
+        return {'ok': True}
+
+    def setOnClose(self, kind=''):
+        """What the close button does from now on, or '' to be asked again."""
+        kind = kind if kind in ('tray', 'exit') else ''
+        self._settings['onClose'] = kind
+        save_settings(self._settings)
+        return {'ok': True, 'onClose': kind}
+
+    def closeRequest(self):
+        """The close button, pressed. Answers what is to happen rather than
+        doing it, so that the window's own X and Alt+F4 give the same three
+        answers: 'tray', 'exit', or 'ask' - and the page asks.
+
+        Nothing closes while the answer is 'ask'. An app that lives in the
+        tray and a window that is merely out of the way are different
+        things, and which one the X means is the person's to decide once.
+        """
+        if not (self._tray and self._tray.icon):
+            # Nothing to be hidden in: the X has to be a real close, or the
+            # window could not be got rid of at all.
+            return {'do': 'exit'}
+        kind = self._settings.get('onClose')
+        return {'do': kind if kind in ('tray', 'exit') else 'ask'}
 
     def setWindowOption(self, key, on=False):
         """One of the tray's window switches, from Settings."""
@@ -2480,6 +2520,19 @@ def install_safety(api):
         except (ValueError, OSError):
             pass
     return undo
+
+
+def short(text, limit=40):
+    """A label the tray menu can be as wide as.
+
+    Windows sizes the menu to its longest item, and the items here carry
+    whatever a server or a country is called - "United Kingdom of Great
+    Britain and Northern Ireland" through a hostname is a menu half the
+    screen wide, for a line nobody reads to the end. Forty characters
+    holds a country and an address and cuts only what is absurd.
+    """
+    text = ' '.join((text or '').split())
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + '…'
 
 
 def elapsed(seconds):
@@ -2655,14 +2708,14 @@ class Tray:
             parts = ['Connection broken - open Relay']
         else:
             parts = ['Not connected', api._real_ip]
-        return ' · '.join(p for p in parts if p)
+        return short(' · '.join(p for p in parts if p))
 
     def _act_label(self):
         if self.api._busy:
             return 'Cancel connecting'
         if self._running():
             return 'Disconnect'
-        return f"Connect — {self._name(self.api._settings.get('picked'))}"
+        return short(f"Connect — {self._name(self.api._settings.get('picked'))}")
 
     def _favourite_items(self):
         import pystray
@@ -2674,7 +2727,7 @@ class Tray:
         for code in codes:
             def pick(*_, code=code):
                 self.api._emit('Tray', {'do': 'pick', 'code': code})
-            yield pystray.MenuItem(self._name(code), pick,
+            yield pystray.MenuItem(short(self._name(code)), pick,
                                    enabled=lambda _: not self.api._busy)
 
     # -- what the menu does ----------------------------------------------
@@ -2695,6 +2748,7 @@ class Tray:
         self.api._emit('Tray', {'do': 'act'})
 
     def _quit(self, *_):
+        self.api._leaving = True
         try:
             self.icon.stop()
         except Exception:
@@ -3909,6 +3963,7 @@ def main():
 
     tray = Tray(api, on_quit=lambda: window.destroy())
     api._tray = tray
+    api._quit = tray._quit
 
     def come_forward():
         # Launched again while already running: the same as Show in the tray
@@ -4026,6 +4081,25 @@ def main():
                 save_settings(settings)
         except Exception:
             pass
+
+        # Alt+F4, or anything else that closes the window without going
+        # through the header's X, gets the same three answers the X does.
+        # Returning False cancels the close.
+        asked = 'exit' if api._leaving else api.closeRequest().get('do')
+        if asked == 'tray':
+            try:
+                window.hide()
+            except Exception:
+                traceback.print_exc()
+            return False
+        if asked == 'ask':
+            # Off this thread: the closing handler runs on the window's own
+            # thread, and asking the page anything from there would wait on
+            # the thread that has to answer.
+            threading.Thread(target=lambda: api._emit('AskClose', {}),
+                             daemon=True).start()
+            return False
+
         undo()
         return True
 

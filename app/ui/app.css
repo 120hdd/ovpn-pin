@@ -5353,3 +5353,30 @@ canvas.blob__body {
   height: 34px; padding: 4px 10px 0;
 }
 .winbar .icon { width: 30px; height: 28px; }
+
+/* The close question: a card, not a page - it is one decision with two
+   answers and it should not look like somewhere you have arrived. */
+.ask {
+  width: min(330px, calc(100vw - 40px));
+  margin: auto;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+}
+.ask::backdrop { background: rgb(0 0 0 / calc(0.55 * var(--shade))); }
+.ask__title { margin: 0 0 8px; font-size: 15px; font-weight: 700; }
+.ask__say { margin: 0 0 14px; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.ask__keep {
+  display: flex; align-items: flex-start; gap: 8px; margin-bottom: 16px;
+  color: var(--text-muted); font-size: 11.5px; line-height: 1.4; cursor: pointer;
+}
+.ask__keep input { margin: 1px 0 0; accent-color: var(--ok); }
+.ask__row { display: flex; justify-content: flex-end; gap: 8px; }
+.ask__row .btn { padding: 0 14px; }
+
+/* Three answers, sharing the strip the ways out use. */
+.seg--close { margin-top: 10px; }
+.seg--close[data-close='tray'] .seg__slide { transform: translateX(calc(100% + 2.7px)); }
+.seg--close[data-close='exit'] .seg__slide { transform: translateX(calc(200% + 5.4px)); }

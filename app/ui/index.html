@@ -128,10 +128,10 @@
         <svg class="ico" aria-hidden="true"><use href="#i-settings"/></svg>
       </button>
       <span class="bar__win">
-        <button class="icon icon--win" id="winMin" type="button" aria-label="Minimise">
+        <button class="icon icon--win" id="winMin" type="button" aria-label="Minimise window">
           <svg class="ico" aria-hidden="true"><use href="#i-minus"/></svg>
         </button>
-        <button class="icon icon--win icon--shut" id="winClose" type="button" aria-label="Close">
+        <button class="icon icon--win icon--shut" id="winClose" type="button" aria-label="Close window">
           <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
         </button>
       </span>
@@ -1194,7 +1194,26 @@
               role="switch" aria-checked="false"><span></span></button>
     </section>
 
-    <section class="pane pane--line" style="--i:4">
+    <section class="pane" style="--i:4">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-x"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title">The close button</h3>
+        <p class="pane__why">What the X does. In the tray Relay keeps running
+          and the connection stays up; quitting ends it. Either way the tray's
+          own Quit is always there.</p>
+        <div class="seg seg--three seg--close" id="onClose" data-close="">
+          <i class="seg__slide" aria-hidden="true"></i>
+          <button class="seg__opt" type="button" data-close=""
+                  aria-pressed="true">Ask</button>
+          <button class="seg__opt" type="button" data-close="tray"
+                  aria-pressed="false">Tray</button>
+          <button class="seg__opt" type="button" data-close="exit"
+                  aria-pressed="false">Quit</button>
+        </div>
+      </span>
+    </section>
+
+    <section class="pane pane--line" style="--i:5">
       <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-socket"/></svg></span>
       <span class="pane__copy">
         <h3 class="pane__title">Stay connected after closing</h3>
@@ -1362,6 +1381,25 @@
       <button class="btn first__go" id="setupRetry" type="button">Try again</button>
       <button class="btn btn--quiet" id="setupClose" type="button">Close</button>
     </div>
+  </div>
+</dialog>
+
+<!-- The X, the first time it is pressed. Closing the window and leaving
+     the app are different things and the button cannot be both, so it asks
+     once and then remembers - and after that the way out is the tray's own
+     Quit, which is where an app that lives in the tray keeps it. -->
+<dialog class="ask" id="askClose">
+  <h2 class="ask__title">Close the window, or quit Relay?</h2>
+  <p class="ask__say">In the tray Relay keeps running and the connection
+    stays up; its icon by the clock brings the window back. Quitting ends
+    the connection and closes the app.</p>
+  <label class="ask__keep">
+    <input type="checkbox" id="askRemember" checked>
+    <span>Do this every time. Changed under Settings → Window.</span>
+  </label>
+  <div class="ask__row">
+    <button class="btn btn--quiet btn--auto" id="askQuit" type="button">Quit Relay</button>
+    <button class="btn first__go btn--auto" id="askTray" type="button">Put in the tray</button>
   </div>
 </dialog>
 
