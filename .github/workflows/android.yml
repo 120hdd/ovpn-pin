@@ -28,6 +28,15 @@ on:
       - 'mobile/**'
       - 'tunnel/install-server.sh'
       - '.github/workflows/android.yml'
+  # And on every pull request into main that touches the phone, so a merge
+  # is never the first time the merged result is built.
+  pull_request:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - 'mobile/**'
+      - 'tunnel/install-server.sh'
+      - '.github/workflows/android.yml'
   workflow_dispatch:
     inputs:
       release:

@@ -9,10 +9,27 @@ name: release
 
 on:
   push:
-    tags: ['v*']
+    # Android's own tags. The Windows app is released from desktop-v* tags
+    # by desktop-release.yml; one shared v* would release both at once, and
+    # the second to finish would find its release already taken.
+    tags: ['android-v*']
 
 jobs:
+  # The tag names the version the phone will show, so it has to be the one
+  # the build carries: android-v0.2.0 releases versionName 0.2.0 or nothing.
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: tag matches versionName
+        run: |
+          want="${GITHUB_REF_NAME#android-v}"
+          have=$(sed -n 's/^ *versionName = "\(.*\)".*/\1/p' android/app/build.gradle.kts)
+          echo "tag $want, build.gradle.kts $have"
+          test "$want" = "$have"
+
   build:
+    needs: version
     uses: ./.github/workflows/android.yml
     with:
       release: true
