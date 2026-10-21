@@ -371,6 +371,9 @@ def _safe_public_server(path):
 def version_string():
     """Product version used both in the PE metadata and by SignPath policy."""
     value = os.environ.get('RELAY_VERSION', '0.0.0-dev').strip()
+    # Release tags are desktop-v1.2.3; the app's own version is the 1.2.3.
+    if value.lower().startswith('desktop-'):
+        value = value[len('desktop-'):]
     return value[1:] if value.lower().startswith('v') else value
 
 
