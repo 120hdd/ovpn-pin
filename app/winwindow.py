@@ -53,6 +53,9 @@ SWP_FRAMECHANGED = 0x0020
 
 SW_SHOWNORMAL = 1
 
+HWND_TOPMOST = -1
+HWND_NOTOPMOST = -2
+
 MONITOR_DEFAULTTONULL = 0
 MONITOR_DEFAULTTONEAREST = 2
 
@@ -347,6 +350,24 @@ def place(hwnd, saved):
 # quietly - square corners there, as every window has.
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWCP_ROUND = 2
+
+
+def on_top(hwnd, want):
+    """Hold the window over the others, or let it back among them.
+
+    Ours rather than pywebview's, which is the one call in its WinForms
+    backend that does not marshal to the window's own thread: it sets
+    Form.TopMost from whatever thread asks, and WinForms answers a
+    cross-thread property set by waiting on the thread that owns the
+    window - which deadlocks the whole app if the asking thread is one the
+    window's thread is itself waiting on. Setting it through the platform
+    is what the rest of this file does anyway.
+    """
+    if not alive(hwnd):
+        return False
+    _SetWindowPos(hwnd, wintypes.HWND(HWND_TOPMOST if want else HWND_NOTOPMOST),
+                  0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+    return True
 
 
 def borderless(hwnd):

@@ -2418,8 +2418,11 @@ class Api:
         except Exception:
             traceback.print_exc()
         try:
-            if self._window:
-                self._window.on_top = self._window_option('onTop')
+            # winwindow's, not pywebview's. This runs on whichever thread
+            # asked - the tray's, the page's, the one listening for a second
+            # copy - and pywebview's on_top setter hangs the app when that is
+            # not the window's own thread. See winwindow.on_top.
+            winwindow.on_top(self._hwnd(), self._window_option('onTop'))
         except Exception:
             traceback.print_exc()
 
