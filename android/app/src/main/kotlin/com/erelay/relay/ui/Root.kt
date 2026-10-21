@@ -179,7 +179,8 @@ fun Root(core: RelayCore) {
     }
 
     val names = remember(countries) { countries.associate { it.code to it.name } }
-    val hasCredentials = accounts.any { it.signedIn } || core.hasCredentials
+    val credentialOnFile by core.hasCredentials.collectAsStateWithLifecycle()
+    val hasCredentials = accounts.any { it.signedIn } || credentialOnFile
     // Nothing to connect with or through: no account, no servers, no server of
     // its own. That is a first run, and it gets a question rather than a
     // Connect button that cannot work.

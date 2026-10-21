@@ -14,9 +14,6 @@ import android.view.TextureView
 import com.erelay.relay.data.Mode
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.locks.ReentrantLock
-import kotlin.concurrent.withLock
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -92,18 +89,39 @@ class OrbView(context: Context) : TextureView(context), TextureView.SurfaceTextu
 
     // -- the render thread -------------------------------------------------------
 
+    /**
+     * Draws once per display frame, on the display's own clock.
+     *
+     * A TextureView does not pace whoever draws into it: eglSwapBuffers on
+     * one returns at once, so a plain loop renders as fast as the GPU allows
+     * and times each frame by the wall clock. Frames then land unevenly
+     * against the screen's refresh and the motion judders - smooth by every
+     * frame counter and visibly not. Choreographer hands this thread one
+     * callback per vsync with that vsync's timestamp, so each frame is one
+     * refresh apart and moves by exactly one refresh's worth.
+     */
     private inner class RenderThread(
         private val texture: SurfaceTexture,
         @Volatile private var width: Int,
         @Volatile private var height: Int,
-    ) : Thread("orb") {
+    ) : Thread("orb"), android.view.Choreographer.FrameCallback {
 
-        private val lock = ReentrantLock()
-        private val nudge = lock.newCondition()
         @Volatile private var running = true
         @Volatile private var sized = true
+        private var handler: android.os.Handler? = null
+        private var choreographer: android.view.Choreographer? = null
+        private var scheduled = false
+        private var last = 0L
+        private var settled = false
+        private var reduced = false
 
-        fun wake() = lock.withLock { nudge.signalAll() }
+        /** Start drawing again after a pause, or after the look changed while still. */
+        fun wake() {
+            handler?.post {
+                settled = false
+                schedule()
+            }
+        }
 
         fun resize(w: Int, h: Int) {
             width = w
@@ -114,8 +132,14 @@ class OrbView(context: Context) : TextureView(context), TextureView.SurfaceTextu
 
         fun quit() {
             running = false
-            wake()
+            handler?.post { android.os.Looper.myLooper()?.quit() }
             try { join(500) } catch (e: InterruptedException) { }
+        }
+
+        private fun schedule() {
+            if (scheduled || !running || paused) return
+            scheduled = true
+            choreographer?.postFrameCallback(this)
         }
 
         private var display: EGLDisplay = EGL14.EGL_NO_DISPLAY
@@ -123,9 +147,16 @@ class OrbView(context: Context) : TextureView(context), TextureView.SurfaceTextu
         private var surface: EGLSurface = EGL14.EGL_NO_SURFACE
 
         override fun run() {
+            android.os.Looper.prepare()
             try {
                 if (!setUp()) return
-                loop()
+                handler = android.os.Handler(android.os.Looper.myLooper()!!)
+                choreographer = android.view.Choreographer.getInstance()
+                // Read once: it is a cross-process lookup, and it was being
+                // made on every frame.
+                reduced = reducedMotion()
+                schedule()
+                android.os.Looper.loop()
             } catch (e: Throwable) {
                 Log.w("Relay", "orb: ${e.message}")
             } finally {
@@ -181,46 +212,41 @@ class OrbView(context: Context) : TextureView(context), TextureView.SurfaceTextu
 
         private val sphere = Sphere()
 
-        private fun loop() {
-            var last = 0L
-            var settled = false
-            while (running) {
-                if (paused) {
-                    last = 0L
-                    lock.withLock { if (paused && running) nudge.await(1000, TimeUnit.MILLISECONDS) }
-                    continue
-                }
-                if (sized) {
-                    sized = false
-                    sphere.viewport(width, height)
-                    settled = false
-                }
-                val now = System.nanoTime()
-                val dt = if (last == 0L) 0f else min((now - last) / 1e9f, 0.1f)
-                last = now
-
-                val moving = sphere.ease(dt, mode, colors)
-                if (still || reducedMotion()) {
-                    // One still frame, picked for its profile, redrawn only
-                    // while the colours are still easing.
-                    if (settled && !moving) {
-                        lock.withLock { nudge.await(250, TimeUnit.MILLISECONDS) }
-                        continue
-                    }
-                    settled = !moving
-                    sphere.draw(3.1f, 0.45f)
-                } else {
-                    sphere.advance(dt)
-                    sphere.draw()
-                }
-                // Blocks until the display takes the frame: this is the pace.
-                if (!EGL14.eglSwapBuffers(display, surface)) {
-                    lock.withLock { nudge.await(16, TimeUnit.MILLISECONDS) }
-                }
+        override fun doFrame(frameTimeNanos: Long) {
+            scheduled = false
+            if (!running) return
+            if (paused) {
+                // Nothing is posted until wake(); the first frame back starts
+                // its clock afresh rather than leaping by the time away.
+                last = 0L
+                return
             }
+            if (sized) {
+                sized = false
+                sphere.viewport(width, height)
+                settled = false
+            }
+            val dt = if (last == 0L) 0f else min((frameTimeNanos - last) / 1e9f, 0.1f)
+            last = frameTimeNanos
+
+            val moving = sphere.ease(dt, mode, colors)
+            if (still || reduced) {
+                // One still frame, picked for its profile, redrawn only
+                // while the colours are still easing. Then nothing is
+                // scheduled until wake() says the look changed.
+                if (settled && !moving) return
+                settled = !moving
+                sphere.draw(3.1f, 0.45f)
+            } else {
+                sphere.advance(dt)
+                sphere.draw()
+            }
+            EGL14.eglSwapBuffers(display, surface)
+            schedule()
         }
     }
 }
+
 
 /** sphere.js's STATES: how fast, how wrung, how lumpy, per look. */
 private class Pace(val spin: Float, val wave: Float, val twist: Float, val noise: Float, val density: Float)

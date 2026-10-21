@@ -51,7 +51,7 @@ private enum class Screen(val title: String, val note: String) {
     CONNECTION("Connection", "your own tunnel, and what it leaves alone"),
     SERVERS("Servers", "finding them, pinning them, timing them"),
     LOOK("Look and feel", "theme, haptics, the orb"),
-    ABOUT("About this copy", "paths, versions"),
+    ABOUT("About", "version, where things are kept"),
 }
 
 /**
@@ -99,7 +99,7 @@ fun Prefs(
     }
 
     Sheet(
-        open, "This copy", screen.title, onClose,
+        open, "Relay", screen.title, onClose,
         onBack = if (screen == Screen.MENU) null else ({ screen = Screen.MENU }),
     ) {
         when (screen) {
@@ -576,10 +576,10 @@ private fun Swatch(
 
 @Composable
 private fun About(core: RelayCore) {
-    Pane(icon = Glyph.info, title = "This copy",
+    Pane(icon = Glyph.info, title = "Relay for Android",
         help = "Accounts are kept with a key the Android keystore holds; configs, pins and " +
             "test results are plain files in the data folder.") {
-        Line("App", "Relay for Android ${core.appVersion}")
+        Line("Version", core.appVersion)
         Line("Core", core.version)
         Line("Data", core.dataFolder)
     }

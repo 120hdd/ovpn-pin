@@ -151,10 +151,18 @@ class RelayCore(private val app: Application) {
         _feel.value = next
     }
 
-    /** Whether there is an account to connect with: Connect is off without one. */
-    val hasCredentials: Boolean
-        get() = credentials(Accounts.SURFSHARK) != null ||
+    /**
+     * Whether there is an account to connect with: Connect is off without one.
+     * Kept, not read on demand - the window asked on every recomposition, which
+     * was two files off the disk on the main thread for every redraw.
+     */
+    private val _hasCredentials = MutableStateFlow(false)
+    val hasCredentials: StateFlow<Boolean> = _hasCredentials.asStateFlow()
+
+    private fun readHasCredentials() {
+        _hasCredentials.value = credentials(Accounts.SURFSHARK) != null ||
             credentials(Accounts.WINDSCRIBE) != null
+    }
 
     // -- the service ------------------------------------------------------------
 
@@ -669,6 +677,7 @@ class RelayCore(private val app: Application) {
 
     suspend fun refreshAccounts() = withContext(io) {
         _accounts.value = parseAccounts(Accounts.listing(app))
+        readHasCredentials()
         _cards.value = readCards()
     }
 

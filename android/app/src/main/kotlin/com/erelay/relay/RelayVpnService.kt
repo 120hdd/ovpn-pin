@@ -177,8 +177,13 @@ class RelayVpnService : VpnService() {
             return START_STICKY
         }
         if (intent?.action == ACTION_STOP) {
-            stopTunnel()
-            stopSelf()
+            // Off the main thread: closing the stack closes every connection
+            // it carries, and that froze the window for as long as it took -
+            // which was the stutter on every Disconnect.
+            scope.launch {
+                stopTunnel()
+                stopSelf()
+            }
             return START_NOT_STICKY
         }
 
@@ -196,7 +201,9 @@ class RelayVpnService : VpnService() {
         // Android hands the newest one the routes, so it looked like it
         // worked. The first was still open, still holding a websocket, still
         // keeping the radio awake with a keepalive nobody was reading.
-        stopTunnel()
+        //
+        // In the coroutine below rather than here, for the same reason as Stop:
+        // this runs on the main thread and the window is drawing on it.
 
         val user = intent?.getStringExtra(EXTRA_USER).orEmpty()
         val password = intent?.getStringExtra(EXTRA_PASSWORD).orEmpty()
@@ -211,6 +218,7 @@ class RelayVpnService : VpnService() {
         val edges = intent?.getStringExtra(EXTRA_EDGES).orEmpty()
 
         scope.launch {
+            stopTunnel()
             if (provider == "surfshark") {
                 connect(user, password, wsUser, wsPassword, configDir, country, only)
             } else {
@@ -538,8 +546,19 @@ class RelayVpnService : VpnService() {
 
     // -- saying what is happening --------------------------------------------
 
+    @Volatile private var lastProgressAt = 0L
+
     private fun say(text: String) {
         status = text
+        // A race reports once per exit it asks - hundreds, in a second or two.
+        // Each was a notification and a broadcast, and each broadcast redrew
+        // the window: the stutter while connecting. The count is still kept
+        // exact in `asked`; it is only told about a few times a second.
+        if (text.startsWith("asked")) {
+            val now = android.os.SystemClock.uptimeMillis()
+            if (now - lastProgressAt < 200) return
+            lastProgressAt = now
+        }
         Log.i(TAG, text)
         notificationManager().notify(NOTIFICATION, notification(text))
         sendBroadcast(Intent(ACTION_STATUS).setPackage(packageName))
