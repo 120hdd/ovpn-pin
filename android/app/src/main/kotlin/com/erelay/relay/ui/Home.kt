@@ -145,7 +145,7 @@ private fun Header(s: HomeState, onLog: () -> Unit, onDrop: () -> Unit, onSettin
         // The wordmark, in dark letters on the light themes: its own silver
         // would vanish on white.
         Image(painterResource(if (Tone.light) R.drawable.wordmark_dark else R.drawable.wordmark),
-            "Relay", Modifier.height(22.dp))
+            "Relay", Modifier.height(15.dp))
         Grow()
         Box {
             IconButton(Glyph.activity, "What is using the connection", onLog)
