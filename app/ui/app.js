@@ -741,6 +741,34 @@ window.onDisconnected = (info) => {
   render();
 };
 
+/* The Window screen: the tray menu's switches, plus keeping the connection
+   when the window closes. Each flip is saved at once; the answer repaints
+   the switches, so a refusal cannot leave one showing a lie. */
+function paintWindowOptions(opts) {
+  for (const sw of document.querySelectorAll('.toggle[data-option]')) {
+    sw.setAttribute('aria-checked', String(!!opts[sw.dataset.option]));
+  }
+}
+
+window.onWindowOptions = (opts) => paintWindowOptions(opts || {});
+
+for (const sw of document.querySelectorAll('.toggle[data-option]')) {
+  sw.addEventListener('click', async () => {
+    const on = sw.getAttribute('aria-checked') !== 'true';
+    sw.setAttribute('aria-checked', String(on));
+    const r = await window.pywebview.api.setWindowOption(sw.dataset.option, on);
+    if (r && r.window) paintWindowOptions(r.window);
+  });
+}
+
+$('keepOnClose').addEventListener('click', async () => {
+  const sw = $('keepOnClose');
+  const on = sw.getAttribute('aria-checked') !== 'true';
+  sw.setAttribute('aria-checked', String(on));
+  const r = await window.pywebview.api.setKeepOnClose(on);
+  if (r) sw.setAttribute('aria-checked', String(!!r.keepOnClose));
+});
+
 /* The tray menu asks through here instead of calling the API itself, so that
    connecting from it walks the same steps as the button - the busy state,
    the stages, switching away from a connection already up - and the window
@@ -1624,6 +1652,8 @@ function peek(fieldId, buttonId) {
 
 function paintPrefs(info) {
   $('sysProxy').setAttribute('aria-checked', String(state.systemProxy));
+  if (info.window) paintWindowOptions(info.window);
+  $('keepOnClose').setAttribute('aria-checked', String(!!info.keepOnClose));
   if (info.port) state.port = info.port;
   paintPort();
   $('folderPath').textContent = info.folder || '—';

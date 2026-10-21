@@ -201,6 +201,15 @@ def _shut_prefs(p):
     p.do("document.getElementById('prefs').close()")
 
 
+def _prefs_window(p):
+    p.click('#settings', 1.0)
+    p.click('.menu__row[data-goto="window"]', 0.6)
+
+
+def _shut_prefs_window(p):
+    p.do("showScreen(null); document.getElementById('prefs').close()")
+
+
 def _prefs_working(p):
     """The settings sheet with something in flight.
 
@@ -345,6 +354,7 @@ SCENES = [
     ('picker-sorted', lambda p: (_picker(p), _sorted(p)),
      lambda p: (_unsorted(p), _shut_picker(p))),
     ('prefs', _prefs, _shut_prefs),
+    ('prefs-window', _prefs_window, _shut_prefs_window),
     ('prefs-working', _prefs_working, _shut_prefs_working),
     ('log', _log, _shut_log),
     ('source', _source, _shut_source),

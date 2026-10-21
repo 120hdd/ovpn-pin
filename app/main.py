@@ -652,6 +652,7 @@ class Api:
                 'favourites': self._settings.get('favourites') or [],
                 'sortBy': self._settings.get('sortBy', 'ping'),
                 'keepOnClose': bool(self._settings.get('keepOnClose')),
+                'window': self._window_options(),
                 'mode': self._settings.get('mode', 'surfshark'),
                 'hasCredentials': self._has_credentials(),
                 'username': self._engine.username(),
@@ -2328,11 +2329,24 @@ class Api:
     def _window_option(self, key):
         return bool(self._settings.get(key, WINDOW_DEFAULTS[key]))
 
+    def _window_options(self):
+        return {key: self._window_option(key) for key in WINDOW_DEFAULTS}
+
     def _set_window_option(self, key, on):
         self._settings[key] = bool(on)
         save_settings(self._settings)
         self._apply_window()
         self._retray()
+        # The same switches are in Settings - tell the page, so a flip from
+        # the tray is not contradicted by an open Window screen.
+        self._emit('WindowOptions', self._window_options())
+
+    def setWindowOption(self, key, on=False):
+        """One of the tray's window switches, from Settings."""
+        if key not in WINDOW_DEFAULTS:
+            return {'ok': False, 'error': f'no window option called {key}'}
+        self._set_window_option(key, bool(on))
+        return {'ok': True, 'window': self._window_options()}
 
     def _apply_window(self):
         """Lock and always-on-top, as the settings have them.
@@ -3755,6 +3769,14 @@ def main():
     # file: a second copy that got that far would already be fighting the
     # first. It has asked the first to come forward, and that is all it does.
     if not oneinstance.claim():
+        # The UI checks drive a copy of their own, so with Relay already open
+        # they never ran - and exiting 0 here read as a pass. Say so instead.
+        testing = [a for a in ('--ui-check', '--ui-layout', '--ui-drive', '--ui-perf')
+                   if a in sys.argv]
+        if testing:
+            print(f'{testing[0]}: {APP_NAME} is already open. Close it (tray icon, '
+                  f'Quit) and run this again - the check needs its own copy.')
+            sys.exit(2)
         print(f'{APP_NAME} is already running; brought it to the front.')
         return
 

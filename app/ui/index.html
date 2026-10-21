@@ -497,6 +497,13 @@
         </span>
         <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
       </button>
+      <button class="menu__row" type="button" data-goto="window">
+        <span class="menu__copy">
+          <span class="menu__name">Window</span>
+          <span class="menu__note">where it sits, the tray, closing it</span>
+        </span>
+        <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
+      </button>
       <button class="menu__row" type="button" data-goto="about-this-copy">
         <span class="menu__copy">
           <span class="menu__name">About this copy</span>
@@ -1073,6 +1080,55 @@
       <ol class="tally" id="sweepTally" hidden></ol>
     </section>
 
+    </section>
+
+    <!-- The tray menu's switches, here as well: a setting only reachable by
+         right-clicking an icon in the corner of the taskbar is one most
+         people never find. Both places change the same setting. -->
+    <section class="screen" data-screen="window" hidden>
+
+    <section class="pane pane--line" style="--i:1">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-pin"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title">Lock position and size</h3>
+        <p class="pane__why">The window stays where it is and the size it is;
+          dragging the edges or the title bar does nothing.</p>
+      </span>
+      <button class="toggle" id="winLock" type="button" data-option="lockWindow"
+              role="switch" aria-checked="false"><span></span></button>
+    </section>
+
+    <section class="pane pane--line" style="--i:2">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-archive"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title">Minimise to tray</h3>
+        <p class="pane__why">Minimising puts Relay in the tray by the clock
+          instead of on the taskbar. Click the icon there to bring it back.</p>
+      </span>
+      <button class="toggle" id="winTray" type="button" data-option="minToTray"
+              role="switch" aria-checked="true"><span></span></button>
+    </section>
+
+    <section class="pane pane--line" style="--i:3">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title">Always on top</h3>
+        <p class="pane__why">Relay stays in front of other windows.</p>
+      </span>
+      <button class="toggle" id="winTop" type="button" data-option="onTop"
+              role="switch" aria-checked="false"><span></span></button>
+    </section>
+
+    <section class="pane pane--line" style="--i:4">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-socket"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title">Stay connected after closing</h3>
+        <p class="pane__why">Closing the window leaves the connection up, for
+          programs pointed at the proxy by hand. Off, closing disconnects.</p>
+      </span>
+      <button class="toggle" id="keepOnClose" type="button"
+              role="switch" aria-checked="false"><span></span></button>
+    </section>
     </section>
 
     <section class="screen" data-screen="about-this-copy" hidden>
