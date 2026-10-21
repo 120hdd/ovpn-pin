@@ -24,6 +24,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -62,15 +64,23 @@ fun Welcome(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Spacer(Modifier.height(16.dp))
-            OrbStage(Mode.OFF, 0f, paused = paused, size = 200.dp, toneOverride = restTone())
-            Text("Welcome to Relay", style = Type.title.copy(fontSize = 26.sp))
-            Spacer(Modifier.height(8.dp))
-            Text("How will you connect? Relay needs one of these before it can carry " +
-                "anything - more can be added later under Settings.",
-                style = Type.body, textAlign = TextAlign.Center)
+            // Arrives in order - the orb, the question, then each answer -
+            // so the eye is led down the page rather than handed all of it.
+            Rise(0, distance = 12f) {
+                OrbStage(Mode.OFF, 0f, paused = paused, size = 200.dp, toneOverride = restTone())
+            }
+            Rise(140) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Welcome to Relay", style = Type.title.copy(fontSize = 26.sp))
+                    Spacer(Modifier.height(8.dp))
+                    Text("How will you connect? Relay needs one of these before it can carry " +
+                        "anything - more can be added later under Settings.",
+                        style = Type.body, textAlign = TextAlign.Center)
+                }
+            }
             Spacer(Modifier.height(24.dp))
 
-            Choice(Glyph.key, "A VPN account",
+            Rise(280) { Choice(Glyph.key, "A VPN account",
                 "Sign in, and Relay gets the provider's servers and pins them to real " +
                     "addresses for you.") {
                 Row(Modifier.fillMaxWidth().padding(top = 12.dp),
@@ -80,11 +90,13 @@ fun Welcome(
                     Btn("Windscribe", { onProvider(Accounts.WINDSCRIBE) }, Modifier.weight(1f),
                         strong = true)
                 }
-            }
+            } }
             Spacer(Modifier.height(12.dp))
-            Choice(Glyph.tower, "My own server",
-                "A server of yours behind Cloudflare. Set its domain and password.",
-                onClick = onServer)
+            Rise(400) {
+                Choice(Glyph.tower, "My own server",
+                    "A server of yours behind Cloudflare. Set its domain and password.",
+                    onClick = onServer)
+            }
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -115,8 +127,8 @@ fun SetupScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Spacer(Modifier.height(24.dp))
-            OrbStage(if (setup.step == "failed") Mode.FAIL else Mode.BUSY, 0f, paused = paused,
-                size = 220.dp, toneOverride = if (setup.step == "failed") null else restTone())
+            Rise(0, distance = 12f) { OrbStage(if (setup.step == "failed") Mode.FAIL else Mode.BUSY, 0f, paused = paused,
+                size = 220.dp, toneOverride = if (setup.step == "failed") null else restTone()) }
             Text(if (setup.step == "failed") "Setup did not finish" else "Getting your servers ready",
                 style = Type.title.copy(fontSize = 24.sp), textAlign = TextAlign.Center)
             Spacer(Modifier.height(8.dp))
@@ -169,7 +181,12 @@ private fun Step(title: String, done: Boolean, active: Boolean, detail: String? 
                 .border(1.dp, if (active) Tone.ok else androidx.compose.ui.graphics.Color.Transparent, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            if (done) Icon(Glyph.check, null, Modifier.size(13.dp), tint = Tone.ink)
+            // The tick pops in with a little overshoot when its step finishes.
+            val pop by androidx.compose.animation.core.animateFloatAsState(if (done) 1f else 0f,
+                androidx.compose.animation.core.spring(dampingRatio = 0.45f,
+                    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow), label = "tick")
+            if (pop > 0.01f) Icon(Glyph.check, null,
+                Modifier.size(13.dp).graphicsLayer { scaleX = pop; scaleY = pop }, tint = Tone.ink)
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
