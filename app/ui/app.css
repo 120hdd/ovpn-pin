@@ -1318,14 +1318,22 @@ canvas.blob__body {
    moving in it, and the room the meter needs is made by the thing that was
    already in the way rather than found somewhere else. */
 .blob-stage {
-  /* In the middle of the room between the label over it and the address
-     cards under it (about 88px), rather than hard under the label: centred
-     in what is left, never closer to the top than 24px. */
-  --stage-top: max(24px, calc((100% - 88px - 210px) / 2 + 12px));
-  top: var(--stage-top);
+  /* Centred in the room it actually has: the label ends 29px down (9px of
+     offset and 20px of line), the foot - meter and addresses - is 67px and
+     sits at the bottom, and the stage itself is 210px. Half of what is left
+     goes above the orb and half below, so it is never crowded against the
+     label with room going spare underneath. */
+  --stage-room: calc(100% - 29px - var(--foot) - 210px);
+  --stage-top: calc(29px + var(--stage-room) / 2);
+  top: max(29px, var(--stage-top));
   transition: top 460ms var(--ease);
 }
-.hero[data-state='on'] .blob-stage { top: calc(var(--stage-top) - 13px); }
+/* What stands between the orb and the bottom of the hero: the addresses,
+   and the meter as well once it opens - 48px of it and 8px under it. Read
+   from the meter itself rather than from the connection's state, because
+   the meter opens when a reading arrives and not before. */
+.hero { --foot: 67px; }
+.hero:has(.flux[data-live='true']) { --foot: 123px; }
 
 /* The satellites answer the line. Both dots swell and burn a little harder
    the harder the connection is working - which is the only bit of chrome in
