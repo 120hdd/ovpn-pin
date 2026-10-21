@@ -13,6 +13,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -53,12 +54,14 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.erelay.relay.R
 import com.erelay.relay.data.Conn
 import com.erelay.relay.data.Mode
 import com.erelay.relay.data.Place
@@ -139,7 +142,10 @@ fun Home(
 private fun Header(s: HomeState, onLog: () -> Unit, onDrop: () -> Unit, onSettings: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Spacer(Modifier.width(6.dp))
-        Text("RELAY", style = Type.strong.copy(fontWeight = FontWeight.W700, letterSpacing = 2.4.sp))
+        // The wordmark, in dark letters on the light themes: its own silver
+        // would vanish on white.
+        Image(painterResource(if (Tone.light) R.drawable.wordmark_dark else R.drawable.wordmark),
+            "Relay", Modifier.height(22.dp))
         Grow()
         Box {
             IconButton(Glyph.activity, "What is using the connection", onLog)
