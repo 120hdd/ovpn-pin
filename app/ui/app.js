@@ -174,12 +174,31 @@ function initConnectionCore() {
 function setIp(el, value, fresh) {
   if (el.textContent === value) return;
   el.textContent = value;
+  fitText(el);
   if (fresh) {
     el.classList.remove('fresh');
     void el.offsetWidth;
     el.classList.add('fresh');
   }
 }
+
+/* An address too long for its box steps down in size until it fits, rather
+   than losing its end to an ellipsis - an IPv6 address cut short is a
+   different address. Half a pixel at a time, never below 9px. */
+function fitText(el, floor = 9) {
+  el.style.fontSize = '';
+  let size = parseFloat(getComputedStyle(el).fontSize);
+  while (el.scrollWidth > el.clientWidth + 0.5 && size > floor) {
+    size -= 0.5;
+    el.style.fontSize = `${size}px`;
+  }
+}
+
+let refitting = 0;
+window.addEventListener('resize', () => {
+  clearTimeout(refitting);
+  refitting = setTimeout(() => ['realIp', 'exitIp'].forEach((id) => fitText($(id))), 120);
+});
 
 function setStatus(word, kind, where, host) {
   const s = $('status');
@@ -661,7 +680,13 @@ window.onConnected = (status) => {
   setIp($('exitIp'), confirmed || (e.unconfirmed ? 'unconfirmed' : 'checking…'),
         !!confirmed);
   $('exitPlace').textContent = measured ? place : `${place} (checking)`;
-  setStatus('CONNECTED', 'on', place, e.host || '');
+  // How long it has been up, ticking beside the place - the desktop's
+  // version of the Android notification's timer.
+  state.since = status.since || Date.now() / 1000;
+  setStatus('CONNECTED', 'on',
+            `${place}<span class="status__clock mono" id="statusClock"></span>`,
+            e.host || '');
+  paintClock();
   $('detIn').textContent = `${e.ip || '—'}:443`;
   $('detOut').textContent = confirmed || '—';
   $('detVia').textContent = e.host || '—';
@@ -679,6 +704,20 @@ window.onConnected = (status) => {
   // first of those seconds.
   window.pywebview.api.traffic().then(window.onTraffic, () => {});
 };
+
+function clockText(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  const two = (n) => String(n).padStart(2, '0');
+  const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60;
+  return h ? `${h}:${two(m)}:${two(s % 60)}` : `${m}:${two(s % 60)}`;
+}
+
+function paintClock() {
+  const el = document.getElementById('statusClock');
+  if (!el || state.mode !== 'on' || !state.since) return;
+  el.textContent = clockText(Date.now() / 1000 - state.since);
+}
+setInterval(paintClock, 1000);
 
 window.onFailed = (err) => {
   state.mode = 'fail';

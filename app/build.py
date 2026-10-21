@@ -522,6 +522,11 @@ def main():
     for path in (DIST, WORK):
         shutil.rmtree(path, ignore_errors=True)
     version_file = write_version_file()
+    # The same version, as text the running app can read for its About
+    # screen - the EXE's own version resource is for Explorer, not for it.
+    version_txt = os.path.join(WORK, 'version.txt')
+    with open(version_txt, 'w', encoding='utf-8') as f:
+        f.write(version_string())
 
     sep = ';'          # PyInstaller's --add-data separator on Windows
     proxy_source = os.path.join(ROOT, 'core', 'ovpn-proxy.py')
@@ -540,6 +545,7 @@ def main():
         # The proxy lives in core/ in the repo and at the top of the bundle
         # once frozen; paths.py knows the difference.
         '--add-data', f'{proxy_source}{sep}.',
+        '--add-data', f'{version_txt}{sep}.',
         '--hidden-import', 'winproxy',
         '--hidden-import', 'winwindow',
         '--hidden-import', 'oneinstance',

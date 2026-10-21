@@ -43,6 +43,8 @@ else:
 UI_DIR = os.path.join(RES_DIR, 'ui')
 ICON = os.path.join(RES_DIR, 'assets', 'app.ico')
 ICON_PNG = os.path.join(RES_DIR, 'assets', 'app.png')
+# Written by build.py from the release tag; absent when run from source.
+VERSION_TXT = os.path.join(RES_DIR, 'version.txt')
 STATE_DIR = os.path.join(DATA_DIR, '.state')
 AUTH_FILE = os.path.join(DATA_DIR, '.ovpn-auth')
 SAVED_PROXY = os.path.join(STATE_DIR, 'system-proxy-before.json')

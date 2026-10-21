@@ -212,7 +212,9 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   color: var(--text);
 }
 .status[data-state='on']   { color: var(--ok); }
-.status[data-state='off']  { color: var(--text-muted); }
+/* Not connected is said in red, as the Android app says it: the one state
+   where traffic is going out unprotected should not read as neutral. */
+.status[data-state='off']  { color: var(--fail); }
 .status[data-state='fail'] { color: var(--fail); }
 .status.fresh { animation: pop 180ms var(--ease); }
 
@@ -705,41 +707,21 @@ body::before {
 .screen[data-screen='window'] .info__bubble { left: auto; right: 0; transform: none; }
 
 .bar__logo {
-  width: 32px;
-  height: 32px;
+  width: 26px;
+  height: 26px;
   display: block;
-  flex: 0 0 32px;
-  object-fit: contain;
+  flex: 0 0 26px;
+  overflow: visible;
 }
+.bar__disc { fill: #f4f6fa; }
+.bar__ring { fill: none; stroke: var(--ok); stroke-width: 20; stroke-linecap: round; }
+.bar__bead { fill: var(--ok); }
 
 .bar__name {
   color: var(--text);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.19em;
-}
-
-.privacy {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 23px;
-  padding: 0 8px;
-  color: #9294a2;
-  border: 1px solid rgba(255, 255, 255, 0.075);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.025);
-  font-size: 8px;
-  font-weight: 600;
-  letter-spacing: 0.13em;
-}
-
-.privacy i {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--ok);
-  box-shadow: 0 0 9px rgba(97, 239, 191, 0.75);
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 .icon {
@@ -1601,6 +1583,16 @@ canvas.blob__body {
   background: var(--card-accent);
   box-shadow: 0 0 12px color-mix(in srgb, var(--card-accent), transparent 25%);
   transition: background 250ms ease, box-shadow 250ms ease;
+}
+
+/* The connection's age, after the place it comes out in. */
+.status__clock { margin-left: 8px; color: var(--text-muted); font-size: 0.92em; }
+.status__clock:empty { display: none; }
+
+/* Only the dot - the card's top line stays quiet when nothing is up. */
+.card[data-state='off'] .status-dot {
+  background: var(--fail);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--fail), transparent 25%);
 }
 
 .card[data-state='busy'] .status-dot { animation: status-pulse 1.2s ease-out infinite; }

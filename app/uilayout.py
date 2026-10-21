@@ -84,7 +84,8 @@ def _connected(p):
          "document.getElementById('hero').dataset.state = 'on';"
          "document.getElementById('swap').dataset.state = 'on';"
          "document.getElementById('card').dataset.state = 'on';"
-         "setStatus('CONNECTED', 'on', 'Frankfurt, Germany',"
+         "setStatus('CONNECTED', 'on', 'Frankfurt, Germany"
+         "<span class=\"status__clock mono\" id=\"statusClock\">1:02:33</span>',"
          "          '146.70.160.237:1443');"
          "document.getElementById('exitIp').textContent = '146.70.160.237';"
          "document.getElementById('exitPlace').textContent = 'Frankfurt, DE'")
@@ -201,13 +202,6 @@ def _shut_prefs(p):
     p.do("document.getElementById('prefs').close()")
 
 
-def _prefs_window(p):
-    p.click('#settings', 1.0)
-    p.click('.menu__row[data-goto="window"]', 0.6)
-
-
-def _shut_prefs_window(p):
-    p.do("showScreen(null); document.getElementById('prefs').close()")
 
 
 def _prefs_working(p):
@@ -334,15 +328,8 @@ def _shut_dropped(p):
     p.do("document.getElementById('dropDlg').close()")
 
 
-def _bare(p):
-    # A copy with no account opens Settings by itself; this is the window
-    # behind it - the header, which is also the title bar now.
-    p.do("for (const d of document.querySelectorAll('dialog[open]')) d.close()", 0.6)
-
-
 SCENES = [
     ('main', None, None),
-    ('bare', _bare, None),
     ('main-dead', _dead_mark, _no_dead_mark),
     ('main-busy', _busy, _idle),
     ('main-on', _connected, _idle),
@@ -361,7 +348,6 @@ SCENES = [
     ('picker-sorted', lambda p: (_picker(p), _sorted(p)),
      lambda p: (_unsorted(p), _shut_picker(p))),
     ('prefs', _prefs, _shut_prefs),
-    ('prefs-window', _prefs_window, _shut_prefs_window),
     ('prefs-working', _prefs_working, _shut_prefs_working),
     ('log', _log, _shut_log),
     ('source', _source, _shut_source),
@@ -546,6 +532,11 @@ def run(window, only=None, verbose=False):
         _out(f"  {'self-test':<22} "
              + (f"all {len(WANTED)} kinds of fault caught"
                 if ok else f"BROKEN - did not catch: {', '.join(missed)}"))
+
+        # A copy with no account opens Settings by itself at boot. Left open,
+        # every main-screen state below was a photograph of the sheet, and
+        # its audit was of the sheet - clean, and about the wrong thing.
+        p.do("for (const d of document.querySelectorAll('dialog[open]')) d.close()", 0.6)
 
         for name, enter, leave in SCENES:
             visit(name, enter, leave)

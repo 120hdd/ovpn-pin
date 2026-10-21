@@ -161,6 +161,15 @@ WINDOW_MIN = (380, 640)      # unless the screen itself is smaller
 WINDOW_DEFAULTS = {'lockWindow': False, 'minToTray': True, 'onTop': False}
 
 
+def app_version():
+    """The release this copy was built from, or 'dev' when run from source."""
+    try:
+        with open(paths.VERSION_TXT, encoding='utf-8') as f:
+            return f.read().strip() or 'dev'
+    except OSError:
+        return 'dev'
+
+
 def load_settings():
     try:
         with open(SETTINGS, encoding='utf-8') as f:
@@ -656,7 +665,8 @@ class Api:
                 'mode': self._settings.get('mode', 'surfshark'),
                 'hasCredentials': self._has_credentials(),
                 'username': self._engine.username(),
-                'about': (f'{APP_NAME}  -  port {self._engine.port}'
+                'version': app_version(),
+                'about': (f'{APP_NAME} {app_version()}  -  port {self._engine.port}'
                           f'\n{paths.APP_DIR}')}
 
     def info(self):
@@ -672,7 +682,11 @@ class Api:
         if (self._sysproxy.stashed() and not self._engine.running()
                 and not px_live_elsewhere(self._engine.port)):
             recovered = self._sysproxy.restore()
-        status = self._engine.status()
+        status = dict(self._engine.status())
+        if status.get('state') == 'on' and self._since:
+            # So a window opened onto a connection already up counts from
+            # when it came up, not from when the window did.
+            status['since'] = self._since
         self._retray('on' if status.get('state') == 'on' else 'off')
         out = self._describe()
         out.update({'status': status, 'recovered': recovered,
@@ -2223,6 +2237,8 @@ class Api:
                     result = self._through_tunnel(where, mode)
                 self._since = time.time()
                 self._retray('on')
+                if isinstance(result, dict):
+                    result = dict(result, since=self._since)
                 self._emit('Connected', result)
                 # The independent check runs after the window already says
                 # connected, because it is a round trip to somebody else's
@@ -2436,6 +2452,17 @@ def install_safety(api):
     return undo
 
 
+def elapsed(seconds):
+    """12 min, 1 h 05 min - how long a connection has been up, for a line
+    that is read at a glance."""
+    minutes = int(seconds // 60)
+    if minutes < 1:
+        return 'under a minute'
+    if minutes < 60:
+        return f'{minutes} min'
+    return f'{minutes // 60} h {minutes % 60:02d} min'
+
+
 class Tray:
     """A real notification-area icon.
 
@@ -2502,20 +2529,40 @@ class Tray:
             Menu.SEPARATOR,
             Item('Quit', self._quit))
         self.icon = pystray.Icon(APP_NAME, self._image('off'),
-                                 f'{APP_NAME} - not connected', menu)
+                                 self._title('off'), menu)
         threading.Thread(target=self.icon.run, daemon=True).start()
+        threading.Thread(target=self._tick, daemon=True).start()
         return True
 
+    def _title(self, state):
+        text = {'on': 'connected', 'busy': 'connecting…'}.get(state, 'not connected')
+        since = self.api._since
+        if state == 'on' and since:
+            text += f' · {elapsed(time.time() - since)}'
+        return f'{APP_NAME} — {text}'
+
     def set_state(self, state):
+        self._state = state
         if not self.icon:
             return
-        text = {'on': 'connected', 'busy': 'connecting…'}.get(state, 'not connected')
         try:
             self.icon.icon = self._image(state)
-            self.icon.title = f'{APP_NAME} — {text}'
+            self.icon.title = self._title(state)
         except Exception:
             pass
         self.refresh()
+
+    def _tick(self):
+        # How long it has been up, in the tooltip - which is all of the app
+        # there is while the window is closed. Minutes are its resolution,
+        # so half a minute is often enough.
+        while self.icon:
+            time.sleep(30)
+            if getattr(self, '_state', None) == 'on':
+                try:
+                    self.icon.title = self._title('on')
+                except Exception:
+                    pass
 
     def refresh(self):
         """Rebuild the menu, which on Windows is built before it is opened

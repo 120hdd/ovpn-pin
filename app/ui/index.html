@@ -81,12 +81,19 @@
        the buttons never do. -->
   <header class="bar">
     <span class="bar__mark drag-zone">
-      <img class="bar__logo" src="app-logo.png" alt="" aria-hidden="true">
-      <span class="bar__name">RELAY</span>
+      <!-- The mark, the same drawing as the app icon (make_icon.py) and the
+           Android app's: a disc, its ring open across the upper right, and
+           the bead that has left through the opening. Inline, so it takes
+           the theme's colours. -->
+      <svg class="bar__logo" viewBox="0 0 256 256" aria-hidden="true">
+        <circle class="bar__disc" cx="128" cy="128" r="56"/>
+        <path class="bar__ring" d="M226.48 110.64 A100 100 0 1 1 145.36 29.52"/>
+        <circle class="bar__bead" cx="221.3" cy="34.7" r="16"/>
+      </svg>
+      <span class="bar__name">Relay</span>
     </span>
     <span class="bar__drag drag-zone" aria-hidden="true"></span>
     <span class="bar__tools">
-      <span class="privacy"><i></i>PRIVATE</span>
       <!-- Two sliders, not a cog. The hand-drawn one here was a circle with
            rays coming off it, which at 15px is a sun - and a sun in the
            corner of an app reads as a theme switch, which this is not. -->
@@ -519,8 +526,8 @@
       </button>
       <button class="menu__row" type="button" data-goto="about-this-copy">
         <span class="menu__copy">
-          <span class="menu__name">About this copy</span>
-          <span class="menu__note">paths, versions, the log</span>
+          <span class="menu__name">About</span>
+          <span class="menu__note">version, paths, the log</span>
         </span>
         <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
       </button>
