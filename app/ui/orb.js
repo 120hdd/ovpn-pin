@@ -242,7 +242,7 @@ void main() {
       const cur = { a: want.a.slice(), b: want.b.slice(), c: want.c.slice(), speed: want.speed };
       if (hero) {
         new MutationObserver(() => { want = targets(); })
-          .observe(hero, { attributes: true, attributeFilter: ['data-state'] });
+          .observe(hero, { attributes: true, attributeFilter: ['data-state', 'data-scheme'] });
       }
 
       /* u_colors is vec4[8]; we use the first three slots */

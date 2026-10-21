@@ -662,6 +662,7 @@ class Api:
                 'sortBy': self._settings.get('sortBy', 'ping'),
                 'keepOnClose': bool(self._settings.get('keepOnClose')),
                 'window': self._window_options(),
+                'orbColors': self._settings.get('orbColors', 'signal'),
                 'mode': self._settings.get('mode', 'surfshark'),
                 'hasCredentials': self._has_credentials(),
                 'username': self._engine.username(),
@@ -1987,6 +1988,13 @@ class Api:
         self._settings['sortBy'] = kind
         save_settings(self._settings)
         return {'ok': True, 'sortBy': kind}
+
+    def setOrbColors(self, kind='signal'):
+        """Traffic light or the desktop's own lavender and teal."""
+        kind = kind if kind in ('signal', 'desktop') else 'signal'
+        self._settings['orbColors'] = kind
+        save_settings(self._settings)
+        return {'ok': True, 'orbColors': kind}
 
     def setKeepOnClose(self, on=False):
         self._settings['keepOnClose'] = bool(on)

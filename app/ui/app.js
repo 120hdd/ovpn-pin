@@ -263,9 +263,16 @@ function render() {
   $('card').dataset.busy = String(state.mode === 'busy');
   $('card').dataset.state = visualState;
   $('hero').dataset.state = visualState;
+  $('hero').dataset.scheme = state.orbColors || 'signal';
+  const orb = $('orb');
+  orb.setAttribute('aria-disabled', String(!state.hasCredentials));
+  orb.setAttribute('aria-label', ({
+    off: 'Connect', fail: 'Connect', busy: 'Cancel', on: 'Disconnect',
+  })[visualState]);
   $('swap').dataset.state = visualState;
   $('routeLabel').textContent = ({
-    off: 'READY TO RELAY',
+    // Said when there is something to press: the orb is the button.
+    off: state.hasCredentials ? 'PRESS TO CONNECT' : 'READY TO RELAY',
     busy: 'NEGOTIATING ROUTE',
     on: 'PRIVATE ROUTE ACTIVE',
     fail: 'ROUTE UNAVAILABLE',
@@ -1708,6 +1715,8 @@ function peek(fieldId, buttonId) {
 
 function paintPrefs(info) {
   $('sysProxy').setAttribute('aria-checked', String(state.systemProxy));
+  if (info.orbColors) state.orbColors = info.orbColors;
+  paintOrbColors();
   if (info.window) paintWindowOptions(info.window);
   $('keepOnClose').setAttribute('aria-checked', String(!!info.keepOnClose));
   if (info.port) state.port = info.port;
@@ -2650,6 +2659,59 @@ for (const sheet of document.querySelectorAll('dialog.sheet')) {
 }
 
 $('act').addEventListener('click', onAct);
+
+/* The orb as a button. A press does what the Connect button does; held for
+   600 ms it reconnects - disconnect, then connect to the same pick - which
+   is the one thing a stuck connection usually needs, without two presses
+   and a wait between them. */
+async function reconnect() {
+  if (state.mode === 'busy') return;
+  if (state.mode === 'on') await onAct();
+  await onAct();
+}
+
+(function () {
+  const orb = $('orb');
+  let timer = 0;
+  let held = false;
+  const lift = () => { clearTimeout(timer); orb.classList.remove('is-pressed'); };
+  orb.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || !state.hasCredentials) return;
+    held = false;
+    orb.classList.add('is-pressed');
+    timer = setTimeout(() => { held = true; lift(); reconnect(); }, 600);
+  });
+  orb.addEventListener('pointerup', lift);
+  orb.addEventListener('pointerleave', lift);
+  orb.addEventListener('click', () => {
+    if (held) { held = false; return; }
+    if (state.hasCredentials) onAct();
+  });
+  orb.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && state.hasCredentials) {
+      e.preventDefault();
+      onAct();
+    }
+  });
+})();
+
+/* The orb's colours: traffic light or the desktop's own. */
+function paintOrbColors() {
+  const seg = $('orbColors');
+  seg.dataset.orb = state.orbColors || 'signal';
+  for (const b of seg.querySelectorAll('.seg__opt')) {
+    b.setAttribute('aria-pressed', String(b.dataset.orb === seg.dataset.orb));
+  }
+}
+
+for (const b of $('orbColors').querySelectorAll('.seg__opt')) {
+  b.addEventListener('click', async () => {
+    state.orbColors = b.dataset.orb;
+    paintOrbColors();
+    render();
+    await window.pywebview.api.setOrbColors(b.dataset.orb);
+  });
+}
 $('pick').addEventListener('click', openPicker);
 $('pickerClose').addEventListener('click', () => shut($('picker')));
 $('search').addEventListener('input', (e) => {

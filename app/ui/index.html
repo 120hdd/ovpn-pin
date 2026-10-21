@@ -133,15 +133,17 @@
        between them, so showing one without the other asks the user to
        remember what their own IP was. -->
   <section class="hero" id="hero" data-state="off" aria-label="Route overview">
-    <div class="blob-stage" aria-hidden="true">
-      <span class="blob__glow"></span>
-      <span class="blob__orbit blob__orbit--outer"><i></i></span>
-      <span class="blob__orbit blob__orbit--inner"><i></i></span>
-      <span class="blob__halo"></span>
-      <span class="blob__float">
+    <div class="blob-stage">
+      <span class="blob__glow" aria-hidden="true"></span>
+      <span class="blob__orbit blob__orbit--outer" aria-hidden="true"><i></i></span>
+      <span class="blob__orbit blob__orbit--inner" aria-hidden="true"><i></i></span>
+      <span class="blob__halo" aria-hidden="true"></span>
+      <!-- The orb is a button, as on Android: press to connect or
+           disconnect, hold to reconnect. -->
+      <span class="blob__float" id="orb" role="button" tabindex="0" aria-label="Connect">
         <!-- WebGL2 core; app.js swaps this back to the DOM bead sphere when
              the GPU is blocked (RDP, SwiftShader denylist). -->
-        <canvas class="blob__body" id="orbCanvas"></canvas>
+        <canvas class="blob__body" id="orbCanvas" aria-hidden="true"></canvas>
       </span>
     </div>
     <p class="route-label"><i></i><span id="routeLabel">READY TO RELAY</span></p>
@@ -514,6 +516,13 @@
         <span class="menu__copy">
           <span class="menu__name">Servers</span>
           <span class="menu__note">finding them, pinning them, timing them</span>
+        </span>
+        <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
+      </button>
+      <button class="menu__row" type="button" data-goto="look">
+        <span class="menu__copy">
+          <span class="menu__name">Look</span>
+          <span class="menu__note">the orb's colours</span>
         </span>
         <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
       </button>
@@ -1105,6 +1114,26 @@
     <!-- The tray menu's switches, here as well: a setting only reachable by
          right-clicking an icon in the corner of the taskbar is one most
          people never find. Both places change the same setting. -->
+    <section class="screen" data-screen="look" hidden>
+
+    <section class="pane" style="--i:1">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title">Orb colours</h3>
+        <p class="pane__why">Traffic light: silver when not connected, yellow
+          while connecting, green when connected, red when it failed. Desktop:
+          the original lavender and teal at rest.</p>
+        <div class="seg" id="orbColors" data-orb="signal">
+          <i class="seg__slide" aria-hidden="true"></i>
+          <button class="seg__opt" type="button" data-orb="signal"
+                  aria-pressed="true">Traffic light</button>
+          <button class="seg__opt" type="button" data-orb="desktop"
+                  aria-pressed="false">Desktop</button>
+        </div>
+      </span>
+    </section>
+    </section>
+
     <section class="screen" data-screen="window" hidden>
 
     <section class="pane pane--line" style="--i:1">

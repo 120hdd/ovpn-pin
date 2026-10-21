@@ -478,7 +478,7 @@ void main() {
         noise: want.noise, density: want.density,
       };
       new MutationObserver(() => { want = targets(); })
-        .observe(hero, { attributes: true, attributeFilter: ['data-state'] });
+        .observe(hero, { attributes: true, attributeFilter: ['data-state', 'data-scheme'] });
 
       const pal = { a: [0, 0, 0], b: [0, 0, 0], c: [0, 0, 0], d: [0, 0, 0] };
 
