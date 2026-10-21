@@ -1568,8 +1568,9 @@ function paintWay() {
   // The picker belongs to the two ways that have a country in them.
   document.querySelector('.stack').dataset.way = way;
 
+  $('wayWhy').textContent = WAY_SAID[way];
   const note = $('wayNote');
-  said(note, ready ? WAY_SAID[way] : WAY_NEEDS_TUNNEL, ready ? '' : 'bad');
+  said(note, ready ? '' : WAY_NEEDS_TUNNEL, ready ? '' : 'bad');
   note.classList.remove('is-swapping');
   void note.offsetWidth;                       // restart it, do not queue it
   note.classList.add('is-swapping');
@@ -1717,6 +1718,7 @@ function paintPrefs(info) {
   $('sysProxy').setAttribute('aria-checked', String(state.systemProxy));
   if (info.orbColors) state.orbColors = info.orbColors;
   paintOrbColors();
+  if (info.theme) applyTheme(info.theme);
   if (info.window) paintWindowOptions(info.window);
   $('keepOnClose').setAttribute('aria-checked', String(!!info.keepOnClose));
   if (info.port) state.port = info.port;
@@ -5452,3 +5454,56 @@ function providersWithoutServers(info) {
   const ps = (info && info.providerState) || {};
   return Object.keys(ps).filter((k) => ps[k].account && !ps[k].servers);
 }
+
+
+/* ---------------------------------------------------------------- themes */
+
+/* The Android app's nine, with the page and card colour each swatch draws. */
+const THEMES = [
+  ['midnight', 'Midnight', '#09090e', '#17171f'],
+  ['graphite', 'Graphite', '#111113', '#18191b'],
+  ['black', 'Black', '#000000', '#0e0e12'],
+  ['ocean', 'Ocean', '#060b16', '#0f1828'],
+  ['forest', 'Forest', '#060e0b', '#0f1a16'],
+  ['plum', 'Plum', '#0e0812', '#1b1222'],
+  ['ember', 'Ember', '#110a08', '#1e1512'],
+  ['slate', 'Slate', '#0c0f13', '#161b21'],
+  ['white', 'White', '#f4f5f8', '#ffffff'],
+];
+
+function applyTheme(key) {
+  const theme = THEMES.some((t) => t[0] === key) ? key : 'midnight';
+  state.theme = theme;
+  if (theme === 'midnight') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  // For the next start, so it opens in this theme rather than changing to it.
+  try { localStorage.setItem('relay.theme', theme); } catch (e) { /* private window */ }
+  for (const b of document.querySelectorAll('.theme')) {
+    b.setAttribute('aria-checked', String(b.dataset.theme === theme));
+  }
+}
+
+(function () {
+  const box = $('themes');
+  for (const [key, name, page, card] of THEMES) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'theme';
+    b.dataset.theme = key;
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-checked', 'false');
+    b.style.setProperty('--page', page);
+    b.style.setProperty('--card', card);
+    const pic = document.createElement('span');
+    pic.className = 'theme__page';
+    pic.append(document.createElement('i'), document.createElement('b'));
+    const label = document.createElement('span');
+    label.textContent = name;
+    b.append(pic, label);
+    b.addEventListener('click', () => {
+      applyTheme(key);
+      window.pywebview.api.setTheme(key);
+    });
+    box.appendChild(b);
+  }
+})();

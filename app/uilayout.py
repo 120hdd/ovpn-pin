@@ -359,6 +359,14 @@ SCENES = [
     ('prefs', _prefs, _shut_prefs),
     ('prefs-working', _prefs_working, _shut_prefs_working),
     ('log', _log, _shut_log),
+    # The light theme is the one that turns colours over rather than
+    # tinting them, so it is the one that can lose a word against its page.
+    ('main-white', lambda p: p.do("applyTheme('white'); window.pywebview.api.setTheme('white')", 0.6),
+     lambda p: p.do("applyTheme('midnight'); window.pywebview.api.setTheme('midnight')", 0.4)),
+    ('main-on-white', lambda p: (p.do("applyTheme('white'); window.pywebview.api.setTheme('white')", 0.4), _connected(p)),
+     lambda p: (_idle(p), p.do("applyTheme('midnight'); window.pywebview.api.setTheme('midnight')", 0.4))),
+    ('prefs-white', lambda p: (p.do("applyTheme('white'); window.pywebview.api.setTheme('white')", 0.4), _prefs(p)),
+     lambda p: (_shut_prefs(p), p.do("applyTheme('midnight'); window.pywebview.api.setTheme('midnight')", 0.4))),
     ('intro', lambda p: p.do("runIntro()", 2.6),
      lambda p: p.do("document.getElementById('introDlg').close()")),
     ('welcome', *_first('welcomeDlg')),

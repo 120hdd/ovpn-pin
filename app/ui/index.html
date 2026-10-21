@@ -20,6 +20,15 @@
     + ((e.reason && e.reason.stack || '').split(/\n/).slice(1, 3)
        .map((l) => ' | ' + l.trim()).join(''))));
 </script>
+<!-- The theme before the first paint, from the last time this window saw
+     it - so a White copy does not open in Midnight and then change. Settings
+     have the real answer and boot puts it back if the two disagree. -->
+<script>
+  try {
+    var relayTheme = localStorage.getItem('relay.theme');
+    if (relayTheme) document.documentElement.dataset.theme = relayTheme;
+  } catch (e) {}
+</script>
 </head>
 <body>
 
@@ -237,14 +246,23 @@
            you are looking at - the strip alone would be three words and a
            guess. -->
       <div class="way" id="wayWrap" data-way="surfshark">
-        <div class="seg seg--three" id="way" data-way="surfshark">
-          <i class="seg__slide" aria-hidden="true"></i>
-          <button class="seg__opt" type="button" data-way="surfshark"
-                  aria-pressed="true">Provider</button>
-          <button class="seg__opt" type="button" data-way="single"
-                  aria-pressed="false">Your server</button>
-          <button class="seg__opt" type="button" data-way="multi"
-                  aria-pressed="false">Server + exit</button>
+        <!-- What the chosen way is, behind an (i) beside the strip, as on
+             Android; the line under it is only for what needs doing. -->
+        <div class="way__row">
+          <div class="seg seg--three" id="way" data-way="surfshark">
+            <i class="seg__slide" aria-hidden="true"></i>
+            <button class="seg__opt" type="button" data-way="surfshark"
+                    aria-pressed="true">Provider</button>
+            <button class="seg__opt" type="button" data-way="single"
+                    aria-pressed="false">Your server</button>
+            <button class="seg__opt" type="button" data-way="multi"
+                    aria-pressed="false">Server + exit</button>
+          </div>
+          <button class="info info--right" id="wayInfo" type="button"
+                  aria-label="What this way out is">
+            <svg class="ico" aria-hidden="true"><use href="#i-info"/></svg>
+            <span class="info__bubble" role="tooltip" id="wayWhy"></span>
+          </button>
         </div>
         <p class="note way__note" id="wayNote"></p>
       </div>
@@ -522,7 +540,7 @@
       <button class="menu__row" type="button" data-goto="look">
         <span class="menu__copy">
           <span class="menu__name">Look</span>
-          <span class="menu__note">the orb's colours</span>
+          <span class="menu__note">theme, the orb's colours</span>
         </span>
         <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
       </button>
@@ -1117,6 +1135,14 @@
     <section class="screen" data-screen="look" hidden>
 
     <section class="pane" style="--i:1">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title">Theme</h3>
+        <div class="themes" id="themes" role="radiogroup" aria-label="Theme"></div>
+      </span>
+    </section>
+
+    <section class="pane" style="--i:2">
       <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg></span>
       <span class="pane__copy">
         <h3 class="pane__title">Orb colours</h3>

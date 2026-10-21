@@ -663,6 +663,7 @@ class Api:
                 'keepOnClose': bool(self._settings.get('keepOnClose')),
                 'window': self._window_options(),
                 'orbColors': self._settings.get('orbColors', 'signal'),
+                'theme': self._settings.get('theme', 'midnight'),
                 'introSeen': bool(self._settings.get('introSeen')),
                 'tunnelReady': bool(self._settings.get('tunnelDomain')
                                     and self._settings.get('tunnelPassword')),
@@ -1997,6 +1998,15 @@ class Api:
         self._settings['introSeen'] = True
         save_settings(self._settings)
         return {'ok': True}
+
+    def setTheme(self, key='midnight'):
+        """One of the nine themes the Android app has."""
+        known = ('midnight', 'graphite', 'black', 'ocean', 'forest', 'plum',
+                 'ember', 'slate', 'white')
+        key = key if key in known else 'midnight'
+        self._settings['theme'] = key
+        save_settings(self._settings)
+        return {'ok': True, 'theme': key}
 
     def setOrbColors(self, kind='signal'):
         """Traffic light or the desktop's own lavender and teal."""

@@ -272,7 +272,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   width: 20px; height: 15px; flex: none;
   border-radius: 2px;
   background-size: cover; background-position: center;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.14);
   display: none;
 }
 .pick__flag[style*='url'] { display: block; }
@@ -331,7 +331,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   animation: sink 130ms cubic-bezier(0.4, 0, 1, 1) forwards;
 }
 .sheet[open][data-closing="1"]::backdrop { animation: dim 130ms linear forwards; }
-.sheet::backdrop { background: rgba(0, 0, 0, 0.45); }
+.sheet::backdrop { background: rgb(0 0 0 / calc(0.45 * var(--shade))); }
 @keyframes rise {
   from { transform: translateY(12px); opacity: 0; }
   to   { transform: none; opacity: 1; }
@@ -474,7 +474,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   box-shadow: inset 0 0 0 1px transparent;
   transition: background var(--fade), box-shadow var(--fade);
 }
-.scope__row:hover { background: rgba(255, 255, 255, 0.035); }
+.scope__row:hover { background: rgb(var(--wash) / 0.035); }
 .scope__row:disabled { opacity: 0.4; cursor: default; }
 .scope__row:disabled:hover { background: transparent; }
 /* Every position is stated. An item with a definite grid-row is placed before
@@ -497,8 +497,8 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 }
 
 .scope__row[aria-pressed='true'] {
-  background: rgba(255, 255, 255, 0.05);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09),
+  background: rgb(var(--wash) / 0.05);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.09),
               inset 2px 0 0 var(--ok);
 }
 .scope__row[aria-pressed='true'] .scope__name { color: var(--text); }
@@ -540,7 +540,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   display: flex; gap: 10px; align-items: baseline;
   padding: 5px 2px;
   font-size: 11px; line-height: 15px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgb(var(--wash) / 0.04);
 }
 .tally li:last-child { border-bottom: 0; }
 .tally__name {
@@ -608,8 +608,8 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   --control: #20212b;
   --control-hover: #292b37;
   --control-active: #313440;
-  --divider: rgba(255, 255, 255, 0.09);
-  --border: rgba(255, 255, 255, 0.13);
+  --divider: rgb(var(--wash) / 0.09);
+  --border: rgb(var(--wash) / 0.13);
   --text: #f5f5f8;
   --text-muted: #b9bac6;
   --text-off: #777987;
@@ -621,6 +621,25 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   --focus: #74e4c2;
   --r-card: 20px;
   --r-ctl: 12px;
+
+  /* What a theme turns over. --wash lights a dark page and darkens a light
+     one; --deep and the --raise steps are the dark surfaces cards and
+     controls are made of; the rest is the page and its light. */
+  --wash: 255 255 255;
+  --deep: 10 10 16;
+  --raise-top: 54 55 69;
+  --raise-hi: 47 48 61;
+  --raise-mid: 34 35 46;
+  --raise-lo: 30 31 40;
+  --bg-top: #0d0d14;
+  --bg-end: #07070b;
+  --glow: rgba(108, 92, 231, 0.17);
+  --glow-2: rgba(50, 196, 189, 0.07);
+  --disc: #f4f6fa;
+  /* How dark a shadow or a darkening layer is: full on a dark page, a
+     quarter on a light one, where the same black would read as a stain. */
+  --shade: 1;
+  --raise-base: 18 18 25;
 
   /* Said out loud, because WebView2 draws its own furniture - scrollbars, the
      spin buttons on a number field, the ring inside a text one - and with
@@ -634,9 +653,9 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 body {
   position: relative;
   background:
-    radial-gradient(circle at 78% -15%, rgba(108, 92, 231, 0.17), transparent 42%),
-    radial-gradient(circle at 8% 48%, rgba(50, 196, 189, 0.07), transparent 38%),
-    linear-gradient(165deg, #0d0d14 0%, var(--bg) 56%, #07070b 100%);
+    radial-gradient(circle at 78% -15%, var(--glow), transparent 42%),
+    radial-gradient(circle at 8% 48%, var(--glow-2), transparent 38%),
+    linear-gradient(165deg, var(--bg-top) 0%, var(--bg) 56%, var(--bg-end) 100%);
   font-family: 'IBM Plex Sans Relay', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
   letter-spacing: 0;
 }
@@ -648,8 +667,8 @@ body::before {
   pointer-events: none;
   opacity: 0.18;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.014) 1px, transparent 1px);
+    linear-gradient(rgb(var(--wash) / 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(var(--wash) / 0.014) 1px, transparent 1px);
   background-size: 28px 28px;
   -webkit-mask-image: linear-gradient(to bottom, #000, transparent 72%);
   mask-image: linear-gradient(to bottom, #000, transparent 72%);
@@ -692,7 +711,7 @@ body::before {
   gap: 2px;
   margin-left: 2px;
   padding-left: 8px;
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  border-left: 1px solid rgb(var(--wash) / 0.08);
 }
 .icon--win .ico { width: 14px; height: 14px; }
 .icon--shut:hover { background: #e5484d; color: #fff; }
@@ -713,7 +732,7 @@ body::before {
   flex: 0 0 26px;
   overflow: visible;
 }
-.bar__disc { fill: #f4f6fa; }
+.bar__disc { fill: var(--disc); }
 .bar__ring { fill: none; stroke: var(--ok); stroke-width: 20; stroke-linecap: round; }
 .bar__bead { fill: var(--ok); }
 
@@ -730,8 +749,8 @@ body::before {
 }
 
 .icon:hover {
-  border-color: rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.055);
+  border-color: rgb(var(--wash) / 0.08);
+  background: rgb(var(--wash) / 0.055);
 }
 
 .icon[hidden] { display: none; }
@@ -844,7 +863,7 @@ body::before {
 }
 
 .blob__orbit {
-  border: 1px solid rgba(255, 255, 255, 0.105);
+  border: 1px solid rgb(var(--wash) / 0.105);
   border-radius: 49% 51% 53% 47% / 45% 52% 48% 55%;
   animation: orbit-spin 18s linear infinite;
 }
@@ -880,7 +899,7 @@ body::before {
   width: 145px;
   height: 145px;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid rgb(var(--wash) / 0.16);
   animation: halo-pulse 4.2s ease-out infinite;
 }
 
@@ -899,7 +918,7 @@ body::before {
   isolation: isolate;
   border-radius: 50%;
   background:
-    radial-gradient(circle at 34% 27%, rgba(255, 255, 255, 0.12), transparent 15%),
+    radial-gradient(circle at 34% 27%, rgb(var(--wash) / 0.12), transparent 15%),
     radial-gradient(circle at 55% 54%, color-mix(in srgb, var(--blob-b), transparent 91%), transparent 68%);
   box-shadow:
     inset 0 0 28px color-mix(in srgb, var(--blob-c), transparent 86%),
@@ -983,11 +1002,11 @@ canvas.blob__body {
   border: 0.5px solid rgba(236, 250, 255, 0.42);
   border-radius: 50%;
   background:
-    radial-gradient(circle at 27% 22%, rgba(255, 255, 255, 0.98) 0 11%, rgba(255, 255, 255, 0.42) 22%, transparent 38%),
+    radial-gradient(circle at 27% 22%, rgb(var(--wash) / 0.98) 0 11%, rgb(var(--wash) / 0.42) 22%, transparent 38%),
     radial-gradient(circle at 52% 58%, var(--dot-color) 0 44%, color-mix(in srgb, var(--dot-color), #071124 42%) 100%);
   box-shadow:
-    inset -0.7px -0.9px 1.6px rgba(1, 8, 24, 0.5),
-    inset 0.6px 0.7px 1px rgba(255, 255, 255, 0.36),
+    inset -0.7px -0.9px 1.6px rgb(var(--deep) / 0.5),
+    inset 0.6px 0.7px 1px rgb(var(--wash) / 0.36),
     0 0 var(--glow) color-mix(in srgb, var(--dot-color), transparent 32%);
   opacity: var(--o);
   filter: blur(var(--blur));
@@ -998,10 +1017,10 @@ canvas.blob__body {
 }
 
 .blob__body i:nth-child(11n + 3) {
-  border-color: rgba(255, 255, 255, 0.72);
+  border-color: rgb(var(--wash) / 0.72);
   box-shadow:
-    inset -0.7px -0.9px 1.6px rgba(1, 8, 24, 0.46),
-    inset 0.6px 0.7px 1px rgba(255, 255, 255, 0.5),
+    inset -0.7px -0.9px 1.6px rgb(var(--deep) / 0.46),
+    inset 0.6px 0.7px 1px rgb(var(--wash) / 0.5),
     0 0 calc(var(--glow) + 2px) color-mix(in srgb, var(--blob-a), transparent 18%);
 }
 
@@ -1094,10 +1113,10 @@ canvas.blob__body {
 
 .side {
   padding: 9px 10px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.085);
+  border: 1px solid rgb(var(--wash) / 0.085);
   border-radius: 14px;
-  background: linear-gradient(145deg, rgba(35, 35, 47, 0.72), rgba(18, 18, 25, 0.82));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 10px 28px rgba(0, 0, 0, 0.2);
+  background: linear-gradient(145deg, rgb(var(--raise-mid) / 0.72), rgb(var(--raise-base) / 0.82));
+  box-shadow: inset 0 1px 0 rgb(var(--wash) / 0.045), 0 10px 28px rgb(0 0 0 / calc(0.2 * var(--shade)));
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
 }
@@ -1143,7 +1162,7 @@ canvas.blob__body {
 .arrow {
   display: grid;
   place-items: center;
-  color: rgba(255, 255, 255, 0.24);
+  color: rgb(var(--wash) / 0.24);
 }
 
 .swap[data-state='fail'] .arrow { color: var(--fail); }
@@ -1389,7 +1408,7 @@ canvas.blob__body {
   display: flex;
   padding: 2px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.045);
+  background: rgb(var(--wash) / 0.045);
 }
 
 .pair__opt {
@@ -1416,7 +1435,7 @@ canvas.blob__body {
   left: 2px;
   border-radius: 6px;
   background: var(--control-active);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 1px 0 rgb(var(--wash) / 0.07);
   transition: transform 260ms var(--ease), width 260ms var(--ease);
 }
 
@@ -1443,7 +1462,7 @@ canvas.blob__body {
   isolation: isolate;
 }
 
-.lrow + .lrow { border-top: 1px solid rgba(255, 255, 255, 0.045); }
+.lrow + .lrow { border-top: 1px solid rgb(var(--wash) / 0.045); }
 
 /* The share of the busiest row, drawn as the row's own ground. Set from JS
    as a width in per cent; the fade on the right is what keeps it from
@@ -1568,13 +1587,13 @@ canvas.blob__body {
   --card-accent: #7d7f8b;
   overflow: hidden;
   padding: 16px 16px 15px;
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid rgb(var(--wash) / 0.09);
   border-radius: var(--r-card);
   background:
-    linear-gradient(145deg, rgba(33, 33, 44, 0.94), rgba(17, 17, 24, 0.97));
+    linear-gradient(145deg, rgb(var(--raise-mid) / 0.94), rgb(var(--raise-base) / 0.97));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.055),
-    0 24px 55px rgba(0, 0, 0, 0.34);
+    inset 0 1px 0 rgb(var(--wash) / 0.055),
+    0 24px 55px rgb(0 0 0 / calc(0.34 * var(--shade)));
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
 }
@@ -1678,7 +1697,7 @@ canvas.blob__body {
 .details {
   margin-top: 10px;
   padding: 10px 2px 0;
-  border-color: rgba(255, 255, 255, 0.075);
+  border-color: rgb(var(--wash) / 0.075);
 }
 
 .stack { gap: 8px; margin-top: 12px; }
@@ -1693,14 +1712,14 @@ canvas.blob__body {
   height: 52px;
   gap: 11px;
   padding: 0 11px;
-  border: 1px solid rgba(255, 255, 255, 0.075);
-  background: linear-gradient(145deg, rgba(47, 48, 61, 0.84), rgba(30, 31, 40, 0.9));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  border: 1px solid rgb(var(--wash) / 0.075);
+  background: linear-gradient(145deg, rgb(var(--raise-hi) / 0.84), rgb(var(--raise-lo) / 0.9));
+  box-shadow: inset 0 1px 0 rgb(var(--wash) / 0.045);
 }
 
 .btn--quiet:hover {
-  border-color: rgba(255, 255, 255, 0.13);
-  background: linear-gradient(145deg, rgba(54, 55, 69, 0.94), rgba(35, 36, 46, 0.96));
+  border-color: rgb(var(--wash) / 0.13);
+  background: linear-gradient(145deg, rgb(var(--raise-top) / 0.94), rgb(var(--raise-mid) / 0.96));
 }
 
 .pick__flag {
@@ -1710,13 +1729,13 @@ canvas.blob__body {
   place-items: center;
   flex: none;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgb(var(--wash) / 0.12);
   border-radius: 8px;
   background-color: rgba(118, 105, 255, 0.11);
   background-size: cover;
   background-position: center;
   color: #9b91ff;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 5px 12px rgba(0, 0, 0, 0.18);
+  box-shadow: inset 0 1px 0 rgb(var(--wash) / 0.08), 0 5px 12px rgb(0 0 0 / calc(0.18 * var(--shade)));
 }
 
 .pick__flag[style*='url'] svg { opacity: 0; }
@@ -1764,11 +1783,11 @@ canvas.blob__body {
 
 .sheet {
   background:
-    radial-gradient(circle at 80% -5%, rgba(112, 95, 240, 0.16), transparent 38%),
-    linear-gradient(165deg, #101017, #09090e 58%);
+    radial-gradient(circle at 80% -5%, var(--glow), transparent 38%),
+    linear-gradient(165deg, var(--bg-top), var(--bg) 58%);
 }
 
-.sheet::backdrop { background: rgba(0, 0, 0, 0.68); }
+.sheet::backdrop { background: rgb(0 0 0 / calc(0.68 * var(--shade))); }
 
 .sheet__top {
   min-height: 63px;
@@ -1814,10 +1833,10 @@ canvas.blob__body {
   margin: 3px 0;
   padding: 8px 11px 8px 14px;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.045);
+  border: 1px solid rgb(var(--wash) / 0.045);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.018);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.018);
+  background: rgb(var(--wash) / 0.018);
+  box-shadow: inset 0 1px 0 rgb(var(--wash) / 0.018);
   transition: background var(--enter), border-color var(--enter),
               box-shadow var(--enter), transform 80ms ease;
 }
@@ -1834,8 +1853,8 @@ canvas.blob__body {
   background-size: cover;
   opacity: 0.42;
   filter: brightness(1) saturate(0.94) contrast(1.04) blur(0.2px);
-  -webkit-mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.2) 31%, #000 68%);
-  mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.2) 31%, #000 68%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, rgb(0 0 0 / calc(0.2 * var(--shade))) 31%, #000 68%);
+  mask-image: linear-gradient(to right, transparent 0%, rgb(0 0 0 / calc(0.2 * var(--shade))) 31%, #000 68%);
   transform: translateX(0);
   transform-origin: right center;
   transition: opacity 240ms ease, transform 420ms cubic-bezier(0.2, 0.8, 0.2, 1),
@@ -1866,10 +1885,10 @@ canvas.blob__body {
   width: auto;
   border-radius: inherit;
   background: linear-gradient(90deg,
-    rgba(10, 10, 16, 0.96) 0%,
-    rgba(10, 10, 16, 0.78) 34%,
-    rgba(10, 10, 16, 0.28) 68%,
-    rgba(10, 10, 16, 0.08) 100%);
+    rgb(var(--deep) / 0.96) 0%,
+    rgb(var(--deep) / 0.78) 34%,
+    rgb(var(--deep) / 0.28) 68%,
+    rgb(var(--deep) / 0.08) 100%);
   pointer-events: none;
   animation: none;
   transition: background 240ms ease;
@@ -1877,10 +1896,10 @@ canvas.blob__body {
 
 .row:hover,
 .row.is-cursor {
-  border-color: rgba(255, 255, 255, 0.105);
-  background: rgba(255, 255, 255, 0.04);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035),
-              0 8px 24px rgba(0, 0, 0, 0.14);
+  border-color: rgb(var(--wash) / 0.105);
+  background: rgb(var(--wash) / 0.04);
+  box-shadow: inset 0 1px 0 rgb(var(--wash) / 0.035),
+              0 8px 24px rgb(0 0 0 / calc(0.14 * var(--shade)));
 }
 
 .row:hover::before,
@@ -1893,15 +1912,15 @@ canvas.blob__body {
 .row:hover::after,
 .row.is-cursor::after {
   background: linear-gradient(90deg,
-    rgba(10, 10, 16, 0.94) 0%,
-    rgba(10, 10, 16, 0.7) 34%,
-    rgba(10, 10, 16, 0.2) 68%,
-    rgba(10, 10, 16, 0.04) 100%);
+    rgb(var(--deep) / 0.94) 0%,
+    rgb(var(--deep) / 0.7) 34%,
+    rgb(var(--deep) / 0.2) 68%,
+    rgb(var(--deep) / 0.04) 100%);
 }
 
 .row:active {
   transform: scale(0.99);
-  background: rgba(255, 255, 255, 0.065);
+  background: rgb(var(--wash) / 0.065);
 }
 
 .row__auto-icon {
@@ -1910,19 +1929,19 @@ canvas.blob__body {
   display: grid;
   place-items: center;
   flex: none;
-  border: 1px solid rgba(255, 255, 255, 0.13);
+  border: 1px solid rgb(var(--wash) / 0.13);
   border-radius: 10px;
   background: linear-gradient(145deg, rgba(137, 120, 255, 0.2), rgba(57, 213, 197, 0.09));
   color: #a196ff;
   font-size: 17px;
-  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  box-shadow: 0 5px 14px rgb(0 0 0 / calc(0.26 * var(--shade))), inset 0 1px 0 rgb(var(--wash) / 0.09);
   transition: transform var(--enter), box-shadow var(--enter);
 }
 
 .row:hover .row__auto-icon,
 .row.is-cursor .row__auto-icon {
   transform: translateY(-1px) scale(1.035);
-  box-shadow: 0 7px 18px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.13);
+  box-shadow: 0 7px 18px rgb(0 0 0 / calc(0.32 * var(--shade))), inset 0 1px 0 rgb(var(--wash) / 0.13);
 }
 
 .row__copy {
@@ -1956,7 +1975,7 @@ canvas.blob__body {
 .row.is-picked .row__name { color: var(--text); }
 .row.is-picked {
   border-color: rgba(74, 229, 195, 0.62);
-  background: linear-gradient(90deg, rgba(97, 239, 191, 0.07), rgba(255, 255, 255, 0.025));
+  background: linear-gradient(90deg, rgba(97, 239, 191, 0.07), rgb(var(--wash) / 0.025));
   box-shadow: inset 2px 0 0 rgba(97, 239, 191, 0.78),
               0 0 0 1px rgba(74, 229, 195, 0.18);
 }
@@ -1978,7 +1997,7 @@ canvas.blob__body {
 
 .empty {
   margin: 8px;
-  border: 1px dashed rgba(255, 255, 255, 0.1);
+  border: 1px dashed rgb(var(--wash) / 0.1);
   border-radius: 13px;
   text-align: center;
 }
@@ -1989,8 +2008,8 @@ canvas.blob__body {
 
 
 .toggle {
-  background: rgba(255, 255, 255, 0.06);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  background: rgb(var(--wash) / 0.06);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.12);
 }
 
 /* Keep the 380x560 minimum useful, including expanded connection details. */
@@ -2068,12 +2087,12 @@ canvas.blob__body {
   color: #08281f;
   background: linear-gradient(110deg, #79f1c4, #4adbad 52%, #4ad7cf);
   box-shadow: 0 9px 24px rgba(47, 214, 165, 0.17),
-              inset 0 1px 0 rgba(255, 255, 255, 0.45);
+              inset 0 1px 0 rgb(var(--wash) / 0.45);
 }
 .go[data-mode='off']:hover {
   background: linear-gradient(110deg, #91f7d0, #5be5ba 52%, #57e3db);
   box-shadow: 0 11px 28px rgba(47, 214, 165, 0.24),
-              inset 0 1px 0 rgba(255, 255, 255, 0.52);
+              inset 0 1px 0 rgb(var(--wash) / 0.52);
 }
 
 /* -- after --------------------------------------------------------------- */
@@ -2432,8 +2451,8 @@ canvas.blob__body {
   position: relative;
   padding: 15px 15px 16px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.022);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.055);
+  background: rgb(var(--wash) / 0.022);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.055);
 }
 .pane + .pane { margin-top: 10px; }
 
@@ -2486,8 +2505,8 @@ canvas.blob__body {
   flex: none;
   border-radius: 8px;
   color: var(--text-off);
-  background: rgba(255, 255, 255, 0.04);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  background: rgb(var(--wash) / 0.04);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
   transition: color 260ms var(--ease), transform 260ms var(--ease),
               background 260ms var(--ease);
 }
@@ -2512,14 +2531,14 @@ canvas.blob__body {
 .pane--stacked .pane__glyph { margin-top: 1px; }
 
 /* Measuring is the long one, and it is allowed to look it. */
-.pane--major { padding: 17px 15px 18px; background: rgba(255, 255, 255, 0.035); }
+.pane--major { padding: 17px 15px 18px; background: rgb(var(--wash) / 0.035); }
 
 /* And the paths are a footnote, which is a different thing from a section. */
 .pane--foot {
   display: flex; align-items: center; gap: 10px;
   padding: 11px 13px;
   background: none;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.04);
 }
 .pane--foot .pane__glyph { width: 23px; height: 23px; }
 .pane--foot .ico { width: 13px; height: 13px; }
@@ -2535,7 +2554,7 @@ canvas.blob__body {
   font-size: 10px; line-height: 15px; letter-spacing: 0.03em;
   white-space: nowrap;
   color: var(--text-off);
-  background: rgba(255, 255, 255, 0.05);
+  background: rgb(var(--wash) / 0.05);
   transition: color 260ms var(--ease), background 260ms var(--ease);
 }
 .pill[data-state='on'] { color: var(--ok); background: rgba(31, 216, 164, 0.11); }
@@ -2551,8 +2570,8 @@ canvas.blob__body {
   border-radius: 9px;
   font-size: 11px; line-height: 15px;
   color: var(--text-muted);
-  background: rgba(0, 0, 0, 0.22);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  background: rgb(0 0 0 / calc(0.22 * var(--shade)));
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.03);
   word-break: break-all;
   user-select: text;
   -webkit-user-select: text;
@@ -2593,8 +2612,8 @@ canvas.blob__body {
   margin-top: 10px;
   padding: 11px 12px 12px;
   border-radius: 11px;
-  background: rgba(0, 0, 0, 0.2);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.042);
+  background: rgb(0 0 0 / calc(0.2 * var(--shade)));
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.042);
 }
 .step:first-child { margin-top: 0; }
 
@@ -2635,8 +2654,8 @@ canvas.blob__body {
   margin-top: 12px;
   padding: 9px 10px 10px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.028);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  background: rgb(var(--wash) / 0.028);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
   font-size: 11px; line-height: 16px;
   color: var(--text-off);
 }
@@ -2691,19 +2710,19 @@ canvas.blob__body {
   padding: 0 11px;
   font: inherit; font-size: 12px;
   color: var(--text);
-  background: rgba(0, 0, 0, 0.24);
+  background: rgb(0 0 0 / calc(0.24 * var(--shade)));
   border: 0;
   border-radius: 9px;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
   user-select: text;
   -webkit-user-select: text;
   transition: box-shadow 200ms var(--ease), background 200ms var(--ease);
 }
 .field__in::placeholder { color: var(--text-off); }
-.field__in:hover { background: rgba(0, 0, 0, 0.3); }
+.field__in:hover { background: rgb(0 0 0 / calc(0.3 * var(--shade))); }
 .field__in:focus {
   outline: 0;
-  background: rgba(0, 0, 0, 0.34);
+  background: rgb(0 0 0 / calc(0.34 * var(--shade)));
   box-shadow: inset 0 0 0 1px rgba(31, 216, 164, 0.55),
               0 0 0 3px rgba(31, 216, 164, 0.08);
 }
@@ -2713,11 +2732,11 @@ canvas.blob__body {
   width: 38px;
   display: grid; place-items: center;
   color: var(--text-off);
-  background: rgba(255, 255, 255, 0.05);
+  background: rgb(var(--wash) / 0.05);
   border-radius: 9px;
   transition: color var(--fade), background var(--fade);
 }
-.field__peek:hover { background: rgba(255, 255, 255, 0.09); color: var(--text-muted); }
+.field__peek:hover { background: rgb(var(--wash) / 0.09); color: var(--text-muted); }
 
 
 /* ------------------------------------------------------- narrowing rows */
@@ -2737,7 +2756,7 @@ canvas.blob__body {
   background: transparent;
   transition: background 200ms var(--ease);
 }
-.scope__row:hover:not(:disabled) { background: rgba(255, 255, 255, 0.04); }
+.scope__row:hover:not(:disabled) { background: rgb(var(--wash) / 0.04); }
 .scope__row:disabled { opacity: 0.38; cursor: default; }
 
 /* The rail grows from nothing rather than appearing, which is what makes the
@@ -2770,7 +2789,7 @@ canvas.blob__body {
   font-variant-numeric: tabular-nums;
   transition: color 200ms var(--ease);
 }
-.scope__row[aria-pressed='true'] { background: rgba(255, 255, 255, 0.05); }
+.scope__row[aria-pressed='true'] { background: rgb(var(--wash) / 0.05); }
 .scope__row[aria-pressed='true'] .scope__name { color: var(--text); }
 .scope__row[aria-pressed='true'] .scope__count { color: var(--ok); }
 
@@ -2801,8 +2820,8 @@ canvas.blob__body {
 
 .fold { border-radius: 10px; }
 .fold[data-open] {
-  background: rgba(0, 0, 0, 0.22);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.045);
+  background: rgb(0 0 0 / calc(0.22 * var(--shade)));
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.045);
 }
 
 /* Two rows and four columns: the glyph and the chevron span both rows, the
@@ -2824,7 +2843,7 @@ canvas.blob__body {
   cursor: pointer;
   transition: background var(--fade);
 }
-.fold__cap:hover { background: rgba(255, 255, 255, 0.035); }
+.fold__cap:hover { background: rgb(var(--wash) / 0.035); }
 .fold[data-open] .fold__cap:hover { background: transparent; }
 
 .fold__ico {
@@ -2909,13 +2928,13 @@ canvas.blob__body {
   border-radius: 999px;
   font-size: 11px; line-height: 15px;
   color: var(--text-muted);
-  background: rgba(255, 255, 255, 0.04);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  background: rgb(var(--wash) / 0.04);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
   unicode-bidi: isolate;
   transition: background 180ms var(--ease), color 180ms var(--ease),
               box-shadow 180ms var(--ease), transform 120ms var(--ease);
 }
-.chip:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+.chip:hover:not(:disabled) { background: rgb(var(--wash) / 0.08); color: var(--text); }
 .chip:active:not(:disabled) { transform: scale(0.96); }
 .chip:disabled { cursor: default; }
 .chip__count { color: var(--text-off); font-size: 10px; font-variant-numeric: tabular-nums; }
@@ -2924,8 +2943,8 @@ canvas.blob__body {
 /* Chosen, as opposed to in use. Two different jobs, two different marks. */
 .chip[aria-pressed='true'] {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.1);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  background: rgb(var(--wash) / 0.1);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.18);
 }
 .chip[aria-pressed='true'] .chip__count,
 .chip[aria-pressed='true'] .chip__asn { color: var(--text-muted); }
@@ -2972,16 +2991,16 @@ canvas.blob__body {
   border-radius: var(--edge);
 
   box-shadow:
-    inset 0 1px 1px rgba(255, 255, 255, 0.2),
-    inset 0 2px 2px rgba(255, 255, 255, 0.15),
-    inset 0 4px 4px rgba(255, 255, 255, 0.1),
-    inset 0 8px 8px rgba(255, 255, 255, 0.05),
-    inset 0 16px 16px rgba(255, 255, 255, 0.05),
-    0 -1px 1px rgba(0, 0, 0, 0.02),
-    0 -2px 2px rgba(0, 0, 0, 0.03),
-    0 -4px 4px rgba(0, 0, 0, 0.05),
-    0 -8px 8px rgba(0, 0, 0, 0.06),
-    0 -16px 16px rgba(0, 0, 0, 0.08);
+    inset 0 1px 1px rgb(var(--wash) / 0.2),
+    inset 0 2px 2px rgb(var(--wash) / 0.15),
+    inset 0 4px 4px rgb(var(--wash) / 0.1),
+    inset 0 8px 8px rgb(var(--wash) / 0.05),
+    inset 0 16px 16px rgb(var(--wash) / 0.05),
+    0 -1px 1px rgb(0 0 0 / calc(0.02 * var(--shade))),
+    0 -2px 2px rgb(0 0 0 / calc(0.03 * var(--shade))),
+    0 -4px 4px rgb(0 0 0 / calc(0.05 * var(--shade))),
+    0 -8px 8px rgb(0 0 0 / calc(0.06 * var(--shade))),
+    0 -16px 16px rgb(0 0 0 / calc(0.08 * var(--shade)));
 
   transition: box-shadow var(--turn), border-color var(--turn),
               background var(--turn);
@@ -3080,7 +3099,7 @@ canvas.blob__body {
 .spark:hover .spark__word b,
 .spark[data-mode='running'] .spark__word b {
   color: #fff;
-  text-shadow: 0 0 4px rgba(255, 255, 255, 0.4);
+  text-shadow: 0 0 4px rgb(var(--wash) / 0.4);
 }
 
 /* ------------------------------------------------------------- the stepper */
@@ -3114,8 +3133,8 @@ canvas.blob__body {
   color: var(--text-off);
   transition: color var(--fade), background var(--fade);
 }
-.stepper__key:hover { color: var(--ok); background: rgba(255, 255, 255, 0.07); }
-.stepper__key:active { background: rgba(255, 255, 255, 0.12); }
+.stepper__key:hover { color: var(--ok); background: rgb(var(--wash) / 0.07); }
+.stepper__key:active { background: rgb(var(--wash) / 0.12); }
 .stepper__key .ico { width: 11px; height: 11px; stroke-width: 2.4; }
 /* One chevron, used twice. */
 #sweepFirstUp .ico { transform: rotate(180deg); }
@@ -3125,7 +3144,7 @@ canvas.blob__body {
 .meter {
   height: 3px; margin-top: 11px;
   border-radius: 2px; overflow: hidden;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgb(var(--wash) / 0.06);
 }
 .meter i {
   display: block; height: 100%; width: 0;
@@ -3137,13 +3156,13 @@ canvas.blob__body {
 .tally {
   max-height: 150px; margin-top: 11px;
   overflow-y: auto; list-style: none;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  border-top: 1px solid rgb(var(--wash) / 0.05);
 }
 .tally li {
   display: flex; gap: 9px; align-items: baseline;
   padding: 5px 2px;
   font-size: 11px; line-height: 15px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+  border-bottom: 1px solid rgb(var(--wash) / 0.035);
   animation: rise 240ms var(--ease);
 }
 .tally li:last-child { border-bottom: 0; }
@@ -3153,13 +3172,13 @@ canvas.blob__body {
 .tally::-webkit-scrollbar { width: 10px; }
 .tally::-webkit-scrollbar-track { background: transparent; }
 .tally::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.13);
+  background: rgb(var(--wash) / 0.13);
   background-clip: padding-box;
   border: 3px solid transparent;
   border-radius: 5px;
 }
 .tally::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgb(var(--wash) / 0.2);
   background-clip: padding-box;
 }
 .tally__name {
@@ -3189,11 +3208,11 @@ canvas.blob__body {
   border-radius: 9px;
   font-size: 12px;
   gap: 7px;
-  background: rgba(255, 255, 255, 0.05);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  background: rgb(var(--wash) / 0.05);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.07);
 }
-.pane .btn--quiet:hover { background: rgba(255, 255, 255, 0.09); }
-.pane .btn--quiet:active { background: rgba(255, 255, 255, 0.12); }
+.pane .btn--quiet:hover { background: rgb(var(--wash) / 0.09); }
+.pane .btn--quiet:active { background: rgb(var(--wash) / 0.12); }
 .pane .btn--quiet .ico { color: var(--text-off); }
 .pane .btn--quiet:hover .ico { color: var(--ok); }
 
@@ -3238,8 +3257,8 @@ canvas.blob__body {
   position: absolute;
   left: 4px; top: 7px; bottom: 7px;
   width: 1px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.17),
-                                      rgba(255, 255, 255, 0.05));
+  background: linear-gradient(180deg, rgb(var(--wash) / 0.17),
+                                      rgb(var(--wash) / 0.05));
 }
 .flow__step { position: relative; }
 .flow__step + .flow__step { margin-top: 13px; }
@@ -3250,7 +3269,7 @@ canvas.blob__body {
   width: 9px; height: 9px;
   border-radius: 50%;
   background: var(--bg);
-  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.22);
+  box-shadow: inset 0 0 0 1.5px rgb(var(--wash) / 0.22);
   transition: box-shadow 260ms var(--ease), background 260ms var(--ease);
 }
 .flow__cap {
@@ -3284,16 +3303,16 @@ canvas.blob__body {
   display: grid; grid-template-columns: 1fr 1fr; gap: 2px;
   padding: 2px;
   border-radius: 10px;
-  background: rgba(0, 0, 0, 0.28);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  background: rgb(0 0 0 / calc(0.28 * var(--shade)));
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
 }
 .seg__slide {
   position: absolute;
   top: 2px; bottom: 2px; left: 2px;
   width: calc(50% - 3px);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.085);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  background: rgb(var(--wash) / 0.085);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.1);
   transition: transform 280ms var(--ease);
 }
 .seg[data-route='direct'] .seg__slide { transform: translateX(calc(100% + 2px)); }
@@ -3330,6 +3349,13 @@ canvas.blob__body {
 }
 
 .way { display: block; }
+.way__row { display: flex; align-items: center; gap: 6px; }
+.way__row .seg { flex: 1; min-width: 0; }
+.way__row .info { width: 28px; height: 28px; margin: 0; }
+.way__row .info__bubble { left: auto; right: 0; transform: none; }
+/* Empty, as it is when the way is ready: no room kept for a sentence that
+   is not there. */
+.way__note:empty { min-height: 0; margin: 0; }
 /* The line under the strip is the whole explanation, so it gets room to be
    two lines without the card resizing under the pointer every time the
    answer changes length. */
@@ -3372,8 +3398,8 @@ canvas.blob__body {
   border-radius: 8px;
   font-size: 10px; line-height: 15px;
   color: var(--text-muted);
-  background: rgba(0, 0, 0, 0.28);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  background: rgb(0 0 0 / calc(0.28 * var(--shade)));
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
   /* At the spaces, not through the middle of an argument. A command broken
      as `<su / rfshark-user>` is one somebody will paste wrong. */
   word-break: normal;
@@ -3387,13 +3413,13 @@ canvas.blob__body {
   width: max-content; max-width: 100%;
   margin-top: 9px;
   border-radius: 9px;
-  background: rgba(0, 0, 0, 0.24);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  background: rgb(0 0 0 / calc(0.24 * var(--shade)));
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
   transition: box-shadow 200ms var(--ease), background 200ms var(--ease);
 }
-.port:hover { background: rgba(0, 0, 0, 0.3); }
+.port:hover { background: rgb(0 0 0 / calc(0.3 * var(--shade))); }
 .port:focus-within {
-  background: rgba(0, 0, 0, 0.34);
+  background: rgb(0 0 0 / calc(0.34 * var(--shade)));
   box-shadow: inset 0 0 0 1px rgba(31, 216, 164, 0.55),
               0 0 0 3px rgba(31, 216, 164, 0.08);
 }
@@ -3420,7 +3446,7 @@ canvas.blob__body {
 .pane__aside {
   display: flex; align-items: center; gap: 12px;
   margin-top: 14px; padding-top: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  border-top: 1px solid rgb(var(--wash) / 0.05);
 }
 .pane__aside .pane__why { flex: 1; min-width: 0; margin-top: 0; }
 
@@ -3678,7 +3704,7 @@ canvas.blob__body {
   line-height: 1.5;
   text-align: left;
   white-space: normal;
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 10px 26px rgb(0 0 0 / calc(0.5 * var(--shade)));
   opacity: 0;
   visibility: hidden;
   transition: opacity 120ms ease, visibility 120ms;
@@ -4075,9 +4101,9 @@ canvas.blob__body {
 .row::before {
   opacity: 0.34;
   -webkit-mask-image: linear-gradient(to right, transparent 0%,
-                      rgba(0, 0, 0, 0.10) 44%, #000 82%);
+                      rgb(0 0 0 / calc(0.10 * var(--shade))) 44%, #000 82%);
   mask-image: linear-gradient(to right, transparent 0%,
-              rgba(0, 0, 0, 0.10) 44%, #000 82%);
+              rgb(0 0 0 / calc(0.10 * var(--shade))) 44%, #000 82%);
 }
 .row:hover::before, .row.is-cursor::before { opacity: 0.5; }
 
@@ -4135,7 +4161,7 @@ canvas.blob__body {
 .load {
   width: 22px; height: 4px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.10);
+  background: rgb(var(--wash) / 0.10);
   overflow: hidden;
   position: relative;
 }
@@ -4247,8 +4273,8 @@ canvas.blob__body {
    spacing alone - three seats a pixel apart, eight from the mark beside
    them - and the track itself arrives on the row you are actually on. */
 .row:hover .rail, .row:focus-visible .rail, .row.is-picked .rail {
-  background: rgba(255, 255, 255, 0.05);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  background: rgb(var(--wash) / 0.05);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.08);
 }
 
 /* Every seat the same size, and that size is a pointer target rather than a
@@ -4359,13 +4385,13 @@ canvas.blob__body {
   padding: 9px 14px;
   gap: 10px;
   border: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+  border-bottom: 1px solid rgb(var(--wash) / 0.045);
   border-radius: 0;
   background: transparent;
   box-shadow: none;
   contain-intrinsic-size: auto 46px;
 }
-.sheet__list .row:hover { background: rgba(255, 255, 255, 0.035); }
+.sheet__list .row:hover { background: rgb(var(--wash) / 0.035); }
 .sheet__list .row.is-picked {
   background: rgba(74, 229, 195, 0.07);
   box-shadow: inset 2px 0 0 var(--ok);
@@ -4386,7 +4412,7 @@ canvas.blob__body {
   background-image: var(--flag);
   background-size: cover;
   background-position: center;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.14);
 }
 /* A city has no flag of its own - it is in the country above it - so it gets
    a mark that holds the same column. */
@@ -4828,8 +4854,8 @@ canvas.blob__body {
   0%, 100% { color: var(--glyph-rest); text-shadow: none; }
   28%      { color: var(--glyph-mid); text-shadow: none; }
   46%      { color: var(--glyph-peak); text-shadow: 0 0 13px var(--glyph-halo); }
-  60%      { color: #FFFFFF; text-shadow: 0 0 10px rgba(255, 255, 255, 0.75),
-                                          0 0 20px rgba(255, 255, 255, 0.35); }
+  60%      { color: #FFFFFF; text-shadow: 0 0 10px rgb(var(--wash) / 0.75),
+                                          0 0 20px rgb(var(--wash) / 0.35); }
   78%      { color: var(--glyph-mid); text-shadow: none; }
 }
 
@@ -4904,7 +4930,7 @@ canvas.blob__body {
      ring is the ground colour, softly, so a digit landing on a stroke of
      the box still has an edge; it is a blur too, not an outline. */
   text-shadow:
-    0 0 3px rgba(9, 9, 14, 0.9),
+    0 0 3px rgb(var(--deep) / 0.9),
     0 0 6px rgba(255, 39, 64, 0.55),
     0 0 12px rgba(255, 39, 64, 0.3);
 }
@@ -4931,8 +4957,8 @@ canvas.blob__body {
   overscroll-behavior: contain;
   margin: 11px 0 2px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.02);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  background: rgb(var(--wash) / 0.02);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
 }
 .drop__row {
   display: grid;
@@ -4941,7 +4967,7 @@ canvas.blob__body {
   gap: 4px 10px;
   padding: 7px 11px;
 }
-.drop__row + .drop__row { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04); }
+.drop__row + .drop__row { box-shadow: inset 0 1px 0 rgb(var(--wash) / 0.04); }
 .drop__where { font-size: 11.5px; color: var(--text); }
 .drop__ip {
   font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
@@ -5047,7 +5073,7 @@ canvas.blob__body {
    disc swelling in its middle, then the bead leaving through the gap - the
    Android intro's animation, in CSS. */
 .logo-mark { width: 100%; height: 100%; display: block; overflow: visible; }
-.logo-mark__disc { fill: #f4f6fa; transform-origin: 128px 128px; }
+.logo-mark__disc { fill: var(--disc); transform-origin: 128px 128px; }
 .logo-mark__ring { fill: none; stroke: var(--ok); stroke-width: 20; stroke-linecap: round; }
 .logo-mark__bead { fill: var(--ok); transform-origin: 221px 35px; }
 
@@ -5125,18 +5151,18 @@ canvas.blob__body {
 .intro__badge .ico { width: 40px; height: 40px; }
 .intro__dots { display: flex; justify-content: center; gap: 7px; }
 .intro__dots i {
-  width: 7px; height: 7px; border-radius: 4px; background: rgba(255, 255, 255, 0.18);
+  width: 7px; height: 7px; border-radius: 4px; background: rgb(var(--wash) / 0.18);
   transition: width 380ms cubic-bezier(0.22, 1, 0.36, 1), background 300ms ease;
 }
 .intro__dots i.is-here { width: 24px; background: var(--ok); }
 
 .choice {
   width: 100%; margin-bottom: 12px; padding: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 16px;
-  background: rgba(255, 255, 255, 0.03); color: inherit; font: inherit; text-align: left;
+  border: 1px solid rgb(var(--wash) / 0.08); border-radius: 16px;
+  background: rgb(var(--wash) / 0.03); color: inherit; font: inherit; text-align: left;
 }
 .choice--row { cursor: pointer; }
-.choice--row:hover { background: rgba(255, 255, 255, 0.05); }
+.choice--row:hover { background: rgb(var(--wash) / 0.05); }
 .choice__head { display: flex; align-items: center; gap: 12px; }
 .choice__glyph {
   width: 36px; height: 36px; flex: none; display: grid; place-items: center;
@@ -5151,7 +5177,7 @@ canvas.blob__body {
 .steps__row { display: flex; gap: 12px; padding: 8px 0; }
 .steps__tick {
   width: 20px; height: 20px; flex: none; margin-top: 1px; border-radius: 50%;
-  background: rgba(255, 255, 255, 0.08); position: relative;
+  background: rgb(var(--wash) / 0.08); position: relative;
 }
 .steps__row[data-at='now'] .steps__tick {
   background: rgba(97, 239, 191, 0.18); box-shadow: inset 0 0 0 1px var(--ok);
@@ -5168,6 +5194,138 @@ canvas.blob__body {
 .steps__row[data-at='done'] .steps__name { color: var(--text); }
 .steps__detail { font-size: 11px; color: var(--text-muted); }
 .steps__detail:empty { display: none; }
-.steps__bar { display: none; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.steps__bar { display: none; height: 4px; border-radius: 2px; background: rgb(var(--wash) / 0.08); overflow: hidden; }
 .steps__row[data-at='now'] .steps__bar { display: block; }
 .steps__bar i { display: block; height: 100%; width: 2%; background: var(--ok); transition: width 300ms ease; }
+
+/* ---------------------------------------------------------------- themes */
+
+/* The Android app's nine palettes. Midnight is :root above. Each dark one
+   moves the page, its surfaces and its light; White turns the page over -
+   dark text, dark hairlines, the state colours a step deeper so mint and
+   amber still read on paper. */
+:root[data-theme='graphite'] {
+  --raise-base: 17 18 20;
+  --bg: #111113; --surface: #18191b; --control: #212225;
+  --control-hover: #272a2d; --control-active: #2e3135;
+  --deep: 14 14 16; --raise-top: 52 54 58; --raise-hi: 45 47 51;
+  --raise-mid: 34 35 38; --raise-lo: 29 30 33;
+  --bg-top: #141416; --bg-end: #0c0c0e;
+  --glow: rgba(255, 255, 255, 0.06); --glow-2: rgba(255, 255, 255, 0.02);
+}
+:root[data-theme='black'] {
+  --raise-base: 8 8 11;
+  --bg: #000000; --surface: #0e0e12; --control: #18181f;
+  --control-hover: #202029; --control-active: #2a2a34;
+  --deep: 4 4 6; --raise-top: 44 44 54; --raise-hi: 36 36 46;
+  --raise-mid: 26 26 34; --raise-lo: 20 20 27;
+  --bg-top: #050507; --bg-end: #000000;
+  --glow: rgba(72, 58, 194, 0.12); --glow-2: rgba(50, 196, 189, 0.03);
+}
+:root[data-theme='ocean'] {
+  --raise-base: 12 19 32;
+  --bg: #060b16; --surface: #0f1828; --control: #172236;
+  --control-hover: #1e2b42; --control-active: #26344e;
+  --deep: 6 11 22; --raise-top: 44 60 88; --raise-hi: 37 51 76;
+  --raise-mid: 28 40 60; --raise-lo: 23 34 52;
+  --bg-top: #0a1222; --bg-end: #040810;
+  --glow: rgba(42, 111, 219, 0.22); --glow-2: rgba(50, 160, 196, 0.07);
+}
+:root[data-theme='forest'] {
+  --raise-base: 12 21 18;
+  --bg: #060e0b; --surface: #0f1a16; --control: #16241f;
+  --control-hover: #1d2d27; --control-active: #25372f;
+  --deep: 6 14 11; --raise-top: 44 64 56; --raise-hi: 37 55 48;
+  --raise-mid: 27 42 36; --raise-lo: 22 36 31;
+  --bg-top: #0a1612; --bg-end: #040a08;
+  --glow: rgba(31, 157, 107, 0.2); --glow-2: rgba(50, 196, 150, 0.06);
+}
+:root[data-theme='plum'] {
+  --raise-base: 22 14 27;
+  --bg: #0e0812; --surface: #1b1222; --control: #261a2f;
+  --control-hover: #30213b; --control-active: #3a2946;
+  --deep: 14 8 18; --raise-top: 66 46 80; --raise-hi: 57 39 70;
+  --raise-mid: 43 29 53; --raise-lo: 37 25 46;
+  --bg-top: #160d1c; --bg-end: #09050c;
+  --glow: rgba(162, 58, 194, 0.24); --glow-2: rgba(196, 50, 160, 0.06);
+}
+:root[data-theme='ember'] {
+  --raise-base: 24 17 14;
+  --bg: #110a08; --surface: #1e1512; --control: #2a1d18;
+  --control-hover: #34241e; --control-active: #3f2c25;
+  --deep: 17 10 8; --raise-top: 72 52 44; --raise-hi: 62 44 37;
+  --raise-mid: 47 33 28; --raise-lo: 41 29 24;
+  --bg-top: #1a100c; --bg-end: #0b0605;
+  --glow: rgba(217, 98, 43, 0.22); --glow-2: rgba(196, 120, 50, 0.06);
+}
+:root[data-theme='slate'] {
+  --raise-base: 18 22 27;
+  --bg: #0c0f13; --surface: #161b21; --control: #1f262e;
+  --control-hover: #27303a; --control-active: #303a45;
+  --deep: 12 15 19; --raise-top: 54 64 76; --raise-hi: 46 55 66;
+  --raise-mid: 35 42 51; --raise-lo: 30 36 44;
+  --bg-top: #11161c; --bg-end: #080a0d;
+  --glow: rgba(96, 125, 155, 0.16); --glow-2: rgba(96, 160, 180, 0.05);
+}
+:root[data-theme='white'] {
+  --bg: #f4f5f8; --surface: #ffffff; --control: #eceef2;
+  --control-hover: #e4e7ec; --control-active: #dce0e7;
+  --divider: rgb(0 0 0 / calc(0.09 * var(--shade)));
+  --border: rgb(0 0 0 / calc(0.14 * var(--shade)));
+  --text: #16171d; --text-muted: #474b57; --text-off: #7a7f8e;
+  --ok: #0c9c72; --work: #b7791f; --fail: #d23b54; --focus: #0c9c72;
+  --fail-bg: rgba(210, 59, 84, 0.1);
+  --wash: 0 0 0;
+  --deep: 255 255 255;
+  --raise-top: 255 255 255; --raise-hi: 250 251 253;
+  --raise-mid: 244 245 248; --raise-lo: 238 240 244;
+  --bg-top: #f8f9fb; --bg-end: #eceef3;
+  --glow: rgba(108, 92, 231, 0.12); --glow-2: rgba(50, 196, 189, 0.06);
+  --disc: #111318;
+  --jade-2: #0c9c72;
+  --shade: 0.25;
+  --raise-base: 255 255 255;
+  color-scheme: light;
+}
+
+/* The theme picker: each theme as a little page of itself - its background,
+   a card on it, and a dot of mint - so the choice is seen, not read. */
+.themes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+.theme {
+  display: flex; flex-direction: column; gap: 6px; padding: 6px;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: transparent; color: var(--text-muted); font: inherit; font-size: 11px;
+  cursor: pointer; text-align: left;
+}
+.theme:hover { border-color: rgb(var(--wash) / 0.28); }
+.theme[aria-checked='true'] { border-color: var(--ok); color: var(--text); box-shadow: 0 0 0 1px var(--ok); }
+.theme__page {
+  position: relative; height: 34px; border-radius: 8px; overflow: hidden;
+  background: var(--page);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.08);
+}
+.theme__page i {
+  position: absolute; left: 6px; right: 14px; bottom: 6px; height: 12px;
+  border-radius: 4px; background: var(--card);
+}
+.theme__page b {
+  position: absolute; right: 6px; top: 6px; width: 7px; height: 7px; border-radius: 50%;
+  background: #61efbf;
+}
+
+/* The few colours White cannot take from a variable: the button's working
+   and connected looks, which are dark glass on the dark themes, and the
+   scrollbars, painted for a dark page. */
+:root[data-theme='white'] .go[data-mode='on'] {
+  background: rgba(12, 156, 114, 0.08); border-color: rgba(12, 156, 114, 0.35);
+}
+:root[data-theme='white'] .go[data-mode='on']:hover { background: rgba(12, 156, 114, 0.14); }
+:root[data-theme='white'] .go[data-mode='busy'] {
+  background: rgba(183, 121, 31, 0.08); border-color: rgba(183, 121, 31, 0.3);
+}
+:root[data-theme='white'] .go[data-mode='busy']:hover { background: rgba(183, 121, 31, 0.14); }
+:root[data-theme='white'] .sheet__list::-webkit-scrollbar-thumb,
+:root[data-theme='white'] .sheet__body::-webkit-scrollbar-thumb {
+  border-color: var(--surface); background: #c9ccd4;
+}
+:root[data-theme='white'] .side__cap i { background: #a2a6b2; }
