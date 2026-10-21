@@ -13,7 +13,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -54,14 +53,12 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.erelay.relay.R
 import com.erelay.relay.data.Conn
 import com.erelay.relay.data.Mode
 import com.erelay.relay.data.Place
@@ -141,9 +138,7 @@ fun Home(
 @Composable
 private fun Header(s: HomeState, onLog: () -> Unit, onDrop: () -> Unit, onSettings: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Image(painterResource(R.drawable.app_logo), null,
-            Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)))
-        Spacer(Modifier.width(10.dp))
+        Spacer(Modifier.width(6.dp))
         Text("RELAY", style = Type.strong.copy(fontWeight = FontWeight.W700, letterSpacing = 2.4.sp))
         Grow()
         Box {

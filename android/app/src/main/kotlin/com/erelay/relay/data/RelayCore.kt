@@ -440,6 +440,10 @@ class RelayCore(private val app: Application) {
         _serverCount.value = c.count().toInt()
         _sources.value = readSources(c)
         _cards.value = readCards()
+        // Before loaded, never after: the window picks between the welcome and
+        // the main screen the moment this flips, and with the accounts not yet
+        // read it showed the welcome to a phone that was signed in, for a blink.
+        readHasCredentials()
         _loaded.value = true
     }
 
