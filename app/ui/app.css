@@ -679,6 +679,31 @@ body::before {
 .bar__mark { gap: 9px; }
 .bar__tools { gap: 8px; }
 
+/* The empty middle of the header, there to be dragged. */
+.bar__drag { flex: 1; align-self: stretch; min-width: 12px; }
+
+/* Minimise and close: the window's own buttons, set off from the app's by a
+   hairline, and close turning red the way Windows' does. */
+.bar__win {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 2px;
+  padding-left: 8px;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+.icon--win .ico { width: 14px; height: 14px; }
+.icon--shut:hover { background: #e5484d; color: #fff; }
+
+/* The Window screen is four switches in a row, each with an (i). Following
+   their titles, the (i)s zigzagged with the titles' lengths; at the end of
+   the line they make a column beside the switches instead. */
+.screen[data-screen='window'] .pane__title { display: flex; align-items: center; }
+.screen[data-screen='window'] .pane__title .info { margin-left: auto; margin-right: 10px; }
+/* So close to the edge that the bubble always opens leftwards - even hidden,
+   a centred one would stick out and give the sheet a sideways scroll. */
+.screen[data-screen='window'] .info__bubble { left: auto; right: 0; transform: none; }
+
 .bar__logo {
   width: 32px;
   height: 32px;

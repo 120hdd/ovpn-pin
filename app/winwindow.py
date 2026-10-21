@@ -25,12 +25,10 @@ whole monitor it is a small card in a sea of background. WS_MAXIMIZEBOX is
 taken away for good - that takes the button, the double-click on the title
 bar and the snap to the top of the screen - whether or not it is locked.
 
-Locking is done with the frame rather than by catching messages. Taking away
-WS_THICKFRAME takes the resize edges, and removing Move and Size from the
-system menu takes the drag - DefWindowProc will not move a window whose menu
-has no Move in it. A window procedure written in Python would do the same,
-at the price of the interpreter running for every mouse move the window ever
-gets.
+There is no Windows frame at all: no title bar, no edges. The page draws
+its own header, with minimise and close in it, and moves the window when
+that header is dragged. Locking the position is the page no longer treating
+its header as somewhere to drag from.
 
 Every function here takes an HWND and does nothing without one. Nothing here
 is needed for the app to work; all of it is needed for it to be pleasant.
@@ -41,13 +39,11 @@ import ctypes.wintypes as wintypes
 import os
 
 GWL_STYLE = -16
+WS_CAPTION = 0x00C00000
 WS_THICKFRAME = 0x00040000
+WS_SYSMENU = 0x00080000
+WS_MINIMIZEBOX = 0x00020000
 WS_MAXIMIZEBOX = 0x00010000
-
-SC_SIZE = 0xF000
-SC_MOVE = 0xF010
-SC_MAXIMIZE = 0xF030
-MF_BYCOMMAND = 0x0
 
 SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
@@ -61,8 +57,6 @@ MONITOR_DEFAULTTONULL = 0
 MONITOR_DEFAULTTONEAREST = 2
 
 SPI_GETWORKAREA = 0x0030
-
-DWMWA_EXTENDED_FRAME_BOUNDS = 9
 
 # Smaller than this is not a window anybody meant to leave behind; it is
 # the remains of one being torn down.
@@ -111,16 +105,12 @@ if os.name == 'nt':
     _GetClassNameW = _proto(_user32, 'GetClassNameW', ctypes.c_int,
                             wintypes.HWND, wintypes.LPWSTR, ctypes.c_int)
     _IsWindow = _proto(_user32, 'IsWindow', wintypes.BOOL, wintypes.HWND)
-    _IsZoomed = _proto(_user32, 'IsZoomed', wintypes.BOOL, wintypes.HWND)
-    _IsIconic = _proto(_user32, 'IsIconic', wintypes.BOOL, wintypes.HWND)
     _GetWindowPlacement = _proto(_user32, 'GetWindowPlacement',
                                  wintypes.BOOL, wintypes.HWND,
                                  ctypes.POINTER(WINDOWPLACEMENT))
     _SetWindowPlacement = _proto(_user32, 'SetWindowPlacement',
                                  wintypes.BOOL, wintypes.HWND,
                                  ctypes.POINTER(WINDOWPLACEMENT))
-    _GetWindowRect = _proto(_user32, 'GetWindowRect', wintypes.BOOL,
-                            wintypes.HWND, ctypes.POINTER(wintypes.RECT))
     _SetWindowPos = _proto(_user32, 'SetWindowPos', wintypes.BOOL,
                            wintypes.HWND, wintypes.HWND, ctypes.c_int,
                            ctypes.c_int, ctypes.c_int, ctypes.c_int,
@@ -135,20 +125,10 @@ if os.name == 'nt':
                        if hasattr(_user32, 'SetWindowLongPtrW')
                        else 'SetWindowLongW',
                        _LONG_PTR, wintypes.HWND, ctypes.c_int, _LONG_PTR)
-    _GetSystemMenu = _proto(_user32, 'GetSystemMenu', wintypes.HMENU,
-                            wintypes.HWND, wintypes.BOOL)
-    _RemoveMenu = _proto(_user32, 'RemoveMenu', wintypes.BOOL,
-                         wintypes.HMENU, wintypes.UINT, wintypes.UINT)
-    _DrawMenuBar = _proto(_user32, 'DrawMenuBar', wintypes.BOOL,
-                          wintypes.HWND)
     _MonitorFromRect = _proto(_user32, 'MonitorFromRect', wintypes.HMONITOR,
                               ctypes.POINTER(wintypes.RECT), wintypes.DWORD)
     _GetMonitorInfoW = _proto(_user32, 'GetMonitorInfoW', wintypes.BOOL,
                               wintypes.HMONITOR, ctypes.POINTER(MONITORINFO))
-    _DwmGetWindowAttribute = _proto(_dwm, 'DwmGetWindowAttribute',
-                                    ctypes.c_long, wintypes.HWND,
-                                    wintypes.DWORD, ctypes.c_void_p,
-                                    wintypes.DWORD)
     _DwmSetWindowAttribute = _proto(_dwm, 'DwmSetWindowAttribute',
                                     ctypes.c_long, wintypes.HWND,
                                     wintypes.DWORD, ctypes.c_void_p,
@@ -362,104 +342,31 @@ def place(hwnd, saved):
     return bool(_SetWindowPlacement(hwnd, ctypes.byref(wp)))
 
 
-def _frame(hwnd):
-    """The edges you can see. GetWindowRect includes the invisible resize
-    border, which is the part that goes away with the thick frame."""
-    rc = wintypes.RECT()
-    if _DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS,
-                              ctypes.byref(rc), ctypes.sizeof(rc)) != 0:
-        return None
-    return rc
+# Windows 11 rounds a window's corners only when it has a frame; without one
+# it has to be asked. Windows 10 has no such attribute and the call fails
+# quietly - square corners there, as every window has.
+DWMWA_WINDOW_CORNER_PREFERENCE = 33
+DWMWCP_ROUND = 2
 
 
-# The title bar's own colours, set through DWM rather than drawn by hand.
-# A bar of our own would need the page to do dragging, snapping, the shadow
-# and the system menu, and would fight lock() over the frame; this keeps the
-# real one and only repaints it. Dark mode is 20 on Windows 10 20H1 and
-# later and 19 before it; the three colours are Windows 11 only, and on 10
-# the call fails quietly and the bar is simply dark.
-DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19
-DWMWA_BORDER_COLOR = 34
-DWMWA_CAPTION_COLOR = 35
-DWMWA_TEXT_COLOR = 36
+def borderless(hwnd):
+    """No Windows chrome: no caption, no resize edges, no maximise.
 
-
-def _colorref(hex_color):
-    """#rrggbb as Windows wants it: 0x00bbggrr."""
-    v = hex_color.lstrip('#')
-    r, g, b = int(v[0:2], 16), int(v[2:4], 16), int(v[4:6], 16)
-    return wintypes.DWORD(r | (g << 8) | (b << 16))
-
-
-def paint(hwnd, caption, text, border=None):
-    """Give the title bar the app's colours instead of the system's."""
-    if not alive(hwnd):
-        return False
-    dark = wintypes.BOOL(True)
-    if _DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
-                              ctypes.byref(dark), ctypes.sizeof(dark)) != 0:
-        _DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_OLD,
-                               ctypes.byref(dark), ctypes.sizeof(dark))
-    for attr, color in ((DWMWA_CAPTION_COLOR, caption),
-                        (DWMWA_TEXT_COLOR, text),
-                        (DWMWA_BORDER_COLOR, border or caption)):
-        value = _colorref(color)
-        _DwmSetWindowAttribute(hwnd, attr, ctypes.byref(value),
-                               ctypes.sizeof(value))
-    return True
-
-
-def lock(hwnd, on):
-    """Hold the window where it is and at the size it is, or let it go.
-
-    Either way it cannot be maximised: the maximise box goes in both, and
-    this is what takes it away in the first place.
-
-    Safe to repeat. Changing the frame changes how much of the window rect
-    is invisible border, so the window is nudged afterwards to keep the
-    edges you can see exactly where they were - otherwise locking would grow
-    the window by the width of a border it no longer has.
+    Minimise and the system menu stay in the style even with no caption to
+    show them, because they are what lets the taskbar button minimise the
+    window, and Win+Down. Safe to repeat - it runs on every restore, since
+    WinForms puts its own idea of the frame back now and then.
     """
     if not alive(hwnd):
         return False
     style = _GetStyle(hwnd, GWL_STYLE)
-    want = style & ~WS_MAXIMIZEBOX
-    if on:
-        want &= ~WS_THICKFRAME
-        menu = _GetSystemMenu(hwnd, False)
-        if menu:
-            for command in (SC_MOVE, SC_SIZE, SC_MAXIMIZE):
-                _RemoveMenu(menu, command, MF_BYCOMMAND)
-    else:
-        want |= WS_THICKFRAME
-        if want == style:
-            # Nothing to undo - and this runs on every restore, so it should
-            # not be touching the menu each time.
-            return True
-        # True puts the default system menu back, Move and Size with it,
-        # and Maximize, which is taken straight back out.
-        _GetSystemMenu(hwnd, True)
-        menu = _GetSystemMenu(hwnd, False)
-        if menu:
-            _RemoveMenu(menu, SC_MAXIMIZE, MF_BYCOMMAND)
-    _DrawMenuBar(hwnd)
-    if want == style:
-        return True
-
-    steady = not _IsZoomed(hwnd) and not _IsIconic(hwnd)
-    before = _frame(hwnd) if steady else None
-    _SetStyle(hwnd, GWL_STYLE, want)
-    _SetWindowPos(hwnd, None, 0, 0, 0, 0,
-                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
-                  | SWP_FRAMECHANGED)
-    after = _frame(hwnd) if before else None
-    outer = wintypes.RECT()
-    if after and _GetWindowRect(hwnd, ctypes.byref(outer)):
-        left = outer.left + before.left - after.left
-        top = outer.top + before.top - after.top
-        right = outer.right + before.right - after.right
-        bottom = outer.bottom + before.bottom - after.bottom
-        _SetWindowPos(hwnd, None, left, top, right - left, bottom - top,
-                      SWP_NOZORDER | SWP_NOACTIVATE)
+    want = (style & ~(WS_CAPTION | WS_THICKFRAME | WS_MAXIMIZEBOX))         | WS_SYSMENU | WS_MINIMIZEBOX
+    if want != style:
+        _SetStyle(hwnd, GWL_STYLE, want)
+        _SetWindowPos(hwnd, None, 0, 0, 0, 0,
+                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+                      | SWP_FRAMECHANGED)
+    round_ = wintypes.DWORD(DWMWCP_ROUND)
+    _DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
+                           ctypes.byref(round_), ctypes.sizeof(round_))
     return True

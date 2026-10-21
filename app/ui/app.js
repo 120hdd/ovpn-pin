@@ -748,7 +748,24 @@ function paintWindowOptions(opts) {
   for (const sw of document.querySelectorAll('.toggle[data-option]')) {
     sw.setAttribute('aria-checked', String(!!opts[sw.dataset.option]));
   }
+  paintDrag(!!opts.lockWindow);
 }
+
+/* There is no Windows frame: the header, and each sheet's heading, are what
+   the window is dragged by - unless its position is locked, in which case
+   they are just a header. pywebview looks the regions up on every press, so
+   adding and removing the class is all locking takes. */
+for (const h of document.querySelectorAll('.sheet__heading')) h.classList.add('drag-zone');
+
+function paintDrag(locked) {
+  for (const el of document.querySelectorAll('.drag-zone')) {
+    el.classList.toggle('pywebview-drag-region', !locked);
+  }
+}
+paintDrag(false);
+
+$('winMin').addEventListener('click', () => window.pywebview.api.minimizeWindow());
+$('winClose').addEventListener('click', () => window.pywebview.api.closeWindow());
 
 window.onWindowOptions = (opts) => paintWindowOptions(opts || {});
 

@@ -334,8 +334,15 @@ def _shut_dropped(p):
     p.do("document.getElementById('dropDlg').close()")
 
 
+def _bare(p):
+    # A copy with no account opens Settings by itself; this is the window
+    # behind it - the header, which is also the title bar now.
+    p.do("for (const d of document.querySelectorAll('dialog[open]')) d.close()", 0.6)
+
+
 SCENES = [
     ('main', None, None),
+    ('bare', _bare, None),
     ('main-dead', _dead_mark, _no_dead_mark),
     ('main-busy', _busy, _idle),
     ('main-on', _connected, _idle),

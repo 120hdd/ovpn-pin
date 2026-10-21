@@ -40,6 +40,7 @@
   <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34" /> <circle cx="11" cy="11" r="8" /></symbol>
   <symbol id="i-tower" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9" /> <path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5" /> <circle cx="12" cy="9" r="2" /> <path d="M16.2 4.8c2 2 2.26 5.11.8 7.47" /> <path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1" /> <path d="M9.5 18h5" /> <path d="m8 22 4-11 4 11" /></symbol>
   <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /></symbol>
   <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18" /> <path d="m6 6 12 12" /></symbol>
   <symbol id="i-chev-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6" /></symbol>
   <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /> <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /> <path d="M2 12h20" /></symbol>
@@ -75,11 +76,15 @@
 
 <main class="app">
 
+  <!-- The title bar as well as the header: there is no Windows frame. The
+       name and the empty middle move the window when dragged (drag-zone);
+       the buttons never do. -->
   <header class="bar">
-    <span class="bar__mark">
+    <span class="bar__mark drag-zone">
       <img class="bar__logo" src="app-logo.png" alt="" aria-hidden="true">
       <span class="bar__name">RELAY</span>
     </span>
+    <span class="bar__drag drag-zone" aria-hidden="true"></span>
     <span class="bar__tools">
       <span class="privacy"><i></i>PRIVATE</span>
       <!-- Two sliders, not a cog. The hand-drawn one here was a circle with
@@ -106,6 +111,14 @@
       <button class="icon" id="settings" type="button" aria-label="Settings">
         <svg class="ico" aria-hidden="true"><use href="#i-settings"/></svg>
       </button>
+      <span class="bar__win">
+        <button class="icon icon--win" id="winMin" type="button" aria-label="Minimise">
+          <svg class="ico" aria-hidden="true"><use href="#i-minus"/></svg>
+        </button>
+        <button class="icon icon--win icon--shut" id="winClose" type="button" aria-label="Close">
+          <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
+        </button>
+      </span>
     </span>
   </header>
 
@@ -1090,9 +1103,9 @@
     <section class="pane pane--line" style="--i:1">
       <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-pin"/></svg></span>
       <span class="pane__copy">
-        <h3 class="pane__title">Lock position and size</h3>
-        <p class="pane__why">The window stays where it is and the size it is;
-          dragging the edges or the title bar does nothing.</p>
+        <h3 class="pane__title">Lock position</h3>
+        <p class="pane__why">The window stays where it is; dragging the
+          header does nothing.</p>
       </span>
       <button class="toggle" id="winLock" type="button" data-option="lockWindow"
               role="switch" aria-checked="false"><span></span></button>

@@ -2341,6 +2341,20 @@ class Api:
         # the tray is not contradicted by an open Window screen.
         self._emit('WindowOptions', self._window_options())
 
+    def minimizeWindow(self):
+        """The header's own minimise button - there is no Windows one."""
+        if self._window:
+            self._window.minimize()
+        return {'ok': True}
+
+    def closeWindow(self):
+        """The header's own close button. The same close as the frame's
+        was: the window goes and the closing handler does its work; quitting
+        the app and its connection is still the tray's."""
+        if self._window:
+            threading.Thread(target=self._window.destroy, daemon=True).start()
+        return {'ok': True}
+
     def setWindowOption(self, key, on=False):
         """One of the tray's window switches, from Settings."""
         if key not in WINDOW_DEFAULTS:
@@ -2349,7 +2363,7 @@ class Api:
         return {'ok': True, 'window': self._window_options()}
 
     def _apply_window(self):
-        """Lock and always-on-top, as the settings have them.
+        """No frame, and always-on-top, as the settings have them.
 
         Safe to call again, and called again whenever the window comes back
         from the tray or from being minimised: WinForms owns this window and
@@ -2357,13 +2371,7 @@ class Api:
         underneath it is put back rather than trusted to have stayed.
         """
         try:
-            winwindow.lock(self._hwnd(), self._window_option('lockWindow'))
-        except Exception:
-            traceback.print_exc()
-        try:
-            # The title bar in the app's colours: the top of the page's own
-            # background, and its muted text.
-            winwindow.paint(self._hwnd(), caption='#12111c', text='#b9bac6')
+            winwindow.borderless(self._hwnd())
         except Exception:
             traceback.print_exc()
         try:
@@ -2488,7 +2496,7 @@ class Tray:
             Item(lambda _: self._act_label(), self._act),
             Item('Favourites', Menu(self._favourite_items)),
             Menu.SEPARATOR,
-            switch('lockWindow', 'Lock position and size'),
+            switch('lockWindow', 'Lock position'),
             switch('minToTray', 'Minimise to tray'),
             switch('onTop', 'Always on top'),
             Menu.SEPARATOR,
@@ -3810,7 +3818,13 @@ def main():
         min_size=least,
         on_top=api._window_option('onTop'),
         background_color='#111113',
-        resizable=True,
+        # No Windows chrome: the header is the title bar, with its own
+        # minimise and close, and dragging it moves the window. Only the
+        # parts marked as drag regions drag - never a button.
+        frameless=True,
+        easy_drag=False,
+        shadow=True,
+        resizable=False,
         text_select=False,
         zoomable=False,
     )
