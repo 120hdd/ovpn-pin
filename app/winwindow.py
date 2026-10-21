@@ -149,6 +149,10 @@ if os.name == 'nt':
                                     ctypes.c_long, wintypes.HWND,
                                     wintypes.DWORD, ctypes.c_void_p,
                                     wintypes.DWORD)
+    _DwmSetWindowAttribute = _proto(_dwm, 'DwmSetWindowAttribute',
+                                    ctypes.c_long, wintypes.HWND,
+                                    wintypes.DWORD, ctypes.c_void_p,
+                                    wintypes.DWORD)
     _SystemParametersInfoW = _proto(_user32, 'SystemParametersInfoW',
                                     wintypes.BOOL, wintypes.UINT,
                                     wintypes.UINT, ctypes.c_void_p,
@@ -366,6 +370,44 @@ def _frame(hwnd):
                               ctypes.byref(rc), ctypes.sizeof(rc)) != 0:
         return None
     return rc
+
+
+# The title bar's own colours, set through DWM rather than drawn by hand.
+# A bar of our own would need the page to do dragging, snapping, the shadow
+# and the system menu, and would fight lock() over the frame; this keeps the
+# real one and only repaints it. Dark mode is 20 on Windows 10 20H1 and
+# later and 19 before it; the three colours are Windows 11 only, and on 10
+# the call fails quietly and the bar is simply dark.
+DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19
+DWMWA_BORDER_COLOR = 34
+DWMWA_CAPTION_COLOR = 35
+DWMWA_TEXT_COLOR = 36
+
+
+def _colorref(hex_color):
+    """#rrggbb as Windows wants it: 0x00bbggrr."""
+    v = hex_color.lstrip('#')
+    r, g, b = int(v[0:2], 16), int(v[2:4], 16), int(v[4:6], 16)
+    return wintypes.DWORD(r | (g << 8) | (b << 16))
+
+
+def paint(hwnd, caption, text, border=None):
+    """Give the title bar the app's colours instead of the system's."""
+    if not alive(hwnd):
+        return False
+    dark = wintypes.BOOL(True)
+    if _DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
+                              ctypes.byref(dark), ctypes.sizeof(dark)) != 0:
+        _DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_OLD,
+                               ctypes.byref(dark), ctypes.sizeof(dark))
+    for attr, color in ((DWMWA_CAPTION_COLOR, caption),
+                        (DWMWA_TEXT_COLOR, text),
+                        (DWMWA_BORDER_COLOR, border or caption)):
+        value = _colorref(color)
+        _DwmSetWindowAttribute(hwnd, attr, ctypes.byref(value),
+                               ctypes.sizeof(value))
+    return True
 
 
 def lock(hwnd, on):

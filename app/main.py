@@ -2361,6 +2361,12 @@ class Api:
         except Exception:
             traceback.print_exc()
         try:
+            # The title bar in the app's colours: the top of the page's own
+            # background, and its muted text.
+            winwindow.paint(self._hwnd(), caption='#12111c', text='#b9bac6')
+        except Exception:
+            traceback.print_exc()
+        try:
             if self._window:
                 self._window.on_top = self._window_option('onTop')
         except Exception:
