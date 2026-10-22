@@ -67,11 +67,25 @@ private fun sig3(v: Double): String {
  * What a pick code says on the front of the app. Four shapes: auto, a
  * country, a city, and one file - with or without a provider after a colon.
  */
-fun nameOfPick(code: String, countryNames: Map<String, String>): String {
+fun nameOfPick(
+    code: String, countryNames: Map<String, String>,
+    cities: Map<String, List<com.erelay.relay.data.City>> = emptyMap(),
+): String {
     if (code == "auto") return "Fastest available"
     if (code.startsWith("file:")) {
-        return code.removePrefix("file:").replace(Regex("^\\d+\\.\\d+s-"), "")
+        // One exit reads as where it is, not as the config's filename: the
+        // city when it can be told, the country, and the server's number.
+        val stem = code.removePrefix("file:").replace(Regex("^\\d+\\.\\d+s-"), "")
             .removeSuffix(".ovpn")
+        val cc = stem.take(2).lowercase()
+        val country = countryNames[cc] ?: countryName(cc)
+        val three = Regex("^[a-z]{2}-([a-z]{3})").find(stem)?.groupValues?.get(1)
+        val here = cities[cc].orEmpty()
+        val city = if (here.size == 1) here[0].name
+            else here.firstOrNull { three != null && it.code.substringAfter('/').startsWith(three) }?.name
+        val number = serverNumber(stem)
+        return listOfNotNull(city?.ifEmpty { null }, country).joinToString(", ") +
+            (number?.let { " · $it" } ?: "")
     }
     val (place, provider) = code.split(":").let { it[0] to it.getOrNull(1) }
     val cc = place.substringBefore("/")
@@ -80,6 +94,10 @@ fun nameOfPick(code: String, countryNames: Map<String, String>): String {
     val base = if (city.isEmpty()) country else "${city.replaceFirstChar { it.uppercase() }}, $country"
     return if (provider.isNullOrEmpty()) base else "$base · ${providerName(provider)}"
 }
+
+/** A server's own number out of its host or filename: ar-008.x.com is #008. */
+fun serverNumber(host: String): String? =
+    Regex("[a-z]{2}-(\\d{2,4})(?:\\.|_|$)").find(host.lowercase())?.groupValues?.get(1)?.let { "#$it" }
 
 fun providerName(key: String) = when (key) {
     "surfshark" -> "Surfshark"

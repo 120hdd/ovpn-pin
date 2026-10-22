@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -14,12 +15,15 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -33,8 +37,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
@@ -44,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.erelay.relay.data.Captcha
 import com.erelay.relay.data.Said
+import com.erelay.relay.ui.theme.Shape
 import com.erelay.relay.ui.theme.Tone
 import com.erelay.relay.ui.theme.Type
 import kotlinx.coroutines.launch
@@ -57,16 +65,22 @@ private enum class Who(val key: String, val label: String) {
  * Adding an account. Surfshark is a service username and password, checked
  * by the exits themselves, so it is two writes. Windscribe is a login behind
  * a puzzle: this fetches the puzzle and [Captcha] finishes it.
+ *
+ * One account per provider: a provider that already has one is shown as
+ * added and cannot be picked, so the way to change it is to remove it first.
  */
 @Composable
 fun AddAccount(
     open: Boolean,
     provider: String,
+    /** Providers that already have an account. */
+    taken: Set<String>,
     onClose: () -> Unit,
     addSurfshark: suspend (String, String, String) -> Said,
     beginWindscribe: suspend (String, String, String) -> Pair<Said, Pair<String, Captcha>?>,
     finishWindscribe: suspend (String, String, List<Int>, List<Int>, String) -> Said,
-    onDone: (String) -> Unit,
+    /** The line to show, and which provider the new account is for. */
+    onDone: (String, String) -> Unit,
 ) {
     var who by remember { mutableStateOf(Who.SURFSHARK) }
     var user by remember { mutableStateOf("") }
@@ -87,36 +101,64 @@ fun AddAccount(
         }
     }
 
-    Sheet(open, "Sign-in", "Add an account", onClose) {
-        Spacer(Modifier.height(6.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Segment(Who.entries, who, { it.label }, { who = it; said = null }, Modifier.weight(1f),
-                enabled = !busy)
-            InfoTip(if (who == Who.SURFSHARK)
-                "The service username and password from Surfshark's manual-setup page - not " +
-                    "the email you log in with. They change when you reset them there."
-            else "Your Windscribe username and password. Windscribe asks you to solve a " +
-                "puzzle; the sign-in is tried once, and never again behind your back.")
+    // Its own page per provider: opened from that provider's card, for that
+    // provider, with nothing to switch.
+    Sheet(open, "Accounts", "Add a ${who.label} account", onClose) {
+        Spacer(Modifier.height(4.dp))
+        ProviderHero(who)
+        if (who.key in taken) {
+            Spacer(Modifier.height(14.dp))
+            Pane {
+                Text("${who.label} already has its account.", style = Type.strong)
+                Text("Each provider takes one account. Remove it in Accounts to add a different one.",
+                    style = Type.small, modifier = Modifier.padding(top = 4.dp))
+            }
+            return@Sheet
         }
+
+        Spacer(Modifier.height(18.dp))
+        Eyebrow(if (who == Who.SURFSHARK) "Service username" else "Username or email")
+        Field(user, { user = it }, if (who == Who.SURFSHARK) "From the manual-setup page" else "Your Windscribe login")
         Spacer(Modifier.height(12.dp))
-        Field(user, { user = it }, if (who == Who.SURFSHARK) "Service username" else "Username")
-        Spacer(Modifier.height(8.dp))
+        Eyebrow("Password")
         Field(password, { password = it }, "Password", secret = true)
         if (who == Who.WINDSCRIBE) {
-            Spacer(Modifier.height(8.dp))
-            Field(twoFa, { twoFa = it }, "2FA code, if it is on", keyboard = androidx.compose.ui.text.input.KeyboardType.Number)
+            Spacer(Modifier.height(12.dp))
+            Eyebrow("Two-factor code", hint = "optional")
+            Field(twoFa, { twoFa = it }, "Only if it is on", keyboard = androidx.compose.ui.text.input.KeyboardType.Number)
         }
-        Spacer(Modifier.height(8.dp))
-        Field(label, { label = it }, "A name for it (optional)")
-        ButtonRow {
-            Btn(if (busy) "Working…" else if (who == Who.SURFSHARK) "Save" else "Sign in", {
+        Spacer(Modifier.height(12.dp))
+        Eyebrow("Name", hint = "optional")
+        Field(label, { label = it }, "The username, if you leave this")
+
+        Spacer(Modifier.height(14.dp))
+        // Where it goes, said before it is typed rather than after.
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Tone.control.copy(alpha = 0.6f))
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Glyph.key, null, Modifier.size(16.dp), tint = Tone.ok)
+            Spacer(Modifier.width(10.dp))
+            Text("Kept on this phone, encrypted with a key the Android keystore holds. " +
+                "Sent only to ${who.label}.", style = Type.small)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Btn(
+            when {
+                busy -> "Working…"
+                who == Who.SURFSHARK -> "Save account"
+                else -> "Continue to the puzzle"
+            },
+            {
                 busy = true
                 said = null
                 scope.launch {
                     if (who == Who.SURFSHARK) {
                         val r = addSurfshark(label, user, password)
                         busy = false
-                        if (r.ok) onDone("Surfshark account saved. Now get its servers.") else said = r
+                        if (r.ok) onDone("Surfshark account saved. Now get its servers.", who.key) else said = r
                     } else {
                         val (r, got) = beginWindscribe(label, user, password)
                         if (!r.ok || got == null) {
@@ -127,9 +169,11 @@ fun AddAccount(
                         }
                     }
                 }
-            }, strong = true, enabled = !busy, modifier = Modifier.weight(1f))
-            Btn("Cancel", onClose, enabled = !busy)
-        }
+            },
+            modifier = Modifier.fillMaxWidth().height(52.dp), strong = true,
+            enabled = !busy && who.key !in taken && user.isNotBlank() && password.isNotEmpty(),
+            icon = if (who == Who.SURFSHARK) Glyph.check else Glyph.chevRight,
+        )
         said?.let { SaidLine(it.text, bad = !it.ok) }
     }
 
@@ -145,9 +189,63 @@ fun AddAccount(
             val r = finishWindscribe(token, solution, xs, ys, twoFa.trim())
             puzzle = null
             busy = false
-            if (r.ok) onDone("Signed in to Windscribe. Now get its servers.") else said = r
+            if (r.ok) onDone("Signed in to Windscribe. Now get its servers.", Who.WINDSCRIBE.key) else said = r
         },
     )
+}
+
+/** A field's caption: small capitals over it, and a quiet word for optional. */
+@Composable
+private fun Eyebrow(text: String, hint: String? = null) {
+    Row(Modifier.padding(start = 2.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(text.uppercase(), style = Type.eyebrow.copy(color = Tone.textMuted))
+        if (hint != null) {
+            Spacer(Modifier.width(6.dp))
+            Text(hint, style = Type.small.copy(color = Tone.textOff, fontSize = 11.sp))
+        }
+    }
+}
+
+/**
+ * The chosen provider, large: its mark in a lit tile, its name, and the one
+ * thing worth knowing before typing - which login it wants.
+ */
+@Composable
+private fun ProviderHero(w: Who) {
+    val brand = if (w == Who.WINDSCRIBE) Tone.windscribe else Tone.surfshark
+    val shape = RoundedCornerShape(Shape.card)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Tone.surface.copy(alpha = 0.72f))
+            .background(Brush.linearGradient(listOf(brand.copy(alpha = 0.16f), Color.Transparent)))
+            .border(1.dp, brand.copy(alpha = 0.28f), shape)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(52.dp).clip(RoundedCornerShape(16.dp)).background(brand.copy(alpha = 0.16f))
+                .border(1.dp, brand.copy(alpha = 0.35f), RoundedCornerShape(16.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(if (w == Who.WINDSCRIBE) Glyph.windscribe else Glyph.surfshark, null,
+                Modifier.size(26.dp), tint = brand)
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Connect ${w.label}", style = Type.strong.copy(fontSize = 17.sp))
+            Text(if (w == Who.SURFSHARK)
+                "The service login from Surfshark's manual-setup page, not your email."
+            else "Your Windscribe login. A short puzzle comes next, asked once.",
+                style = Type.small, modifier = Modifier.padding(top = 2.dp))
+        }
+        InfoTip(if (w == Who.SURFSHARK)
+            "The service username and password from Surfshark's manual-setup page - not " +
+                "the email you log in with. They change when you reset them there."
+        else "Your Windscribe username and password. Windscribe asks you to solve a " +
+            "puzzle; the sign-in is tried once, and never again behind your back.")
+    }
 }
 
 private const val TRAIL_MAX = 50

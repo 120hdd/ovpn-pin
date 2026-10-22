@@ -14,9 +14,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,13 +43,15 @@ import com.erelay.relay.data.ProviderCard
 import com.erelay.relay.data.RelayCore
 import com.erelay.relay.data.Said
 import com.erelay.relay.data.TunnelPlan
+import com.erelay.relay.ui.theme.Shape
 import com.erelay.relay.ui.theme.Tone
 import com.erelay.relay.ui.theme.Type
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 
 private enum class Screen(val title: String, val note: String) {
     MENU("Settings", ""),
-    SIGN_IN("Sign-in", "the accounts this app can use"),
+    ACCOUNTS("Accounts", "your providers, sign-ins and servers"),
     CONNECTION("Connection", "your own tunnel, and what it leaves alone"),
     SERVERS("Servers", "finding them, pinning them, timing them"),
     LOOK("Look and feel", "theme, haptics, the orb"),
@@ -80,13 +84,13 @@ fun Prefs(
     notice: String,
     feel: com.erelay.relay.data.Feel,
     onFeel: (com.erelay.relay.data.Feel) -> Unit,
-    /** Where to open: "menu", "sign-in" or "connection". */
+    /** Where to open: "menu", "accounts" or "connection". */
     start: String = "menu",
 ) {
     var screen by rememberSaveable { mutableStateOf(Screen.MENU) }
     LaunchedEffect(open, start) {
         screen = if (!open) Screen.MENU else when (start) {
-            "sign-in" -> Screen.SIGN_IN
+            "accounts" -> Screen.ACCOUNTS
             "connection" -> Screen.CONNECTION
             else -> Screen.MENU
         }
@@ -105,12 +109,12 @@ fun Prefs(
         when (screen) {
             Screen.MENU -> {
                 Spacer(Modifier.height(4.dp))
-                for (s in listOf(Screen.SIGN_IN, Screen.CONNECTION, Screen.SERVERS, Screen.LOOK, Screen.ABOUT)) {
+                for (s in listOf(Screen.ACCOUNTS, Screen.CONNECTION, Screen.SERVERS, Screen.LOOK, Screen.ABOUT)) {
                     MenuRow(s.title, s.note) { screen = s }
                     if (s != Screen.ABOUT) Divider()
                 }
             }
-            Screen.SIGN_IN -> SignIn(core, accounts, cards, pinRun, onAddAccount, notice)
+            Screen.ACCOUNTS -> AccountsScreen(core, accounts, cards, pinRun, onAddAccount, notice)
             Screen.CONNECTION -> Connection(core, tunnel, allowLan)
             Screen.SERVERS -> Servers(core, serverCount, countryCount, pinPlan, pinRun,
                 deadCount, asideCount, onImport, onDrop)
@@ -120,66 +124,252 @@ fun Prefs(
     }
 }
 
-// -- sign-in ------------------------------------------------------------------
+// -- accounts -----------------------------------------------------------------
 
+/**
+ * Accounts: one card per provider rather than a list of accounts in one pane
+ * and the providers' steps in another. Everything about Surfshark - the
+ * accounts it has, how far along it is, and the one thing to do next - is in
+ * Surfshark's card, so there is nothing to match up between two lists.
+ */
 @Composable
-private fun SignIn(
+private fun AccountsScreen(
     core: RelayCore, accounts: List<Account>, cards: Map<String, ProviderCard>, run: PinRun,
     onAddAccount: (String) -> Unit, notice: String,
 ) {
     val scope = rememberCoroutineScope()
     var said by remember { mutableStateOf<Said?>(null) }
     var busy by remember { mutableStateOf("") }
-    val ready = accounts.count { it.signedIn }
+    val providers = listOf(Accounts.SURFSHARK, Accounts.WINDSCRIBE)
+    val ready = providers.count { cards[it]?.usable == true }
 
+    AccountsSummary(ready, providers.size, accounts.size)
     if (notice.isNotEmpty()) SaidLine(notice)
 
-    Pane(icon = Glyph.key, title = "Accounts", pill = if (ready > 0) "$ready ready" else null) {
-        if (accounts.isEmpty()) {
-            Text("No accounts yet. Add one to connect.", style = Type.body)
+    for (p in providers) {
+        ProviderAccounts(p, cards[p] ?: ProviderCard(), accounts.filter { it.provider == p },
+            busy = busy == p,
+            onAdd = { onAddAccount(p) },
+            onUse = { a -> scope.launch { said = core.useAccount(a.id) } },
+            onRemove = { a -> scope.launch { said = core.removeAccount(a.id) } },
+        ) { action ->
+            busy = p
+            said = null
+            scope.launch {
+                said = when (action) {
+                    "servers" -> if (p == Accounts.SURFSHARK) core.surfsharkServers()
+                                 else core.windscribeServers(freeOnly = false)
+                    // Pinned right here: point the run at this provider's pile and
+                    // start it, and the progress shows under the cards.
+                    "pin" -> core.pinFor(p).let { if (it.ok) core.startPin().takeIf { s -> !s.ok } else it }
+                    "refresh" -> core.windscribeRefresh()
+                    else -> null
+                }
+                busy = ""
+            }
         }
-        for (a in accounts) AccountRow(a,
-            onUse = { scope.launch { said = core.useAccount(a.id) } },
-            onRemove = { scope.launch { said = core.removeAccount(a.id) } })
-        ButtonRow { Btn("Add an account", { onAddAccount(Accounts.SURFSHARK) }) }
     }
 
-    Pane(icon = Glyph.globe, title = "Servers from each provider",
-        help = "Each provider in three steps, one button each: sign in, get its server " +
-            "list, then pin it - resolve every server to its real address over " +
-            "DNS-over-HTTPS, since this line's resolver forges them. After that the button " +
-            "keeps the list up to date.") {
-        for (p in listOf(Accounts.SURFSHARK, Accounts.WINDSCRIBE)) {
-            val card = cards[p] ?: ProviderCard()
-            ProviderStep(p, card, busy = busy == p) { action ->
-                busy = p
-                said = null
-                scope.launch {
-                    said = when (action) {
-                        "sign-in" -> { onAddAccount(p); null }
-                        "servers" -> if (p == Accounts.SURFSHARK) core.surfsharkServers()
-                                     else core.windscribeServers(freeOnly = false)
-                        // Pinned right here: point the run at this provider's pile and
-                        // start it, and the progress shows under the cards.
-                        "pin" -> core.pinFor(p).let { if (it.ok) core.startPin().takeIf { s -> !s.ok } else it }
-                        "refresh" -> core.windscribeRefresh()
-                        else -> null
-                    }
-                    busy = ""
+    if (run.running || run.finished.isNotEmpty()) Pane { PinRunView(run) { core.cancelPin() } }
+    said?.let { SaidLine(it.text, bad = !it.ok) }
+}
+
+/** The line across the top: how many providers can connect, as a number and a bar. */
+@Composable
+private fun AccountsSummary(ready: Int, of: Int, accounts: Int) {
+    val shape = RoundedCornerShape(Shape.card)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp, bottom = 6.dp)
+            .clip(shape)
+            .background(Tone.surface.copy(alpha = 0.72f))
+            .background(Brush.linearGradient(listOf(Tone.ok.copy(alpha = 0.13f), Tone.accent.copy(alpha = 0.07f))))
+            .border(1.dp, Tone.ok.copy(alpha = 0.2f), shape)
+            .padding(18.dp),
+    ) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text("$ready", style = Type.title.copy(fontSize = 34.sp, lineHeight = 36.sp,
+                color = if (ready > 0) Tone.ok else Tone.text))
+            Text(" of $of ready", style = Type.strong.copy(color = Tone.textMuted),
+                modifier = Modifier.padding(bottom = 5.dp))
+            Spacer(Modifier.weight(1f))
+            Pill(if (accounts == 1) "1 account" else "$accounts accounts", good = accounts > 0)
+        }
+        Text(when {
+            ready == of -> "Every provider can connect."
+            accounts == 0 -> "Add an account to connect."
+            ready > 0 -> "Enough to connect. The other provider is optional."
+            else -> "Almost there: get the servers and pin them."
+        }, style = Type.small, modifier = Modifier.padding(top = 2.dp))
+        Spacer(Modifier.height(14.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            repeat(of) { i ->
+                Box(Modifier.weight(1f).height(4.dp).clip(CircleShape)
+                    .background(if (i < ready) Tone.ok else Tone.control))
+            }
+        }
+    }
+}
+
+/**
+ * One provider: its mark and how it stands, the three steps to being able to
+ * connect through it, its accounts, and the one button that is next.
+ */
+@Composable
+private fun ProviderAccounts(
+    provider: String, card: ProviderCard, accounts: List<Account>, busy: Boolean,
+    onAdd: () -> Unit, onUse: (Account) -> Unit, onRemove: (Account) -> Unit, act: (String) -> Unit,
+) {
+    val name = providerName(provider)
+    val brand = if (provider == Accounts.WINDSCRIBE) Tone.windscribe else Tone.surfshark
+    val shape = RoundedCornerShape(Shape.card)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+            .clip(shape)
+            .background(Tone.surface.copy(alpha = 0.72f))
+            .border(1.dp, if (card.usable) Tone.ok.copy(alpha = 0.35f) else Tone.divider, shape)
+            .padding(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)).background(brand.copy(alpha = 0.14f))
+                    .border(1.dp, brand.copy(alpha = 0.3f), RoundedCornerShape(14.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(if (provider == Accounts.WINDSCRIBE) Glyph.windscribe else Glyph.surfshark, null,
+                    Modifier.size(22.dp), tint = brand)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(name, style = Type.strong.copy(fontSize = 17.sp))
+                Text(when {
+                    card.usable && card.waiting > 0 -> "${card.servers} ready · ${card.waiting} to pin"
+                    card.usable -> "${card.servers} servers ready to connect"
+                    card.servers > 0 -> "${card.servers} servers · add an account to use them"
+                    card.account && card.waiting > 0 -> "${card.waiting} servers waiting to be pinned"
+                    card.account -> "Signed in · no servers yet"
+                    else -> "Not set up"
+                }, style = Type.small, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            // Windscribe only: its proxy credential goes stale now and then, and
+            // this fetches another with the session already held - no puzzle.
+            if (provider == Accounts.WINDSCRIBE && card.account) {
+                IconButton(Glyph.refresh, "Refresh the Windscribe credential", { act("refresh") },
+                    size = 40.dp, enabled = !busy)
+            }
+            Pill(if (card.usable) "Ready" else "Set up", good = card.usable, dot = card.usable)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Steps(card)
+
+        if (accounts.isNotEmpty()) {
+            Spacer(Modifier.height(14.dp))
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Tone.bg.copy(alpha = 0.45f))
+                .border(1.dp, Tone.divider, RoundedCornerShape(14.dp))) {
+                accounts.forEachIndexed { i, a ->
+                    if (i > 0) Divider()
+                    AccountLine(a, brand, onUse = { onUse(a) }, onRemove = { onRemove(a) })
                 }
             }
         }
-        if (run.running || run.finished.isNotEmpty()) PinRunView(run) { core.cancelPin() }
-        said?.let { SaidLine(it.text, bad = !it.ok) }
+
+        val (step, label) = when {
+            !card.account -> "add" to "Add a $name account"
+            card.waiting > 0 -> "pin" to "Pin ${card.waiting} waiting"
+            card.servers == 0 -> "servers" to "Get servers"
+            else -> "servers" to "Update servers"
+        }
+        ButtonRow {
+            Btn(if (busy) "Working…" else label, { if (step == "add") onAdd() else act(step) },
+                modifier = Modifier.weight(1f), enabled = !busy, strong = step != "servers" || card.servers == 0,
+                icon = when (step) {
+                    "add" -> Glyph.plus
+                    "pin" -> Glyph.pin
+                    else -> Glyph.refresh
+                })
+        }
+    }
+}
+
+/** Account, servers, pinned: dots joined by a line that fills as each is done. */
+@Composable
+private fun Steps(card: ProviderCard) {
+    val steps = listOf(
+        "Account" to card.account,
+        "Servers" to (card.servers > 0 || card.waiting > 0),
+        "Pinned" to (card.servers > 0),
+    )
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        steps.forEachIndexed { i, (word, done) ->
+            if (i > 0) Box(Modifier.weight(1f).padding(horizontal = 8.dp).height(2.dp).clip(CircleShape)
+                .background(if (done) Tone.ok.copy(alpha = 0.55f) else Tone.divider))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(20.dp).clip(CircleShape)
+                        .background(if (done) Tone.ok else Color.Transparent)
+                        .border(1.5.dp, if (done) Tone.ok else Tone.border, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (done) Icon(Glyph.check, null, Modifier.size(12.dp), tint = Tone.ink)
+                    else Text("${i + 1}", style = Type.eyebrow.copy(color = Tone.textOff))
+                }
+                Spacer(Modifier.width(6.dp))
+                Text(word, style = Type.small.copy(color = if (done) Tone.text else Tone.textOff))
+            }
+        }
+    }
+}
+
+/**
+ * One account: an initial, its name and state, and Use. Remove asks once
+ * more in place, because it cannot be undone and the button is a thumb's
+ * width from Use.
+ */
+@Composable
+private fun AccountLine(a: Account, brand: Color, onUse: () -> Unit, onRemove: () -> Unit) {
+    var sure by remember(a.id) { mutableStateOf(false) }
+    val title = a.label.ifEmpty { a.username }
+    Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier.size(32.dp).clip(CircleShape)
+                .background(if (a.active) brand.copy(alpha = 0.2f) else Tone.control),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(title.take(1).uppercase().ifEmpty { "?" },
+                style = Type.strong.copy(fontSize = 13.sp, color = if (a.active) brand else Tone.textMuted))
+        }
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = Type.strong.copy(fontSize = 14.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(6.dp).clip(CircleShape).background(if (a.signedIn) Tone.ok else Tone.work))
+                Spacer(Modifier.width(6.dp))
+                Text(listOfNotNull(if (a.active) "In use" else null,
+                    if (a.signedIn) "signed in" else "not signed in").joinToString(" · "),
+                    style = Type.small, maxLines = 1)
+            }
+        }
+        when {
+            sure -> {
+                Btn("Remove", onRemove, danger = true)
+                IconButton(Glyph.x, "Keep it", { sure = false }, size = 40.dp)
+            }
+            else -> {
+                if (!a.active) Btn("Use", onUse)
+                IconButton(Glyph.x, "Remove ${title}", { sure = true }, size = 40.dp, tint = Tone.textOff)
+            }
+        }
     }
 }
 
 /** A pin run as it goes: a bar, the counts, the last address, and Stop. */
 @Composable
 private fun PinRunView(run: PinRun, onStop: () -> Unit) {
-    Spacer(Modifier.height(10.dp))
-    Divider()
-    Spacer(Modifier.height(10.dp))
     if (run.running) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Pinning", style = Type.strong.copy(fontSize = 14.sp), modifier = Modifier.weight(1f))
@@ -193,76 +383,7 @@ private fun PinRunView(run: PinRun, onStop: () -> Unit) {
         if (run.last.isNotEmpty()) Text(run.last, style = Type.mono.copy(color = Tone.textMuted),
             maxLines = 1, overflow = TextOverflow.Ellipsis)
     } else {
-        SaidLine(run.finished)
-    }
-}
-
-@Composable
-private fun AccountRow(a: Account, onUse: () -> Unit, onRemove: () -> Unit) {
-    val lit = a.active && a.signedIn
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(if (lit) Tone.ok.copy(alpha = 0.05f) else Tone.bg.copy(alpha = 0.4f))
-            .border(1.dp, if (lit) Tone.ok.copy(alpha = 0.6f) else Tone.divider, RoundedCornerShape(14.dp))
-            .padding(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(a.providerName.uppercase(),
-            style = Type.eyebrow.copy(color = if (a.provider == Accounts.WINDSCRIBE) Tone.ok else Tone.textMuted),
-            modifier = Modifier.clip(CircleShape).border(1.dp, Tone.border, CircleShape)
-                .padding(horizontal = 8.dp, vertical = 4.dp))
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(a.label.ifEmpty { a.username }, style = Type.strong.copy(fontSize = 14.sp),
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(listOfNotNull(if (a.active) "in use" else null,
-                if (a.signedIn) "signed in" else "not signed in").joinToString(" · "),
-                style = Type.small, maxLines = 1)
-        }
-        if (!a.active) Btn("Use", onUse)
-        Spacer(Modifier.width(6.dp))
-        Btn("Remove", onRemove)
-    }
-}
-
-/**
- * One provider's next step, in the order the desktop asks: sign in, get the
- * servers, pin what is waiting, and then keep them up to date.
- */
-@Composable
-private fun ProviderStep(provider: String, card: ProviderCard, busy: Boolean, act: (String) -> Unit) {
-    val name = providerName(provider)
-    val (step, label) = when {
-        !card.account -> "sign-in" to "Sign in"
-        card.waiting > 0 -> "pin" to "Pin ${card.waiting} waiting"
-        card.servers == 0 -> "servers" to "Get servers"
-        else -> "servers" to "Update servers"
-    }
-    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        ProviderTag(provider, tested = card.usable, ok = card.usable)
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(name, style = Type.strong.copy(fontSize = 14.sp))
-            Text(when {
-                card.usable -> "${card.servers} ready to connect"
-                card.servers > 0 -> "${card.servers} servers · no account"
-                card.account -> "signed in · no servers yet"
-                else -> "not set up"
-            }, style = Type.small)
-        }
-        Btn(if (busy) "Working…" else label, { act(step) }, enabled = !busy)
-    }
-    if (provider == Accounts.WINDSCRIBE && card.account) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Spacer(Modifier.weight(1f))
-            InfoTip("Windscribe's proxy credential expires now and then. When its exits start " +
-                "refusing the account, this fetches a fresh one with the session already held - " +
-                "no puzzle.")
-            Btn("Refresh credential", { act("refresh") }, enabled = !busy)
-        }
+        SaidLine(run.finished, modifier = Modifier.padding(bottom = 2.dp))
     }
 }
 
@@ -366,7 +487,7 @@ private fun Servers(
         pillGood = serverCount > 0,
         help = "Configs pinned to real addresses live here, in the app's own folder. Import a " +
             "folder of .ovpn files from the phone - they are copied in - or get them from a " +
-            "provider under Sign-in.") {
+            "provider under Accounts.") {
         Text(core.dataFolder, style = Type.mono, maxLines = 2, overflow = TextOverflow.Ellipsis)
         ButtonRow { Btn("Import a folder…", onImport, icon = Glyph.folder) }
     }
@@ -441,12 +562,55 @@ private fun Servers(
         if (deadCount > 0 || asideCount > 0) ButtonRow { Btn("Review them", onDrop) }
     }
 
+    Timing(core)
+}
+
+/**
+ * Timing servers: one exit per country, so the Ping order in the exit list
+ * means something. When it last ran, whether it runs on its own, and the
+ * button that runs it now.
+ */
+@Composable
+private fun Timing(core: RelayCore) {
+    val quickAt by core.quickAt.collectAsStateWithLifecycle()
+    val auto by core.autoQuick.collectAsStateWithLifecycle()
+    val reach by core.reach.collectAsStateWithLifecycle()
+    var said by remember { mutableStateOf<Said?>(null) }
+    val running = reach.running && reach.code == com.erelay.relay.data.QUICK
+    val ago = if (quickAt <= 0L) null else minutes(quickAt / 1000)
+
     Pane(icon = Glyph.gauge, title = "Timing servers",
-        help = "The desktop times a server by raising a real OpenVPN tunnel through it. A " +
-            "phone cannot: there is no OpenVPN here, and only one VPN may be up at a time - " +
-            "this app is that one. What the phone measures instead is how quickly each " +
-            "exit's proxy answers, which is the bolt on each row of the country list.") {
-        Text("The bolt on a country times its exits.", style = Type.small)
+        pill = when {
+            running -> "timing"
+            ago == null -> "never"
+            ago < 60 -> "${ago}m ago"
+            ago < 60 * 24 -> "${ago / 60}h ago"
+            else -> "${ago / (60 * 24)}d ago"
+        }, pillGood = running || (ago != null && ago < 6 * 60),
+        help = "One exit from each country is asked how quickly its proxy answers - six at " +
+            "a time, a few seconds each, so a minute or so for the whole list and gentle on " +
+            "the line. Only with the tunnel down: through it, every time would be the " +
+            "tunnel's. The bolt on a country in the exit list times all of its exits.") {
+        Text(when {
+            running -> "Timing ${reach.done} of ${reach.total} countries…"
+            reach.code == com.erelay.relay.data.QUICK && reach.said.isNotEmpty() -> reach.said
+            ago == null -> "No country has been timed yet, so the Ping order is a guess."
+            else -> "The exit list is ordered by these times."
+        }, style = Type.small)
+        if (running) {
+            Spacer(Modifier.height(8.dp))
+            Progress(reach.done, reach.total)
+        }
+        Spacer(Modifier.height(10.dp))
+        ToggleRow("Time the list on its own",
+            "When the exit list opens and the last timing is over six hours old, it runs " +
+                "again in the background. Never while the tunnel is up.", auto) { core.setAutoQuick(it) }
+        ButtonRow {
+            if (running) Btn("Stop", { core.cancelReach() }, danger = true, modifier = Modifier.weight(1f))
+            else Btn("Time every country", { said = core.quickTest().takeIf { !it.ok } },
+                strong = true, enabled = !reach.running, icon = Glyph.bolt, modifier = Modifier.weight(1f))
+        }
+        said?.let { SaidLine(it.text, bad = !it.ok) }
     }
 }
 

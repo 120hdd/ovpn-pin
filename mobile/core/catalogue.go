@@ -207,7 +207,11 @@ func (c *Catalogue) In(country string) []Server {
 //	fr/par         Paris only
 //	fr:windscribe  France, one provider
 //	file:x.ovpn    one config
+//	quick          one exit per country
 func (c *Catalogue) Pool(code string) []Server {
+	if code == "quick" {
+		return c.quick()
+	}
 	if rest, found := strings.CutPrefix(code, "file:"); found {
 		var out []Server
 		for _, s := range c.Servers() {
@@ -235,6 +239,46 @@ func (c *Catalogue) Pool(code string) []Server {
 			}
 		}
 		out = append(out, s)
+	}
+	return out
+}
+
+// quick is one exit per country: enough to put a time on every row of the
+// list, at a sixth of the cost of asking every exit - a few hundred
+// handshakes in a burst is what a line starts dropping, and what a provider
+// may read as one address hammering its logins.
+//
+// The one asked is the one most likely to stand for the country: the last
+// to answer, else one never tried, else the quickest to pin.
+func (c *Catalogue) quick() []Server {
+	seen := map[string]bool{}
+	var countries []string
+	for _, s := range c.Servers() {
+		if !seen[s.Country] {
+			seen[s.Country] = true
+			countries = append(countries, s.Country)
+		}
+	}
+	out := make([]Server, 0, len(countries))
+	for _, cc := range countries {
+		in := c.In(cc)
+		if len(in) == 0 {
+			continue
+		}
+		pick, best := in[0], 0
+		for _, s := range in {
+			rank := 1 // never tried
+			if rec, tried := c.reach[s.File]; tried {
+				rank = 0 // tried and failed
+				if rec.Answered() {
+					rank = 2
+				}
+			}
+			if rank > best {
+				pick, best = s, rank
+			}
+		}
+		out = append(out, pick)
 	}
 	return out
 }

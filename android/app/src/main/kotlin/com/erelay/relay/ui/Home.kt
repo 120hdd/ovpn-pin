@@ -38,6 +38,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -425,10 +426,27 @@ private fun StatusCard(s: HomeState, onWay: (Way) -> Unit, onPick: () -> Unit, o
             }
         }
 
-        Spacer(Modifier.height(14.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Segment(Way.entries, s.way, { it.label }, onWay, Modifier.weight(1f), enabled = mode != Mode.BUSY)
-            InfoTip(WAY_SAID.getValue(s.way))
+        // Only the ways that can work: a provider needs an account and its
+        // servers, your server needs the tunnel set up, and server + exit
+        // needs both. With one way left there is nothing to choose, so the
+        // strip is not drawn at all.
+        val provider = s.hasCredentials && s.serverCount > 0
+        val ways = Way.entries.filter {
+            when (it) {
+                Way.PROVIDER -> provider
+                Way.SERVER -> s.tunnelReady
+                Way.SERVER_EXIT -> s.tunnelReady && provider
+            }
+        }
+        LaunchedEffect(ways) {
+            if (ways.isNotEmpty() && s.way !in ways) onWay(ways.first())
+        }
+        if (ways.size >= 2) {
+            Spacer(Modifier.height(14.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Segment(ways, s.way, { it.label }, onWay, Modifier.weight(1f), enabled = mode != Mode.BUSY)
+                InfoTip(WAY_SAID.getValue(s.way))
+            }
         }
         val ready = s.way == Way.PROVIDER || s.tunnelReady
         AnimatedVisibility(!ready) {

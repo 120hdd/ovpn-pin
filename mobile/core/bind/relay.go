@@ -16,6 +16,7 @@ package relay
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -166,8 +167,13 @@ func (c *Client) CountriesJSON() string {
 	return cat.CountriesJSON()
 }
 
-// RaceIn is Race narrowed to one country. "auto" and "" mean all of them,
-// which is what the window's own default sends.
+// RaceIn is Race narrowed to one row of the list. "auto" and "" mean all of
+// them, which is what the window's own default sends.
+//
+// Every row the picker offers can arrive here, not only a country: a city
+// (au/syd), a provider (fr:windscribe) and a single exit (file:x.ovpn) are
+// all picks, and handing those to In - which only knows country codes -
+// matched nothing and came back no-servers for an exit plainly on screen.
 func (c *Client) RaceIn(country string, timeoutMs int, width int, p Progress) (*Result, error) {
 	c.mu.Lock()
 	cat := c.cat
@@ -175,7 +181,11 @@ func (c *Client) RaceIn(country string, timeoutMs int, width int, p Progress) (*
 	if cat == nil {
 		return nil, errors.New("nothing has been scanned yet")
 	}
-	return c.race(cat.In(country), timeoutMs, width, p)
+	pool := cat.In(country)
+	if strings.ContainsAny(country, ":/") {
+		pool = cat.Pool(country)
+	}
+	return c.race(pool, timeoutMs, width, p)
 }
 
 // Count is how many candidates are loaded.
