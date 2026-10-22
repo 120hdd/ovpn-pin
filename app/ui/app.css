@@ -1325,15 +1325,22 @@ canvas.blob__body {
      label with room going spare underneath. */
   --stage-room: calc(100% - 29px - var(--foot) - 210px);
   --stage-top: calc(29px + var(--stage-room) / 2);
-  top: max(29px, var(--stage-top));
-  transition: top 460ms var(--ease);
+  /* The shrink is about the stage's centre, so the centring above holds at
+     any size; only the floor has to know the top edge has moved in. */
+  top: max(calc(29px - 105px * (1 - var(--orb-k))), var(--stage-top));
+  transform: translateX(-50%) scale(var(--orb-k));
+  transition: top 460ms var(--ease), transform 900ms var(--ease);
 }
 /* What stands between the orb and the bottom of the hero: the addresses,
    and the meter as well once it opens - 48px of it and 8px under it. Read
    from the meter itself rather than from the connection's state, because
-   the meter opens when a reading arrives and not before. */
-.hero { --foot: 67px; }
-.hero:has(.flux[data-live='true']) { --foot: 123px; }
+   the meter opens when a reading arrives and not before.
+
+   The orb gives up some of its size to it as well, as it does on Android.
+   Scaled rather than resized: the canvas keeps its buffers, and the shrink
+   is slow and soft because it is part of the moment the tunnel comes up. */
+.hero { --foot: 67px; --orb-k: 1; }
+.hero:has(.flux[data-live='true']) { --foot: 123px; --orb-k: 0.82; }
 
 /* The satellites answer the line. Both dots swell and burn a little harder
    the harder the connection is working - which is the only bit of chrome in
@@ -2046,7 +2053,7 @@ canvas.blob__body {
   .app { padding-top: 10px; padding-bottom: 10px; }
   .bar { height: 31px; }
   .hero { min-height: 174px; margin: 1px 0 8px; }
-  .blob-stage { top: -9px; width: 166px; height: 166px; transform: translateX(-50%) scale(0.82); }
+  .blob-stage { top: -9px; width: 166px; height: 166px; transform: translateX(-50%) scale(calc(0.82 * var(--orb-k))); }
   .route-label { top: 1px; }
   .side { padding-top: 6px; padding-bottom: 5px; }
   .card { padding-top: 12px; padding-bottom: 12px; }
@@ -5413,3 +5420,9 @@ canvas.blob__body {
    with the only close button there is, and a window that cannot be closed
    while it waits for an answer is worse than a bare one. */
 :root[data-boot='wait'] .app > :not(.bar) { visibility: hidden; }
+
+/* With the connection's details open the card is at its tallest, and the
+   orb's floor of 236px left the hint below it 7px past the bottom of the
+   window - on a copy not set up yet, where the hint runs to two lines. The
+   stage centres the orb on whatever room it has, so it can give back ten. */
+.app:has(#details:not([hidden])) .hero { min-height: 226px; }
