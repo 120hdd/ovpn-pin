@@ -227,7 +227,10 @@ fun Picker(open: Boolean, m: PickerModel, onClose: () -> Unit) {
 private fun CountryItem(c: Country, m: PickerModel, expanded: MutableMap<String, Boolean>) {
     val open = expanded[c.code] == true
     CountryCard(
-        c, starred = c.code in m.favourites, picked = m.picked == c.code,
+        // Lit when the pick is anywhere inside it - a city or one server in
+        // it as much as the country itself - so the list says where you are.
+        c, starred = c.code in m.favourites,
+        picked = m.picked != "auto" && countryOfPick(m.picked).lowercase() == c.code.lowercase(),
         reach = m.reach.takeIf { it.code == c.code },
         expandable = c.count > 1 || c.cities.size > 1, expanded = open,
         onChoose = { m.onChoose(c.code) },
@@ -368,15 +371,6 @@ private fun AutoRow(picked: Boolean, onClick: () -> Unit) {
             Text("Races every location, takes the first to answer", style = Type.small,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        if (picked) Picked()
-    }
-}
-
-/** The tick on whatever is chosen. */
-@Composable
-private fun Picked() {
-    Box(Modifier.size(22.dp).clip(CircleShape).background(Tone.ok), contentAlignment = Alignment.Center) {
-        Icon(Glyph.check, null, Modifier.size(13.dp), tint = Tone.ink)
     }
 }
 
@@ -416,15 +410,12 @@ private fun CountryCard(
             Modifier.fillMaxWidth().tap(onClick = onChoose).padding(start = 12.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.size(42.dp).clip(CircleShape).background(Tone.control), contentAlignment = Alignment.Center) {
-                Text(flagOf(c.code), fontSize = 24.sp)
-            }
+            Flag(c.code, 42.dp)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(c.name, style = Type.strong.copy(fontSize = 15.5.sp), maxLines = 1,
                         overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                    if (picked) { Spacer(Modifier.width(8.dp)); Picked() }
                 }
                 Spacer(Modifier.height(3.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -570,7 +561,6 @@ private fun CityBlock(city: City, m: PickerModel) {
                     Text(city.nick, style = Type.small.copy(color = Tone.textOff), maxLines = 1,
                         overflow = TextOverflow.Ellipsis)
                 }
-                if (m.picked == city.code) { Spacer(Modifier.width(6.dp)); Picked() }
             }
             Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -656,7 +646,6 @@ private fun ExitRow(e: Exit, picked: Boolean, onClick: () -> Unit) {
                 style = Type.mono.copy(color = Tone.textOff), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         when {
-            picked -> Picked()
             e.ok == true && e.ms != null -> Pill("${e.ms} ms", color = pingTone(e.ms))
             // A red mark where the time would be; the reason is behind it.
             e.ok == false -> InfoTip(failReason(e.why), icon = Glyph.alert, tint = Tone.fail,

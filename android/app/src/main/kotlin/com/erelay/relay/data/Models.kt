@@ -255,9 +255,15 @@ fun parseCountries(json: String): List<Country> = try {
             name = c.optString("name"),
             alias = c.optJSONArray("alias").strings(),
             cities = c.optJSONArray("cityList").objects().map { t ->
+                // The core gives a city's code on its own - "syd" - and a pick
+                // needs the country in front of it, "au/syd", the shape the
+                // desktop sends. Bare, "syd" read as Syria everywhere a pick is
+                // turned into a place, and the race found no servers for it.
+                val cc = t.optString("country").ifEmpty { c.optString("code") }
+                val own = t.optString("code")
                 City(
-                    code = t.optString("code"),
-                    country = t.optString("country"),
+                    code = if ('/' in own || cc.isEmpty()) own else "$cc/$own",
+                    country = cc,
                     name = t.optString("name"),
                     nick = t.optString("nick"),
                     count = t.optInt("count"),

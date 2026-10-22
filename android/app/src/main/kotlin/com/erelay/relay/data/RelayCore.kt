@@ -7,6 +7,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.VpnService
 import android.util.Base64
@@ -663,6 +665,10 @@ class RelayCore(private val app: Application) {
      */
     fun testReach(code: String, timeoutMs: Long = 5000L, width: Long = 12L): Said {
         if (_reach.value.running) return Said.no("A test is already running.")
+        if (otherVpn()) {
+            return Said.no("Another VPN is on. Its tunnel would answer for every server - " +
+                "turn it off first.")
+        }
         val c = catalogue()
         val pool = try { c.poolFiles(code) } catch (e: Exception) { "" }
         if (pool.isBlank()) return Said.no("Nothing to test.")
@@ -719,8 +725,22 @@ class RelayCore(private val app: Application) {
 
     /** Whether the quick test is old enough to run again on its own. */
     fun quickDue(): Boolean =
-        _autoQuick.value && System.currentTimeMillis() - _quickAt.value > QUICK_EVERY_MS &&
+        _autoQuick.value && System.currentTimeMillis() - _quickAt.value > QUICK_EVERY_MS && !otherVpn() &&
             !_reach.value.running && _conn.value.mode != Mode.ON && _conn.value.mode != Mode.BUSY
+
+    /**
+     * Whether some other app's VPN carries this phone's traffic. Through it,
+     * every server is answered by that tunnel - a whole list timed at 1 ms -
+     * so nothing is timed while one is up. Relay's own tunnel does not count:
+     * the core's probes are protected from it.
+     */
+    private fun otherVpn(): Boolean {
+        if (_conn.value.mode == Mode.ON || _conn.value.mode == Mode.BUSY) return false
+        val cm = app.getSystemService(ConnectivityManager::class.java) ?: return false
+        return cm.allNetworks.any {
+            cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        }
+    }
 
     fun cancelReach() {
         scope.launch { try { catalogue().cancelReach() } catch (e: Exception) { } }

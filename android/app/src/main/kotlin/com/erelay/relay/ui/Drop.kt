@@ -81,7 +81,7 @@ fun DropSheet(
             Text("WOULD GO", style = Type.eyebrow)
             for (e in preview.take(60)) {
                 Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
-                    Text(flagOf(e.country), modifier = Modifier.width(26.dp))
+                    Flag(e.country, 18.dp, Modifier.padding(end = 8.dp))
                     Column(Modifier.weight(1f)) {
                         Text(e.file, style = Type.mono.copy(color = Tone.textMuted), maxLines = 1,
                             overflow = TextOverflow.Ellipsis)

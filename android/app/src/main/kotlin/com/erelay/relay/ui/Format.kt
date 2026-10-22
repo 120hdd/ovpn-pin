@@ -91,7 +91,10 @@ fun nameOfPick(
     val cc = place.substringBefore("/")
     val city = place.substringAfter("/", "")
     val country = countryNames[cc] ?: countryName(cc)
-    val base = if (city.isEmpty()) country else "${city.replaceFirstChar { it.uppercase() }}, $country"
+    // The city's own name when the list has it - "Sydney", not its key "syd".
+    val cityName = cities[cc.lowercase()].orEmpty().firstOrNull { it.code == place }?.name
+        ?: city.replaceFirstChar { it.uppercase() }
+    val base = if (city.isEmpty()) country else "$cityName, $country"
     return if (provider.isNullOrEmpty()) base else "$base · ${providerName(provider)}"
 }
 

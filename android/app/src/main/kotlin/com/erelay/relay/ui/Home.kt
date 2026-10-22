@@ -489,7 +489,7 @@ private fun DetailRow(label: String, value: String) {
 
 @Composable
 private fun PickButton(picked: String, label: String, enabled: Boolean, onPick: () -> Unit) {
-    val flag = flagOf(countryOfPick(picked))
+    val country = countryOfPick(picked)
     Row(
         Modifier
             .fillMaxWidth()
@@ -501,13 +501,16 @@ private fun PickButton(picked: String, label: String, enabled: Boolean, onPick: 
             .alpha(if (enabled) 1f else 0.5f),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(Tone.controlActive)
-                .border(1.dp, Tone.border, RoundedCornerShape(10.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (flag.isNotEmpty()) Text(flag, fontSize = 18.sp)
-            else Icon(Glyph.globe, null, Modifier.size(16.dp), tint = Tone.textMuted)
+        if (country.isNotEmpty()) {
+            Flag(country, 34.dp)
+        } else {
+            Box(
+                Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(Tone.controlActive)
+                    .border(1.dp, Tone.border, RoundedCornerShape(10.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Glyph.globe, null, Modifier.size(16.dp), tint = Tone.textMuted)
+            }
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
