@@ -5697,7 +5697,7 @@ canvas.blob__body {
 .listsplit b { color: var(--text); font-weight: 600; }
 
 /* 10G and P2P on a country's own line. */
-.row__meta .mark { margin-left: 5px; vertical-align: 1px; }
+.row__name .mark { margin-left: 6px; vertical-align: 1px; font-weight: 400; }
 
 /* An exit that failed: a red mark where its time would be, and the reason
    behind it on hover or focus. */

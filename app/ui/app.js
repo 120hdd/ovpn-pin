@@ -517,7 +517,10 @@ function drawList(query) {
     // How many addresses a country has is what decides whether picking it
     // will work, so that is the number shown rather than a speed nobody can
     // act on.
-    meta.textContent = `${c.code.toUpperCase()} \u00b7 ${c.count} relay${c.count === 1 ? '' : 's'}`;
+    // The count and the time, without the country's code in front: the name
+    // above already says which country, and the code was what pushed the
+    // time off the end of the line in a 400px window.
+    meta.textContent = `${c.count} relay${c.count === 1 ? '' : 's'}`;
     if (via) {
       // The provider is the name here, because the country is already said
       // by the row directly above it.
@@ -561,7 +564,9 @@ function drawList(query) {
         m.className = 'mark';
         m.textContent = word;
         m.title = why;
-        meta.append(m);
+        // Beside the name rather than on the meta line, which is already
+        // full with the count and the time - the time is what got cut.
+        name.append(m);
       }
     }
     copy.append(name, meta);
@@ -3958,7 +3963,7 @@ function acctSetProvider(which) {
   $('acctHero').dataset.provider = which;
   $('acctHeroMark').setAttribute('href', spec.mark);
   $('acctHeroName').textContent = `Connect ${name}`;
-  $('acctHeroSay').textContent = spec.say;
+  $('acctNewSay').textContent = spec.say;
   $('acctSafeTo').textContent = name;
   $('acctSave').textContent = spec.go;
   // Surfshark's is a service credential off a web page; Windscribe's is the
