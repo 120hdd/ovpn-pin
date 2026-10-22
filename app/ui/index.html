@@ -54,6 +54,7 @@
   <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34" /> <circle cx="11" cy="11" r="8" /></symbol>
   <symbol id="i-tower" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9" /> <path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5" /> <circle cx="12" cy="9" r="2" /> <path d="M16.2 4.8c2 2 2.26 5.11.8 7.47" /> <path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1" /> <path d="M9.5 18h5" /> <path d="m8 22 4-11 4 11" /></symbol>
   <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /> <path d="M12 5v14" /></symbol>
   <symbol id="i-minus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /></symbol>
   <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18" /> <path d="m6 6 12 12" /></symbol>
   <symbol id="i-chev-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6" /></symbol>
@@ -521,10 +522,10 @@
          four things already open, so the sheet opens on a list you
          read in a second instead of on the middle of a form. -->
     <nav class="menu" id="prefsMenu">
-      <button class="menu__row" type="button" data-goto="sign-in">
+      <button class="menu__row" type="button" data-goto="accounts">
         <span class="menu__copy">
-          <span class="menu__name">Sign-in</span>
-          <span class="menu__note">the accounts this app can use</span>
+          <span class="menu__name">Accounts</span>
+          <span class="menu__note">your providers, sign-ins and servers</span>
         </span>
         <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
       </button>
@@ -565,94 +566,110 @@
       </button>
     </nav>
 
-    <section class="screen" data-screen="sign-in" hidden>
+    <section class="screen" data-screen="accounts" hidden>
 
     <!-- 1 · the accounts.
 
-         One pane for both providers, because they are the same decision:
-         which account is this app using. They were two, and being two is
-         what made "you can only have one of each, and swapping means typing
-         it again" look like the natural state of things rather than a
-         limitation.
+         One card per provider rather than a list of accounts in one place
+         and the providers' steps in another. Everything about Surfshark -
+         the accounts it has, how far along it is, the one thing to do next
+         and whether exits are drawn from it - is in Surfshark's card, so
+         there is nothing to match up between two lists.
 
-         What differs between them is only how an account is proved - one
-         takes a service credential off a web page, the other needs a login
-         and a puzzle - so that is the only place the form differs. -->
-    <section class="pane pane--gate" id="prefAccounts" style="--i:0">
-      <div class="pane__head">
-        <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-key"/></svg></span>
-        <h3 class="pane__title">Accounts</h3>
-        <span class="pill" id="acctPill" data-state="off">none</span>
+         What differs between the providers is only how an account is proved
+         - one takes a service credential off a web page, the other needs a
+         login and a puzzle - so that is the only place the form differs. -->
+    <section class="pane pane--gate accts" id="prefAccounts" style="--i:0">
+      <!-- The line across the top: how many providers can connect, as a
+           number and a bar, and the way to add another account. -->
+      <div class="accthero">
+        <div class="accthero__row">
+          <span class="accthero__n"><b id="acctReadyN">0</b> of 2</span>
+          <span class="pill" id="acctPill" data-state="off">none</span>
+        </div>
+        <h3 class="pane__title accthero__title" id="acctHeroSay">providers ready to connect</h3>
+        <div class="accthero__bar" aria-hidden="true"><i></i><i></i></div>
       </div>
-      <p class="pane__why">Every account this app can use, and which one each
-        provider is using now. Surfshark takes the <b>service</b> username and
-        password from its manual-setup page — not the email you log in with.
-        Windscribe cannot: it issues a different credential per client, so it
-        has to be signed in to, and that means a puzzle.</p>
+      <p class="pane__why">Every account this app can use, one card per provider,
+        and which providers the exit list is drawn from. Surfshark takes the
+        <b>service</b> username and password from its manual-setup page — not the
+        email you log in with. Windscribe cannot: it issues a different credential
+        per client, so it has to be signed in to, and that means a puzzle.</p>
 
       <div class="pane__body">
-        <!-- The roster. Built by the page; empty until there is one. -->
-        <div class="acct" id="acctList"></div>
+        <p class="note" id="acctSaid"></p>
 
-        <div class="pane__row">
-          <button class="btn btn--quiet btn--auto" id="acctAdd" type="button">Add an account</button>
-          <p class="note" id="acctSaid"></p>
-        </div>
-
-        <!-- Which of them the exit list is drawn from. Separate from
-             which accounts exist, because they are separate questions: an
-             account can be signed in and still be one you do not want
-             exits from today. -->
         <div class="use" id="acctUse">
-          <span class="use__cap">Connect through</span>
-        <!-- A card each, not two lines with tick boxes in a footnote. Which
-             company carries your traffic is the largest choice in this pane
-             and it was drawn as the smallest thing in it. The tick box is
-             still what holds the state - the change event, the disabled
-             state and everything reading .checked are unchanged - it is
-             just no longer the whole of what you see. -->
           <div class="use__opts" id="useOpts">
-            <label class="prov" data-provider="surfshark">
-              <input class="prov__in" type="checkbox" id="useSurfshark" value="surfshark">
-              <svg class="prov__mark" aria-hidden="true"><use href="#i-ss"/></svg>
-              <span class="prov__name">Surfshark</span>
-              <span class="prov__n" id="useSurfsharkN">—</span>
-              <!-- The one thing to do about this provider, whatever that is
-                   this minute. Written by paintUse, hidden when the answer
-                   is "nothing". -->
-              <button class="prov__do" id="useSurfsharkDo" type="button" hidden></button>
-              <svg class="prov__tick" aria-hidden="true"><use href="#i-check"/></svg>
-            </label>
-            <label class="prov" data-provider="windscribe">
-              <input class="prov__in" type="checkbox" id="useWindscribe" value="windscribe">
-              <svg class="prov__mark" aria-hidden="true"><use href="#i-ws"/></svg>
-              <span class="prov__name">Windscribe</span>
-              <span class="prov__n" id="useWindscribeN">—</span>
-              <button class="prov__do" id="useWindscribeDo" type="button" hidden></button>
-              <!-- Windscribe only, and an icon rather than a row of its own:
-                   the credential behind a session goes stale and this is what
-                   fetches another without a puzzle. It belongs to this card
-                   and nowhere else, and it is rare enough that a word for it
-                   would outweigh the step you are actually here for. -->
-              <button class="prov__side" id="wsRefresh" type="button"
-                      aria-label="Refresh the Windscribe credential"
-                      title="Refresh the credential" hidden>
-                <svg class="ico ico--sm" aria-hidden="true"><use href="#i-refresh"/></svg>
-              </button>
-              <svg class="prov__tick" aria-hidden="true"><use href="#i-check"/></svg>
-            </label>
+            <div class="prov" data-provider="surfshark">
+              <div class="prov__head">
+                <span class="prov__badge"><svg class="prov__mark" aria-hidden="true"><use href="#i-ss"/></svg></span>
+                <span class="prov__copy">
+                  <span class="prov__name">Surfshark</span>
+                  <span class="prov__n" id="useSurfsharkN">—</span>
+                </span>
+                <span class="prov__state" aria-hidden="true"></span>
+              </div>
+              <!-- Account, servers, pinned: the three things between a
+                   provider and a connection, ticked off as each is done. -->
+              <ol class="prov__steps" id="useSurfsharkSteps">
+                <li data-step="account">Account</li>
+                <li data-step="servers">Servers</li>
+                <li data-step="pinned">Pinned</li>
+              </ol>
+              <!-- This provider's accounts. Built by the page. -->
+              <div class="prov__accts" data-for="surfshark"></div>
+              <div class="prov__foot">
+                <!-- The one thing to do about this provider, whatever that
+                     is this minute. Written by paintUse. -->
+                <button class="prov__do" id="useSurfsharkDo" type="button" hidden></button>
+                <!-- Which providers the exit list is drawn from. Separate
+                     from which accounts exist, because an account can be
+                     signed in and still be one you do not want exits from
+                     today. The tick box is still what holds the state. -->
+                <label class="prov__use" title="Draw exits from Surfshark">
+                  <span class="prov__usecap">Connect through</span>
+                  <input class="prov__in" type="checkbox" id="useSurfshark" value="surfshark">
+                  <span class="prov__switch" aria-hidden="true"></span>
+                </label>
+              </div>
+            </div>
+            <div class="prov" data-provider="windscribe">
+              <div class="prov__head">
+                <span class="prov__badge"><svg class="prov__mark" aria-hidden="true"><use href="#i-ws"/></svg></span>
+                <span class="prov__copy">
+                  <span class="prov__name">Windscribe</span>
+                  <span class="prov__n" id="useWindscribeN">—</span>
+                </span>
+                <span class="prov__state" aria-hidden="true"></span>
+              </div>
+              <ol class="prov__steps" id="useWindscribeSteps">
+                <li data-step="account">Account</li>
+                <li data-step="servers">Servers</li>
+                <li data-step="pinned">Pinned</li>
+              </ol>
+              <div class="prov__accts" data-for="windscribe"></div>
+              <div class="prov__foot">
+                <button class="prov__do" id="useWindscribeDo" type="button" hidden></button>
+                <!-- Windscribe only: the credential behind a session goes
+                     stale, and this fetches another without a puzzle. -->
+                <button class="prov__side" id="wsRefresh" type="button"
+                        aria-label="Refresh the Windscribe credential"
+                        title="Refresh the credential" hidden>
+                  <svg class="ico ico--sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+                </button>
+                <label class="prov__use" title="Draw exits from Windscribe">
+                  <span class="prov__usecap">Connect through</span>
+                  <input class="prov__in" type="checkbox" id="useWindscribe" value="windscribe">
+                  <span class="prov__switch" aria-hidden="true"></span>
+                </label>
+              </div>
+            </div>
           </div>
           <p class="note" id="useSaid"></p>
         </div>
 
-        <!-- Both providers publish their fleet, so the folder of configs
-             somebody downloads by hand is a list this app can ask for. Those
-             two buttons used to live down here, one row each, always on
-             screen and each with a paragraph beside it. They are the cards'
-             own next step now - one per card, and only the one that is
-             actually next. Refresh credential went into the Windscribe card
-             with them, as the icon it is. Nothing is left down here but the
-             line saying how any of it went. -->
+        <!-- How the last fetch or refresh went. -->
         <p class="note" id="provSaid"></p>
       </div>
     </section>
@@ -1400,34 +1417,45 @@
 <dialog class="sheet sheet--add" id="acctDlg">
   <header class="sheet__top">
     <span class="sheet__heading">
-      <span class="sheet__kicker">SIGN-IN</span>
-      <span class="sheet__title">Add an account</span>
+      <span class="sheet__kicker">ACCOUNTS</span>
+      <span class="sheet__title" id="acctDlgTitle">Add an account</span>
     </span>
     <button class="icon" id="acctDlgClose" type="button" aria-label="Close">
       <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
     </button>
   </header>
-  <!-- One shape for both providers. The switch on top changes what it asks
-       for - a service credential or a login - and nothing else, because
-       that is genuinely the only difference between them. -->
-  <div class="acct__new" id="acctNew">
-  <div class="pair" id="acctWhich" role="tablist">
-    <button class="pair__opt" type="button" data-provider="surfshark"
-            role="tab" aria-selected="true">Surfshark</button>
-    <button class="pair__opt" type="button" data-provider="windscribe"
-            role="tab" aria-selected="false">Windscribe</button>
-    <i class="pair__slide" aria-hidden="true"></i>
+  <!-- Its own page per provider: opened from that provider's card, for that
+       provider, with nothing to switch. What it asks for - a service
+       credential or a login - is the only difference between them. One
+       account per provider. -->
+  <div class="acct__new addacct" id="acctNew">
+  <!-- The chosen provider, large, and which login it wants. -->
+  <div class="addacct__hero" id="acctHero" data-provider="surfshark">
+    <span class="addacct__badge">
+      <svg class="addacct__mark" aria-hidden="true"><use id="acctHeroMark" href="#i-ss"/></svg>
+    </span>
+    <span class="addacct__copy">
+      <b class="addacct__name" id="acctHeroName">Connect Surfshark</b>
+      <span class="addacct__say" id="acctHeroSay">The service login from Surfshark's
+        manual-setup page, not your email.</span>
+    </span>
   </div>
 
+  <!-- This provider has its account already: nothing to add until it is
+       removed. -->
+  <p class="addacct__full" id="acctFull" hidden>Each provider takes one account. Remove
+    this one's in Accounts to add a different one.</p>
+
+  <div class="addacct__form" id="acctForm">
   <label class="field">
-    <span class="field__cap" id="acctUserCap">Username</span>
-    <input class="field__in mono" id="acctUser" type="text" placeholder="not set"
+    <span class="field__cap" id="acctUserCap">Service username</span>
+    <input class="field__in mono" id="acctUser" type="text" placeholder="from the manual-setup page"
            autocomplete="off" autocapitalize="off" spellcheck="false">
   </label>
   <label class="field">
     <span class="field__cap">Password</span>
     <span class="field__pair">
-      <input class="field__in mono" id="acctPass" type="password" placeholder="not set"
+      <input class="field__in mono" id="acctPass" type="password" placeholder="password"
              autocomplete="off" spellcheck="false">
       <button class="field__peek" id="acctPeek" type="button"
               aria-pressed="false" aria-label="Show the password">
@@ -1437,21 +1465,25 @@
   </label>
   <label class="field" id="acctTwoWrap" hidden>
     <span class="field__cap">Two-factor code <span class="field__hint">optional</span></span>
-    <input class="field__in mono" id="acctTwo" type="text" placeholder="only if your account uses one"
+    <input class="field__in mono" id="acctTwo" type="text" placeholder="only if it is on"
            autocomplete="off" spellcheck="false" inputmode="numeric">
   </label>
   <label class="field">
-    <span class="field__cap">Call it <span class="field__hint">optional</span></span>
+    <span class="field__cap">Name <span class="field__hint">optional</span></span>
     <input class="field__in" id="acctLabel" type="text" placeholder="the username, if you leave this"
            autocomplete="off" spellcheck="false">
   </label>
 
-  <div class="pane__row">
-    <button class="btn btn--quiet btn--auto" id="acctSave" type="button">Save</button>
-    <button class="btn btn--quiet btn--auto" id="acctCancel" type="button">Cancel</button>
-    <p class="note" id="acctNewSaid"></p>
+  <p class="addacct__safe">
+    <svg class="ico ico--sm" aria-hidden="true"><use href="#i-key"/></svg>
+    <span>Kept on this computer. Sent only to <span id="acctSafeTo">Surfshark</span>.</span>
+  </p>
+
+  <button class="btn addacct__go" id="acctSave" type="button">Save account</button>
+  <button class="addacct__cancel" id="acctCancel" type="button">Cancel</button>
+  <p class="note" id="acctNewSaid"></p>
   </div>
-      </div>
+  </div>
 </dialog>
 
 <dialog class="sheet sheet--captcha" id="wsCapDlg">

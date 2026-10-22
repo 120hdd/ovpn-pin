@@ -3021,7 +3021,7 @@ def ui_check(window):
             "document.getElementById('prefsTitle').textContent")
         # Into the one the rest of this check needs.
         window.evaluate_js(
-            "document.querySelector('.menu__row[data-goto=sign-in]').click()")
+            "document.querySelector('.menu__row[data-goto=accounts]').click()")
         time.sleep(0.4)
 
         # -- the whys, moved into (i) buttons -------------------------------
@@ -3061,7 +3061,11 @@ def ui_check(window):
             "[document.getElementById('useSurfsharkN').textContent,"
             " document.getElementById('useWindscribeN').textContent]")
 
-        window.evaluate_js("document.getElementById('acctAdd').click()")
+        # Each provider's card opens its own page; one account per provider,
+        # so the roster is emptied in this window first or the form would be
+        # the "already has its account" sentence instead.
+        window.evaluate_js(
+            "acct.rows = []; acct.provider = 'surfshark'; acctShowForm(true)")
         time.sleep(0.5)
         # A dialog over the pane, not a form unfolding inside the list - the
         # list is what "is this one already here" needs to still see.
@@ -3069,8 +3073,7 @@ def ui_check(window):
             "document.getElementById('acctDlg').open")
         said['acctCapSurfshark'] = window.evaluate_js(
             "document.getElementById('acctUserCap').textContent")
-        window.evaluate_js(
-            "document.querySelector('#acctWhich [data-provider=windscribe]').click()")
+        window.evaluate_js("acctSetProvider('windscribe'); acctShowForm(true)")
         time.sleep(0.3)
         said['acctCapWindscribe'] = window.evaluate_js(
             "document.getElementById('acctUserCap').textContent")
@@ -3084,8 +3087,8 @@ def ui_check(window):
             window.__acctAddReal = window.pywebview.api.accountAdd;
             window.pywebview.api.accountAdd = () => Promise.reject(
                 new Error('Permission denied: accounts.json'));
-            document.querySelector(
-                '#acctWhich [data-provider=surfshark]').click();
+            acctSetProvider('surfshark');
+            acctShowForm(true);
             document.getElementById('acctUser').value = 'test-service-user';
             document.getElementById('acctPass').value = 'test-password';
             document.getElementById('acctSave').click();

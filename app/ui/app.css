@@ -3760,24 +3760,213 @@ canvas.blob__body {
    which is the one case translateX(-50%) cannot solve on its own. */
 .info--right .info__bubble { left: auto; right: 0; transform: none; }
 
-/* ----------------------------------------------------------- the roster */
+/* ------------------------------------------------------------- accounts */
 
-.acct { display: grid; gap: 6px; }
+/* The pane is a frame here rather than a card: the hero and the two
+   provider cards are the cards, and a box round three boxes is a box too
+   many. */
+.accts.pane { padding: 0; background: none; box-shadow: none; }
+.accts .pane__body { margin-top: 10px; }
+
+/* How many providers can connect, said as a number big enough to be read
+   before anything else on the screen is, and a bar that fills a segment per
+   provider. */
+.accthero {
+  position: relative;
+  overflow: hidden;
+  padding: 16px 16px 15px;
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(97, 239, 191, 0.13), transparent 60%),
+    radial-gradient(120% 140% at 100% 100%, rgba(140, 130, 255, 0.10), transparent 60%),
+    rgb(var(--wash) / 0.025);
+  box-shadow: inset 0 0 0 1px rgba(97, 239, 191, 0.16);
+}
+.accthero__row { display: flex; align-items: center; gap: 10px; }
+.accthero__n {
+  font-size: 13px;
+  color: var(--text-muted);
+  letter-spacing: 0.01em;
+}
+.accthero__n b {
+  font-size: 32px;
+  line-height: 34px;
+  font-weight: 700;
+  color: var(--text);
+  margin-right: 3px;
+  font-variant-numeric: tabular-nums;
+  transition: color 260ms var(--ease);
+}
+.accthero[data-ready="1"] .accthero__n b { color: var(--ok); }
+.accthero .pill { margin-left: auto; align-self: center; }
+.accthero__title {
+  display: flex;
+  align-items: center;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.accthero__bar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 12px;
+}
+.accthero__bar i {
+  height: 4px;
+  border-radius: 999px;
+  background: rgb(var(--wash) / 0.08);
+  transition: background 320ms var(--ease);
+}
+.accthero__bar i[data-on="1"] {
+  background: linear-gradient(90deg, var(--ok), var(--jade-2, var(--ok)));
+}
+
+/* -------------------------------------------- one card per provider */
+
+.use { display: grid; gap: 10px; }
+.use__opts { display: grid; gap: 10px; }
+
+.prov {
+  --brand: #3bc1c9;
+  position: relative;
+  display: grid;
+  gap: 14px;
+  padding: 14px 14px 12px;
+  border-radius: 16px;
+  background: rgb(var(--wash) / 0.025);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.07);
+  transition: box-shadow 220ms var(--ease), background-color 220ms var(--ease);
+}
+.prov[data-provider="windscribe"] { --brand: var(--jade-2, #4ae5c3); }
+.prov[data-on="1"] {
+  background: rgb(var(--wash) / 0.035);
+  box-shadow: inset 0 0 0 1px rgba(97, 239, 191, 0.38),
+              0 10px 28px -18px rgba(97, 239, 191, 0.45);
+}
+
+.prov__head { display: flex; align-items: center; gap: 12px; }
+/* The mark in a tile of its own colour, the way an app sits on a home
+   screen: it reads as a company rather than as an icon in a list. */
+.prov__badge {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 42px; height: 42px;
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--brand) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 32%, transparent);
+}
+.prov__mark { width: 22px; height: 22px; color: var(--brand); }
+.prov[data-empty="1"] .prov__mark { opacity: 0.7; }
+.prov__copy { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.prov__name { font-size: 14.5px; line-height: 19px; font-weight: 600; color: var(--text); }
+.prov__n {
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--text-off);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+/* Ready or not, as a word in a pill rather than a tick that needs reading. */
+.prov__state {
+  flex: none;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 10px; line-height: 15px; letter-spacing: 0.04em;
+  color: var(--text-off);
+  background: rgb(var(--wash) / 0.05);
+}
+.prov__state::before { content: 'Set up'; }
+.prov[data-empty="0"] .prov__state { color: var(--ok); background: rgba(97, 239, 191, 0.11); }
+.prov[data-empty="0"] .prov__state::before { content: '● Ready'; }
+
+/* Account, servers, pinned: numbered dots joined by a line that fills as
+   each step is done. */
+.prov__steps {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+.prov__steps li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-off);
+  counter-increment: step;
+  white-space: nowrap;
+}
+.prov__steps li + li { flex: 1; }
+.prov__steps li::before {
+  order: -1;
+  content: counter(step);
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  font-size: 9.5px;
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1.5px rgb(var(--wash) / 0.16);
+  transition: background 220ms var(--ease), box-shadow 220ms var(--ease), color 220ms var(--ease);
+}
+/* The joining line belongs to the step it leads to, drawn ahead of its dot. */
+.prov__steps li + li::after {
+  order: -2;
+  content: '';
+  flex: 1;
+  height: 2px;
+  margin: 0 4px;
+  border-radius: 2px;
+  background: rgb(var(--wash) / 0.08);
+  transition: background 220ms var(--ease);
+}
+.prov__steps li[data-done="1"] { color: var(--text); }
+.prov__steps li[data-done="1"]::before {
+  content: '✓';
+  color: var(--ink, #06281d);
+  background: var(--ok);
+  box-shadow: none;
+}
+.prov__steps li[data-done="1"]::after { background: rgba(97, 239, 191, 0.5); }
+
+/* This provider's accounts, in a well under the steps. */
+.prov__accts {
+  display: grid;
+  border-radius: 12px;
+  background: rgb(var(--deep, 10 10 16) / 0.35);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.06);
+}
+.prov__accts:empty { display: none; }
 
 .acct__row {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 9px 10px;
-  border-radius: var(--r-ctl);
-  border: 1px solid var(--border);
-  background: var(--control);
+  gap: 10px;
+  padding: 8px 8px 8px 10px;
 }
-.acct__row[data-active="1"] {
-  border-color: var(--ok);
-  background: var(--control-active);
+.acct__row + .acct__row { border-top: 1px solid rgb(var(--wash) / 0.06); }
+/* An initial in a circle: a face for the account, lit in the provider's
+   colour when it is the one in use. */
+.acct__tag {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: rgb(var(--wash) / 0.07);
 }
-
+.acct__row[data-active="1"] .acct__tag {
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 18%, transparent);
+}
 .acct__who { flex: 1; min-width: 0; display: grid; gap: 1px; }
 .acct__name {
   font-size: 12.5px;
@@ -3785,25 +3974,48 @@ canvas.blob__body {
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
 .acct__sub {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   font-size: 10.5px;
   color: var(--text-off);
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
-
-/* Which provider, said in a word rather than with a logo nobody licensed. */
-.acct__tag {
+.acct__sub::before {
+  content: '';
   flex: none;
-  padding: 2px 7px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  font-size: 9.5px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-muted);
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--work);
 }
-.acct__row[data-provider="windscribe"] .acct__tag { color: var(--jade-2, var(--ok)); }
-
-.acct__act { flex: none; display: flex; gap: 5px; }
+.acct__row[data-ready="1"] .acct__sub::before { background: var(--ok); }
+.acct__act { flex: none; display: flex; align-items: center; gap: 4px; }
+.acct__act .btn--quiet {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 11px;
+  border-radius: 8px;
+}
+/* Remove asks once more in place, because it cannot be undone and it sits
+   a few pixels from Use. */
+.acct__act .acct__drop[data-sure="1"] {
+  color: var(--fail);
+  border-color: rgba(255, 143, 155, 0.4);
+}
+.acct__icon {
+  display: grid;
+  place-items: center;
+  width: 28px; height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-off);
+  cursor: pointer;
+  transition: color 150ms var(--ease), background 150ms var(--ease);
+}
+.acct__icon:hover { color: var(--ok); background: rgb(var(--wash) / 0.06); }
+.acct__icon:disabled { opacity: 0.4; cursor: default; }
 
 .acct__new {
   display: grid;
@@ -3814,122 +4026,40 @@ canvas.blob__body {
   border: 1px dashed var(--border);
 }
 
-.acct__none {
-  padding: 11px;
-  border-radius: var(--r-ctl);
-  border: 1px dashed var(--border);
-  color: var(--text-off);
-  font-size: 11.5px;
-  line-height: 1.5;
-}
-
-
-/* -------------------------------------------- which providers, and whose */
-
-.use {
-  display: grid;
-  gap: 7px;
-  padding: 10px 11px;
-  margin-top: 8px;
-  border-radius: var(--r-ctl);
-  border: 1px solid var(--border);
-  background: var(--control);
-}
-.use__cap {
-  font-size: 10px;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--text-off);
-}
-.use__opts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-/* One card per provider, and the mark is the card rather than a bullet at
-   the front of it: 68px, hung off the left edge so a third of it is cut by
-   the card's own border. It reads as a mark on a thing rather than an icon
-   in a list, and it leaves the middle of the card for the only two lines
-   that matter - who it is, and what state it is in.
-
-   The tick box is still where the state lives. It is only moved out of
-   sight, so the label stays clickable and everything reading .checked or
-   setting .disabled goes on working. */
-.prov {
-  position: relative;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-height: 104px;
-  padding: 13px 13px 12px 56px;
-  border-radius: calc(var(--r-ctl) + 3px);
-  border: 1px solid var(--border);
-  background: var(--bg);
-  cursor: pointer;
-  transition: border-color 180ms var(--ease),
-              background-color 180ms var(--ease),
-              transform 110ms var(--ease);
-}
-.prov__in {
-  position: absolute;
-  width: 1px; height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-.prov__mark {
-  position: absolute;
-  left: -23px; top: 50%;
-  width: 68px; height: 68px;
-  transform: translateY(-50%);
-  color: var(--text-off);
-  opacity: 0.32;
-  pointer-events: none;
-  transition: color 200ms var(--ease), opacity 200ms var(--ease);
-}
-.prov__name {
-  font-size: 13.5px;
-  line-height: 18px;
-  color: var(--text);
-}
-.prov__n {
-  font-size: 11px;
-  line-height: 15px;
-  color: var(--text-off);
-}
-/* The one thing to do about this provider. Pushed to the bottom of the card
-   so the two cards agree on where their buttons are even when their states
-   do not, and hidden outright when the answer is nothing - an always-present
-   control that sometimes does nothing is how this pane got confusing. */
+/* The foot: the step that is next, the rarer actions as icons beside it,
+   and the switch for drawing exits from this provider at the far end. */
+.prov__foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .prov__do {
-  margin-top: auto;
-  align-self: flex-start;
-  padding: 5px 10px;
-  border-radius: var(--r-ctl);
+  height: 32px;
+  padding: 0 13px;
+  border-radius: 10px;
   border: 1px solid var(--border);
   background: var(--control);
   color: var(--text);
   font: inherit;
-  font-size: 11px;
-  line-height: 15px;
+  font-size: 11.5px;
+  font-weight: 500;
   cursor: pointer;
   transition: border-color 150ms var(--ease), color 150ms var(--ease),
-              transform 110ms var(--ease);
+              background 150ms var(--ease), transform 110ms var(--ease);
 }
 .prov__do:hover { border-color: var(--ok); color: var(--ok); }
-.prov__do[data-lead="1"] { border-color: var(--ok); color: var(--ok); }
-/* The card's second, rarer action. Bottom right, opposite the step you are
-   actually here for, and an icon because naming it would give it the same
-   weight as the step - which it is nowhere near having. */
+/* The step that stands between a provider and a connection is the lit one;
+   Update is the only one that is not required, so it is the only one quiet. */
+.prov__do[data-lead="1"] {
+  border-color: transparent;
+  color: var(--ink, #06281d);
+  background: var(--ok);
+  font-weight: 600;
+}
+.prov__do[data-lead="1"]:hover { color: var(--ink, #06281d); filter: brightness(1.08); }
 .prov__side {
-  position: absolute;
-  right: 9px; bottom: 9px;
   display: grid;
   place-items: center;
-  width: 26px; height: 26px;
+  width: 32px; height: 32px;
   padding: 0;
-  border-radius: var(--r-ctl);
-  border: 1px solid transparent;
+  border-radius: 10px;
+  border: 1px solid rgb(var(--wash) / 0.08);
   background: none;
   color: var(--text-off);
   cursor: pointer;
@@ -3944,51 +4074,147 @@ canvas.blob__body {
 .prov__side[data-busy="1"] .ico {
   animation: prov-spin 900ms linear infinite;
 }
+.prov__do:active, .prov__side:active { transform: scale(0.94); }
+/* A lit step that is asking goes dark, so the amber of work in progress has
+   something to be read against. */
+.prov__do[data-lead="1"][data-busy="1"]:disabled { background: var(--control); }
 @media (prefers-reduced-motion: reduce) {
   .prov__side[data-busy="1"] .ico { animation: none; opacity: 0.5; }
-}
-/* Off in the corner rather than in a row: the state line is what the eye
-   wants from two of these side by side, and a tick competing on the same
-   line made both harder to read. */
-.prov__tick {
-  position: absolute;
-  top: 10px; right: 11px;
-  width: 13px; height: 13px;
-  color: var(--ok);
-  opacity: 0;
-  transform: scale(0.6);
-  transition: opacity 130ms var(--ease), transform 220ms var(--ease);
-}
-.prov:hover:not([data-empty="1"]) { border-color: var(--text-off); }
-/* The card gives under the press. It is a switch the size of a poster, and
-   at that size a border change alone does not read as a thing being pushed. */
-.prov:not([data-empty="1"]):active { transform: scale(0.985); }
-.prov { transform-origin: center; }
-.prov__do:active, .prov__side:active { transform: scale(0.94); }
-@media (prefers-reduced-motion: reduce) {
-  .prov:not([data-empty="1"]):active,
   .prov__do:active, .prov__side:active { transform: none; }
 }
-.prov[data-on="1"] {
-  border-color: var(--ok);
-  background: var(--control);
-}
-.prov[data-on="1"] .prov__mark { color: var(--ok); opacity: 0.9; }
-.prov[data-on="1"] .prov__tick { opacity: 1; transform: none; }
-/* Not usable is said rather than shown as an empty tick that refuses. The
-   card dims, but the line saying why and the button that answers it stay at
-   full strength - between them they are the only thing on the card worth
-   reading when it is in this state. */
-.prov[data-empty="1"] { cursor: default; }
-.prov[data-empty="1"] .prov__mark { opacity: 0.14; }
-.prov[data-empty="1"] .prov__name { color: var(--text-off); }
 
-/* Below this the two cards side by side leave about ninety pixels for a name
-   and a button, which is not enough for either. The default window is 400
-   wide, so this is the shape most people see. */
-@media (max-width: 560px) {
-  .use__opts { grid-template-columns: minmax(0, 1fr); }
+.prov__use {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-muted);
 }
+/* The tick box is where the state lives, moved out of sight; the switch
+   beside it is drawn off it. */
+.prov__in {
+  position: absolute;
+  width: 1px; height: 1px;
+  opacity: 0;
+}
+.prov__switch {
+  position: relative;
+  flex: none;
+  width: 34px; height: 20px;
+  border-radius: 999px;
+  background: rgb(var(--wash) / 0.08);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.12);
+  transition: background 200ms var(--ease), box-shadow 200ms var(--ease);
+}
+.prov__switch::after {
+  content: '';
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: transform 260ms var(--swing, var(--ease)), background 200ms var(--ease);
+}
+.prov__in:checked + .prov__switch { background: var(--ok); box-shadow: none; }
+.prov__in:checked + .prov__switch::after { transform: translateX(14px); background: var(--ink, #06281d); }
+.prov__in:focus-visible + .prov__switch { outline: 2px solid var(--focus); outline-offset: 2px; }
+.prov__in:disabled + .prov__switch { opacity: 0.4; }
+.prov[data-empty="1"] .prov__use { cursor: default; color: var(--text-off); }
+
+/* Narrow: the switch's words go before the switch does. */
+@media (max-width: 400px) {
+  .prov__usecap { display: none; }
+}
+
+/* ------------------------------------------------- adding an account */
+
+.addacct { display: grid; gap: 0; margin: 2px 0 0; padding: 4px 16px 18px; border: 0; }
+
+/* The chosen provider, large, and which login it wants. */
+.addacct__hero {
+  --brand: #3bc1c9;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin-top: 4px;
+  padding: 14px;
+  border-radius: 16px;
+  background:
+    linear-gradient(120deg, color-mix(in srgb, var(--brand) 15%, transparent), transparent 70%),
+    rgb(var(--wash) / 0.025);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 28%, transparent);
+}
+.addacct__hero[data-provider="windscribe"] { --brand: var(--jade-2, #4ae5c3); }
+.addacct__badge {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 46px; height: 46px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--brand) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 35%, transparent);
+}
+.addacct__mark { width: 24px; height: 24px; color: var(--brand); }
+.addacct__copy { display: grid; gap: 3px; min-width: 0; }
+.addacct__name { font-size: 15px; font-weight: 600; color: var(--text); }
+.addacct__say { font-size: 11.5px; line-height: 16px; color: var(--text-muted); }
+
+.addacct__full {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 14px;
+  background: rgb(var(--wash) / 0.03);
+  font-size: 12px; line-height: 18px;
+  color: var(--text-muted);
+}
+
+.addacct__form { display: grid; margin-top: 14px; }
+.addacct__form .field { margin-top: 12px; }
+.addacct__form .field:first-child { margin-top: 0; }
+.addacct__form .field__in { height: 40px; border-radius: 10px; }
+
+.addacct__safe {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 14px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: rgb(var(--wash) / 0.035);
+  font-size: 11px; line-height: 15px;
+  color: var(--text-muted);
+}
+.addacct__safe .ico { flex: none; color: var(--ok); }
+
+.btn.addacct__go {
+  width: 100%;
+  height: 44px;
+  margin-top: 14px;
+  justify-content: center;
+  border-radius: 12px;
+  background: var(--ok);
+  color: var(--ink, #06281d);
+  font-weight: 600;
+  box-shadow: none;
+}
+.btn.addacct__go:hover { filter: brightness(1.07); }
+.btn.addacct__go[data-busy='1']:disabled { background: var(--control); }
+.addacct__cancel {
+  justify-self: center;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-off);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.addacct__cancel:hover { color: var(--text-muted); background: rgb(var(--wash) / 0.05); }
+.addacct .note:empty { display: none; }
 
 /* What a pin run left behind, when it wrote somewhere the app already reads
    and there is therefore nothing to press. */

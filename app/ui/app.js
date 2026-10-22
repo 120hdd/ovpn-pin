@@ -3683,36 +3683,39 @@ const acct = {
 };
 
 function acctBusy(on) {
-  for (const id of ['acctAdd', 'acctSave', 'acctCancel', 'acctUser',
+  for (const id of ['acctSave', 'acctCancel', 'acctUser',
                     'acctPass', 'acctTwo', 'acctLabel', 'wsRefresh',
                     'useSurfsharkDo', 'useWindscribeDo']) {
     const el = $(id);
     if (el) el.disabled = on;
   }
-  for (const b of document.querySelectorAll('#acctList button')) b.disabled = on;
+  for (const b of document.querySelectorAll('.prov__accts button')) {
+    b.disabled = on;
+  }
 }
 
 function acctPaint() {
-  const list = $('acctList');
-  list.textContent = '';
-
-  if (!acct.rows.length) {
-    const none = document.createElement('p');
-    none.className = 'acct__none';
-    none.textContent = 'No accounts yet. Add one and this app has something '
-      + 'to connect with.';
-    list.appendChild(none);
+  // Each provider's accounts live in that provider's card.
+  const lists = {};
+  for (const box of document.querySelectorAll('.prov__accts')) {
+    box.textContent = '';
+    lists[box.dataset.for] = box;
   }
 
   for (const row of acct.rows) {
+    const list = lists[row.provider];
+    if (!list) continue;
     const el = document.createElement('div');
     el.className = 'acct__row';
     el.dataset.provider = row.provider;
     el.dataset.active = row.active ? '1' : '0';
+    el.dataset.ready = row.signedIn ? '1' : '0';
 
+    // An initial in a circle rather than the provider's name in a pill:
+    // the card the row sits in already says which provider it is.
     const tag = document.createElement('span');
     tag.className = 'acct__tag';
-    tag.textContent = row.providerName;
+    tag.textContent = (row.label || row.username || '?').slice(0, 1).toUpperCase();
 
     const who = document.createElement('span');
     who.className = 'acct__who';
@@ -3744,21 +3747,40 @@ function acctPaint() {
     // Fetch and pin this account's servers from right here, as the Android
     // app's account cards do - not two screens away.
     const pinIt = document.createElement('button');
-    pinIt.className = 'btn btn--quiet btn--auto';
+    pinIt.className = 'acct__icon';
     pinIt.type = 'button';
-    pinIt.textContent = 'Pin';
     pinIt.title = 'Get this provider\'s servers and pin them';
+    pinIt.setAttribute('aria-label', pinIt.title);
+    pinIt.append(icon('#i-pin', 'ico ico--sm'));
     pinIt.addEventListener('click', () => prepareServers(row.provider));
     act.appendChild(pinIt);
+    // Remove asks once more, in place: the first press arms it, the second
+    // removes, and leaving it alone for a few seconds disarms it.
     const drop = document.createElement('button');
-    drop.className = 'btn btn--quiet btn--auto';
+    drop.className = 'btn btn--quiet btn--auto acct__drop';
     drop.type = 'button';
     drop.textContent = 'Remove';
-    drop.addEventListener('click', () => acctRemove(row.id, row.label, drop));
+    drop.addEventListener('click', () => {
+      if (drop.dataset.sure !== '1') {
+        drop.dataset.sure = '1';
+        drop.textContent = 'Remove?';
+        setTimeout(() => {
+          drop.dataset.sure = '0';
+          drop.textContent = 'Remove';
+        }, 3000);
+        return;
+      }
+      acctRemove(row.id, row.label, drop);
+    });
     act.appendChild(drop);
 
     el.append(tag, who, act);
     list.appendChild(el);
+  }
+
+  for (const card of document.querySelectorAll('.prov')) {
+    const key = card.dataset.provider;
+    card.dataset.account = acctTaken(key) ? '1' : '0';
   }
 
   // The pill counts what is usable, not what is listed - a roster entry with
@@ -3766,7 +3788,9 @@ function acctPaint() {
   const usable = acct.rows.filter((r) => r.signedIn).length;
   const pill = $('acctPill');
   pill.dataset.state = usable ? 'on' : 'off';
-  pill.textContent = usable ? `${usable} ready` : 'none';
+  pill.textContent = usable
+    ? `${usable} account${usable === 1 ? '' : 's'}` : 'no accounts';
+  paintAcctHero();
 
   // The refresh icon lives in the Windscribe card now, and only means
   // anything while there is a Windscribe account for it to be about.
@@ -3774,6 +3798,27 @@ function acctPaint() {
   // never anything to refresh.
   const ws = acct.rows.find((r) => r.provider === 'windscribe' && r.active);
   $('wsRefresh').hidden = !ws;
+}
+
+/* The number across the top of Accounts: how many providers have both an
+   account and pinned servers, which is what it takes to connect through
+   one. Painted from both halves - the roster and the providers' state -
+   because either can change without the other. */
+function paintAcctHero() {
+  const per = state.provState || {};
+  const keys = ['surfshark', 'windscribe'];
+  const ready = keys.filter((k) => (per[k] || {}).usable).length;
+  $('acctReadyN').textContent = String(ready);
+  $('acctReadyN').closest('.accthero').dataset.ready = ready ? '1' : '0';
+  const say = $('acctHeroSay');
+  // The (i) button lives inside the title, so only the words are replaced.
+  const words = say.firstChild && say.firstChild.nodeType === Node.TEXT_NODE
+    ? say.firstChild : say.insertBefore(document.createTextNode(''), say.firstChild);
+  words.textContent = ready ? 'providers ready to connect'
+    : acct.rows.length ? 'ready yet - get the servers and pin them'
+    : 'ready - add an account to connect';
+  const bars = document.querySelectorAll('.accthero__bar i');
+  bars.forEach((b, i) => { b.dataset.on = i < ready ? '1' : '0'; });
 }
 
 async function acctRefresh() {
@@ -3796,34 +3841,56 @@ function acctShowForm(on) {
   $('acctTwo').value = '';
   $('acctLabel').value = '';
   said($('acctNewSaid'), '');
+  // One account per provider: a provider that has its account already
+  // gets the sentence saying so instead of the form.
   acctSetProvider(acct.provider);
+  const taken = acctTaken(acct.provider);
+  $('acctFull').hidden = !taken;
+  $('acctForm').hidden = taken;
   if (!dlg.open) dlg.showModal();
-  $('acctUser').focus();
+  if (!taken) $('acctUser').focus();
 }
+
+/* One account per provider. */
+function acctTaken(provider) {
+  return acct.rows.some((r) => r.provider === provider);
+}
+
+const ACCT_HERO = {
+  surfshark: {
+    mark: '#i-ss',
+    say: 'The service login from Surfshark’s manual-setup page, not your email.',
+    user: 'Service username', hint: 'from the manual-setup page', go: 'Save account',
+  },
+  windscribe: {
+    mark: '#i-ws',
+    say: 'Your Windscribe login. A short puzzle comes next, asked once.',
+    user: 'Username or email', hint: 'your Windscribe login', go: 'Continue to the puzzle',
+  },
+};
 
 function acctSetProvider(which) {
   acct.provider = which;
-  for (const opt of $('acctWhich').querySelectorAll('.pair__opt')) {
-    opt.setAttribute('aria-selected', String(opt.dataset.provider === which));
-  }
+  const spec = ACCT_HERO[which];
+  const name = PROVIDER_NAMES[which];
+  $('acctDlgTitle').textContent = `Add a ${name} account`;
+  $('acctHero').dataset.provider = which;
+  $('acctHeroMark').setAttribute('href', spec.mark);
+  $('acctHeroName').textContent = `Connect ${name}`;
+  $('acctHeroSay').textContent = spec.say;
+  $('acctSafeTo').textContent = name;
+  $('acctSave').textContent = spec.go;
   // Surfshark's is a service credential off a web page; Windscribe's is the
   // account you log in with. Saying which is the difference between pasting
   // the right thing and being refused with no idea why.
-  $('acctUserCap').textContent = which === 'windscribe'
-    ? 'Username or email' : 'Service username';
+  $('acctUserCap').textContent = spec.user;
+  $('acctUser').placeholder = spec.hint;
   // Two-factor is a login thing, and only one of these is a login.
   $('acctTwoWrap').hidden = which !== 'windscribe';
-  said($('acctNewSaid'), which === 'windscribe'
-    ? 'Signing in fetches a puzzle to solve. It is asked once.'
-    : 'From the manual-setup page — not the email you log in with.');
+  said($('acctNewSaid'), '');
 }
 
-$('acctWhich').addEventListener('click', (e) => {
-  const opt = e.target.closest('.pair__opt');
-  if (opt) acctSetProvider(opt.dataset.provider);
-});
 
-$('acctAdd').addEventListener('click', () => acctShowForm(true));
 $('acctCancel').addEventListener('click', () => acctShowForm(false));
 $('acctDlgClose').addEventListener('click', () => acctShowForm(false));
 
@@ -3831,6 +3898,11 @@ $('acctSave').addEventListener('click', async () => {
   const user = $('acctUser').value.trim();
   const pass = $('acctPass').value;
   const label = $('acctLabel').value.trim();
+  if (acctTaken(acct.provider)) {
+    said($('acctNewSaid'), `${PROVIDER_NAMES[acct.provider]} already has its account. `
+      + 'Remove it first to add a different one.', 'bad');
+    return;
+  }
   if (!user) { said($('acctNewSaid'), 'Enter the username.', 'bad'); return; }
   if (!pass) { said($('acctNewSaid'), 'Enter the password.', 'bad'); return; }
 
@@ -3960,7 +4032,7 @@ async function fetchWindscribe(btn) {
    reading, which is the point - the paragraphs that used to carry this were
    read by nobody who needed them. */
 const PROV_DO = {
-  signin: { label: 'Sign in', lead: true },
+  signin: { label: 'Add an account', lead: true },
   fetch: { label: 'Get servers', lead: true },
   pin: { label: 'Pin them', lead: true },
   update: { label: 'Update servers', lead: false },
@@ -4003,11 +4075,6 @@ async function provDo(key, step, btn) {
 $('useOpts').addEventListener('click', (e) => {
   const btn = e.target.closest('.prov__do');
   if (!btn) return;
-  // Inside a <label>, so a click here would otherwise tick the box behind it
-  // as well - and pressing "Get servers" is not asking to connect through a
-  // provider that has none.
-  e.preventDefault();
-  e.stopPropagation();
   provDo(btn.closest('.prov').dataset.provider, btn.dataset.step, btn);
 });
 
@@ -4202,6 +4269,7 @@ function paintUse(info) {
   const usable = Object.keys(per).filter((k) => per[k].usable);
   const chosen = (info && info.providers) || usable;
   state.providers = chosen;
+  state.provState = per;
 
   for (const key of ['surfshark', 'windscribe']) {
     const cap = key[0].toUpperCase() + key.slice(1);
@@ -4234,7 +4302,18 @@ function paintUse(info) {
     go.dataset.lead = spec.lead ? '1' : '0';
     go.textContent = step === 'pin' ? `Pin ${has.waiting}` : spec.label;
     go.hidden = false;
+
+    // Account, servers, pinned - ticked off in the card as each is done.
+    const done = {
+      account: has.account,
+      servers: has.servers > 0 || has.waiting > 0,
+      pinned: has.servers > 0,
+    };
+    for (const li of $('use' + cap + 'Steps').children) {
+      li.dataset.done = done[li.dataset.step] ? '1' : '0';
+    }
   }
+  paintAcctHero();
 
   // A refusal that has since been answered. The note under this chooser
   // records which providers it was about, and once they have what they were

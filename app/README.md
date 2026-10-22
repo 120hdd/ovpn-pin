@@ -77,7 +77,7 @@ Why any of this exists — and the measurements behind it — is in the
 
 ## Settings
 
-### Sign-in
+### Accounts
 
 The provider's **service** username and password, not the login email. An
 email is refused by every exit with exactly the same silence as a wrong
