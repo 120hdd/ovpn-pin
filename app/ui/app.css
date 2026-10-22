@@ -4450,11 +4450,14 @@ canvas.blob__body {
 .load[data-level="mid"]::after { background: var(--work, #d9a441); }
 .load[data-level="high"]::after { background: var(--fail); }
 
+.row__ping { font-size: 12.5px; font-weight: 600; color: var(--ok); white-space: nowrap; }
+.row__ping[data-level="mid"] { color: var(--work, #d9a441); }
+.row__ping[data-level="high"] { color: var(--fail); }
+
+/* The word alone, like the provider's mark beside it - three boxed things
+   in a row read as buttons. */
 .mark {
-  padding: 1px 5px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  font-size: 8.5px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.04em;
   color: var(--text-off);

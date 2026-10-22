@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.erelay.relay.data.City
@@ -108,13 +109,17 @@ private fun inOrder(h: String, q: String): Boolean {
     return i == q.length
 }
 
+/** Starred itself, or one of its cities is: either way it goes to the top. */
+private fun Country.starredIn(favourites: Set<String>) =
+    code in favourites || cities.any { it.code in favourites }
+
 /**
  * The desktop's order: starred first, then the ones that are not known dead,
  * then by the chosen measure.
  */
 private fun ordered(list: List<Country>, sort: Sort, favourites: Set<String>): List<Country> =
     list.sortedWith(
-        compareBy<Country>({ it.code !in favourites }, { it.blocked })
+        compareBy<Country>({ !it.starredIn(favourites) }, { it.blocked })
             .then(when (sort) {
                 Sort.PING -> compareBy<Country>({ it.ping == null }, { it.ping ?: 0 }, { it.name })
                 Sort.LOAD -> compareBy<Country>({ it.lowestLoad == null }, { it.lowestLoad ?: 0 }, { it.name })
@@ -149,7 +154,7 @@ fun Picker(open: Boolean, m: PickerModel, onClose: () -> Unit) {
         val split = m.sort == Sort.PING && q.isEmpty()
         val timed = if (split) order.filter { it.second }.mapNotNull { byCode[it.first] } else shown
         val untimed = if (split) order.filterNot { it.second }.mapNotNull { byCode[it.first] }
-            .sortedWith(compareBy<Country>({ it.code !in m.favourites }, { it.name })) else emptyList()
+            .sortedWith(compareBy<Country>({ !it.starredIn(m.favourites) }, { it.name })) else emptyList()
         val stale = split && untimed.any { it.ping != null }
         val expanded = remember { mutableStateMapOf<String, Boolean>() }
         val list = rememberLazyListState()
@@ -239,7 +244,8 @@ private fun CountryItem(c: Country, m: PickerModel, expanded: MutableMap<String,
         onExpand = { expanded[c.code] = !open },
     ) {
         if (c.cities.size > 1) {
-            for (city in c.cities) CityBlock(city, m)
+            // Starred cities first; the rest keep the order the core gave.
+            for (city in c.cities.sortedBy { it.code !in m.favourites }) CityBlock(city, m)
         } else {
             ExitList(c.code, m)
         }
@@ -444,7 +450,7 @@ private fun CountryCard(
                     if (p2p) Badge("P2P", Tone.ok)
                 }
             }
-            Bolt(testing, onTest)
+            Bolt(testing, onClick = onTest)
             IconButton(if (starred) Glyph.starFilled else Glyph.star, if (starred) "Unstar" else "Star", onStar,
                 tint = if (starred) Tone.work else Tone.textOff, size = 36.dp)
             if (expandable) {
@@ -466,30 +472,27 @@ private fun CountryCard(
     }
 }
 
-/** A small word in a tinted capsule: 10G, P2P. */
+/** A small coloured word: 10G, P2P. */
 @Composable
 private fun Badge(text: String, color: Color) {
-    Box(
-        Modifier.padding(end = 5.dp).clip(RoundedCornerShape(6.dp)).background(color.copy(alpha = 0.13f))
-            .border(1.dp, color.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-    ) {
-        Text(text, style = Type.eyebrow.copy(color = color, fontSize = 9.5.sp))
-    }
+    // The word in its colour and nothing round it, like the provider's mark
+    // beside it: a row of three boxed things read as buttons.
+    Text(text, style = Type.eyebrow.copy(color = color, fontSize = 10.sp),
+        modifier = Modifier.padding(end = 7.dp))
 }
 
 @Composable
-private fun Bolt(testing: Boolean, onClick: () -> Unit) {
+private fun Bolt(testing: Boolean, size: Dp = 36.dp, onClick: () -> Unit) {
     // The pulse only exists while a test runs. One per row, always running,
     // redrew every visible row on every frame and made the list stutter.
     if (!testing) {
-        IconButton(Glyph.bolt, "Test these exits", onClick, tint = Tone.textOff, size = 36.dp)
+        IconButton(Glyph.bolt, "Test these exits", onClick, tint = Tone.textOff, size = size)
         return
     }
     val loop = rememberInfiniteTransition(label = "bolt")
     val a = loop.animateFloat(1f, 0.3f, infiniteRepeatable(tween(500), RepeatMode.Reverse), label = "a")
     Box(Modifier.graphicsLayer { alpha = a.value }) {
-        IconButton(Glyph.bolt, "Stop testing", onClick, tint = Tone.work, size = 36.dp)
+        IconButton(Glyph.bolt, "Stop testing", onClick, tint = Tone.work, size = size)
     }
 }
 
@@ -504,9 +507,10 @@ private fun failReason(why: String): String = when {
 }
 
 /**
- * Who runs these exits, as the provider's own mark in a tinted capsule. The
- * tint says what the last test found here: the provider's colour untested,
- * green when one answered, amber when none did.
+ * Who runs these exits, as the provider's own mark on its own - no capsule
+ * round it, as the desktop's row__tag has it. The tint says what the last
+ * test found here: the provider's colour untested, green when one answered,
+ * amber when none did.
  */
 @Composable
 fun ProviderTag(provider: String, tested: Boolean = false, ok: Boolean = false) {
@@ -517,17 +521,12 @@ fun ProviderTag(provider: String, tested: Boolean = false, ok: Boolean = false) 
         else -> Tone.work
     }
     Box(
-        Modifier
-            .padding(end = 5.dp)
-            .size(22.dp)
-            .clip(RoundedCornerShape(7.dp))
-            .background(c.copy(alpha = 0.13f))
-            .border(1.dp, c.copy(alpha = 0.35f), RoundedCornerShape(7.dp)),
+        Modifier.padding(end = 6.dp).size(18.dp),
         contentAlignment = Alignment.Center,
     ) {
         when (provider) {
-            "windscribe" -> Icon(Glyph.windscribe, "Windscribe", Modifier.size(13.dp), tint = c)
-            "surfshark" -> Icon(Glyph.surfshark, "Surfshark", Modifier.size(13.dp), tint = c)
+            "windscribe" -> Icon(Glyph.windscribe, "Windscribe", Modifier.size(17.dp), tint = c)
+            "surfshark" -> Icon(Glyph.surfshark, "Surfshark", Modifier.size(17.dp), tint = c)
             else -> Text(provider.take(1).uppercase(),
                 style = Type.mono.copy(fontSize = 10.sp, color = c, fontWeight = FontWeight.Medium))
         }
@@ -567,38 +566,48 @@ private fun CityBlock(city: City, m: PickerModel) {
                 for ((provider, n) in city.by.toSortedMap()) if (n > 0) ProviderTag(provider)
                 if ((city.gbps ?: 0) >= 10) Badge("10G", Tone.accent)
                 if (city.p2p == true) Badge("P2P", Tone.ok)
+                // The load moves down here: the time is what picks a city,
+                // so it is the number that stands on the right.
                 Text(buildString {
                     append("${city.count} relay${if (city.count == 1) "" else "s"}")
-                    if (city.tested > 0 && city.ok == 0) append(" · blocked")
-                    else if (city.ping != null) append(" · ${city.ping} ms")
+                    if (city.load != null) append(" · ${city.load}% load")
                 }, style = Type.small, maxLines = 1)
             }
         }
-        city.load?.let { LoadBar(it) }
+        val testing = m.reach.running && m.reach.code == city.code
+        if (testing) {
+            Text("${m.reach.done}/${m.reach.total}", style = Type.small.copy(color = Tone.work),
+                modifier = Modifier.padding(end = 2.dp))
+        } else {
+            CityPing(city)
+        }
+        // The same two the country's card has: time just this city, and keep
+        // it at the top of the list.
+        Bolt(testing, size = 32.dp) {
+            if (testing) m.onCancelTest() else m.onTest(city.code)
+        }
+        val starred = city.code in m.favourites
+        IconButton(if (starred) Glyph.starFilled else Glyph.star, if (starred) "Unstar" else "Star",
+            { m.onStar(city.code) }, tint = if (starred) Tone.work else Tone.textOff, size = 32.dp)
         val turn by androidx.compose.animation.core.animateFloatAsState(if (open) 180f else 0f, tween(220), label = "chev")
         Box(Modifier.graphicsLayer { rotationZ = turn }) {
-            IconButton(Glyph.chevDown, if (open) "Hide exits" else "Show exits", { open = !open }, size = 34.dp)
+            IconButton(Glyph.chevDown, if (open) "Hide exits" else "Show exits", { open = !open }, size = 32.dp)
         }
     }
     AnimatedVisibility(open) { Column(Modifier.padding(start = 14.dp)) { ExitList(city.code, m) } }
     Divider()
 }
 
-/** How busy a city's servers are, as a short bar with the number on it. */
+/** A city's best time on the right of its row, or that nothing answered. */
 @Composable
-private fun LoadBar(load: Int) {
-    val c = when {
-        load < 25 -> Tone.ok
-        load < 60 -> Tone.work
-        else -> Tone.fail
+private fun CityPing(city: City) {
+    val (say, c) = when {
+        city.tested > 0 && city.ok == 0 -> "blocked" to Tone.fail
+        city.ping != null -> "${city.ping} ms" to pingTone(city.ping)
+        else -> return
     }
-    Column(Modifier.padding(end = 6.dp), horizontalAlignment = Alignment.End) {
-        Text("$load%", style = Type.small.copy(fontSize = 10.5.sp, color = c))
-        Spacer(Modifier.height(3.dp))
-        Box(Modifier.size(width = 30.dp, height = 4.dp).clip(CircleShape).background(Tone.control)) {
-            Box(Modifier.fillMaxWidth(load.coerceIn(2, 100) / 100f).height(4.dp).background(c))
-        }
-    }
+    Text(say, style = Type.strong.copy(fontSize = 13.sp, color = c), maxLines = 1,
+        modifier = Modifier.padding(end = 4.dp))
 }
 
 /** The individual exits behind a row, fetched when it opens. */

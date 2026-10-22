@@ -409,7 +409,7 @@ function drawList(query) {
   let untimedAt = -1;
   if (!q && (state.sortBy || 'ping') === 'ping') {
     const timed = (c) => (state.freeze ? state.freeze.tested.has(c.code) : !!c.tested);
-    const fav = (c) => (isFavourite(c.code) ? 0 : 1);
+    const fav = (c) => (starredIn(c) ? 0 : 1);
     const yes = found.filter(timed);
     const no = found.filter((c) => !timed(c))
       .sort((a, b) => fav(a) - fav(b) || a.name.localeCompare(b.name));
@@ -478,7 +478,9 @@ function drawList(query) {
     const cityList = c.cityList || [];
     if (cityList.length > 1 && state.openCities.has(c.code)) {
       let at = 0;
-      for (const city of cityList) {
+      // Starred cities first; the rest keep the order the core gave.
+      const starred = (x) => (isFavourite(`${c.code}/${x.code}`) ? 0 : 1);
+      for (const city of cityList.slice().sort((a, b) => starred(a) - starred(b))) {
         // Both providers in one city is two ways into one place, the same
         // as it is for a country - so it splits the same way rather than
         // merging into a row that cannot say which you would get.
@@ -5004,6 +5006,12 @@ function isFavourite(code) {
   return (state.favourites || []).includes(code);
 }
 
+/* Starred itself, or one of its cities is: either way it goes to the top. */
+function starredIn(c) {
+  return isFavourite(c.code)
+    || (c.cityList || []).some((x) => isFavourite(`${c.code}/${x.code}`));
+}
+
 async function toggleFavourite(code) {
   const r = await window.pywebview.api.toggleFavourite(code);
   if (!r.ok) return;
@@ -5030,7 +5038,7 @@ async function toggleFavourite(code) {
 function sortCountries(list) {
   const kind = state.sortBy || 'ping';
   const dead = (c) => (c.tested && !c.ok ? 1 : 0);
-  const fav = (c) => (isFavourite(c.code) ? 0 : 1);
+  const fav = (c) => (starredIn(c) ? 0 : 1);
   const cmp = {
     ping: (a, b) => (a.ping === null) - (b.ping === null)
       || (a.ping || 0) - (b.ping || 0) || a.name.localeCompare(b.name),
@@ -5156,38 +5164,39 @@ function buildCity(c, city, via) {
   meta.className = 'row__meta';
   const n = via ? (city.by || {})[via] || 0 : city.count;
   const bits = [`${n} relay${n === 1 ? '' : 's'}`];
-  if (city.ping !== null && city.ping !== undefined) bits.push(msSaid(city.ping));
-  if (city.tested && !city.ok && city.tested >= city.count) {
-    bits.push('blocked');
-  }
+  // The load down here, the time on the right: the time is what picks a
+  // city, so it is the number that stands out.
+  if (city.load !== null && city.load !== undefined) bits.push(`${loadSaid(city.load)} load`);
   meta.textContent = bits.join(' · ');
   copy.append(name, meta);
 
   const marks = document.createElement('span');
   marks.className = 'row__marks';
-  // Load is the number that decides between two cities that both answer, and
-  // the one that goes stale fastest - it was read when the list was fetched.
-  if (city.load !== null && city.load !== undefined) {
-    const load = document.createElement('span');
-    load.className = 'load';
-    load.dataset.level = city.load >= 60 ? 'high' : city.load >= 25 ? 'mid' : 'low';
-    load.style.setProperty('--at', `${Math.min(100, city.load)}%`);
-    load.title = `${loadSaid(city.load)} loaded when the list was fetched`;
-    marks.append(load);
+  // The city's best time where the load bar was, coloured by how good it
+  // is - or that nothing there answered.
+  const blocked = city.tested && !city.ok && city.tested >= city.count;
+  if (blocked || (city.ping !== null && city.ping !== undefined)) {
+    const ping = document.createElement('span');
+    ping.className = 'row__ping';
+    ping.textContent = blocked ? 'blocked' : msSaid(city.ping);
+    ping.dataset.level = blocked || city.ping >= 300 ? 'high' : city.ping >= 150 ? 'mid' : 'low';
+    marks.append(ping);
   }
+  // 10G and P2P beside the name, as the country's row has them: on the
+  // right they pushed the meta line until its load was cut off.
   if (city.gbps === 10) {
     const fast = document.createElement('span');
     fast.className = 'mark';
     fast.textContent = '10G';
     fast.title = '10 Gbps link';
-    marks.append(fast);
+    name.append(fast);
   }
   if (city.p2p) {
     const p2p = document.createElement('span');
     p2p.className = 'mark';
     p2p.textContent = 'P2P';
     p2p.title = 'P2P allowed here';
-    marks.append(p2p);
+    name.append(p2p);
   }
 
   const from = Object.keys(city.by || {}).filter((k) => city.by[k] > 0).sort();
