@@ -484,9 +484,12 @@ void main() {
 
       function resize() {
         const dpr = Math.min(devicePixelRatio || 1, 2);
-        const box = canvas.getBoundingClientRect();
-        if (!box.width || !box.height) return false;
-        const w = Math.round(box.width * dpr), h = Math.round(box.height * dpr);
+        /* the laid-out size, not the drawn one: the stage shrinks by a
+           transform when the meter opens, and following it would reallocate
+           the buffers on every frame of the shrink */
+        const bw = canvas.clientWidth, bh = canvas.clientHeight;
+        if (!bw || !bh) return false;
+        const w = Math.round(bw * dpr), h = Math.round(bh * dpr);
         if (canvas.width !== w || canvas.height !== h) {
           canvas.width = w; canvas.height = h;
           gl.viewport(0, 0, w, h);
