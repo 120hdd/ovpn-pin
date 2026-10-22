@@ -39,8 +39,8 @@ private object Mark {
     const val BEAD_ANGLE = -45f
     const val BEAD_OUT = 132f
 
-    val disc get() = if (Tone.light) Color(0xFF111318) else Color(0xFFF4F6FA)
-    val ring get() = if (Tone.light) Color(0xFF12B886) else Color(0xFF61EFBF)
+    val disc get() = if (Tone.light) Color(0xFF12B886) else Color(0xFF61EFBF)
+    val ring get() = if (Tone.light) Color(0xFF111318) else Color(0xFFFFFFFF)
 }
 
 /**
