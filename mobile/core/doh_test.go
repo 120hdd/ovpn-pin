@@ -2,7 +2,9 @@ package core
 
 import (
 	"context"
+	"errors"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 )
@@ -20,6 +22,39 @@ func TestForgedAddressesAreRefused(t *testing.T) {
 		if !IsPublic(netip.MustParseAddr(s)) {
 			t.Errorf("%s was refused, but it is a real public address", s)
 		}
+	}
+}
+
+// A forged answer has to stay tellable-apart by errors.Is, and now also has
+// to carry what it was told, because the page prints the address.
+//
+// Both halves matter. Callers that only ask which kind of failure this was
+// go through ErrForged and must not notice the change; the pin pane asks for
+// the addresses and gets a category when the error came from somewhere that
+// did not keep them.
+func TestForgedErrorCarriesTheAddresses(t *testing.T) {
+	err := error(&ForgedError{Addrs: []string{"10.10.34.36", "10.10.34.35"}})
+
+	if !errors.Is(err, ErrForged) {
+		t.Error("a ForgedError is no longer an ErrForged - every caller that " +
+			"branches on the kind of failure has just stopped seeing this one")
+	}
+	if err.Error() != ErrForged.Error() {
+		t.Errorf("it says %q, and ErrForged says %q", err, ErrForged)
+	}
+
+	var forged *ForgedError
+	if !errors.As(err, &forged) {
+		t.Fatal("errors.As did not unwrap it")
+	}
+	if got := strings.Join(forged.Addrs, ", "); got != "10.10.34.36, 10.10.34.35" {
+		t.Errorf("the addresses came back as %q", got)
+	}
+
+	// A bare ErrForged is still an ErrForged and carries nothing, which is
+	// the case pin.go falls back to its category for.
+	if errors.As(ErrForged, &forged) {
+		t.Error("a bare ErrForged unwrapped to a ForgedError")
 	}
 }
 

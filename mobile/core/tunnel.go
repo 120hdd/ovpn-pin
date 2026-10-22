@@ -27,12 +27,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	tun "github.com/sagernet/sing-tun"
@@ -208,14 +208,33 @@ type handler Tunnel
 // almost everything copes - QUIC falls back to TCP when it gets nothing, and
 // that fallback is what makes the web work here at all.
 func (h *handler) JudgeFlow(network uint8, _ netip.AddrPort, destination netip.AddrPort, _ []byte) tun.FlowVerdict {
-	if network == N.NetworkUDP[0] || destination.Port() == 53 {
-		if destination.Port() == 53 {
-			return tun.FlowVerdict{Action: tun.ActionHijackDNS}
-		}
+	if destination.Port() == 53 {
+		return tun.FlowVerdict{Action: tun.ActionHijackDNS}
+	}
+	if network == ipProtoUDP {
 		return tun.FlowVerdict{Action: tun.ActionDrop}
 	}
 	return tun.FlowVerdict{Action: tun.ActionAccept}
 }
+
+// What the stack means by "network" here is the IP protocol number - 6 and
+// 17 - and not sing's "tcp"/"udp" strings. sing-tun calls this with
+// uint8(header.TCPProtocolNumber) and uint8(header.UDPProtocolNumber).
+//
+// Worth a name, because the mistake it replaces compiled and read correctly.
+// N.NetworkUDP is the string "udp", so N.NetworkUDP[0] is the character 'u',
+// 117, which is a number no protocol is - and the test against it was never
+// once true. Every UDP flow the comment above says is dropped was quietly
+// accepted instead, dialled as though it were a stream, and closed a layer
+// further in when CONNECT would not carry it. What a person saw was the
+// same. Where it happened, and how long it took to happen, was not.
+//
+// Left untyped, because the two places that want them want different types:
+// JudgeFlow compares against a uint8 and whoOpened takes an int.
+const (
+	ipProtoTCP = 6
+	ipProtoUDP = 17
+)
 
 // label is what to call this destination in the list.
 //
@@ -258,14 +277,15 @@ func (h *handler) carry(ctx context.Context, conn net.Conn, source, destination 
 	// connection, before the dial, because after it the source port may
 	// already be gone from the kernel's table.
 	//
-	// 6 is IPPROTO_TCP; nothing else reaches here, because JudgeFlow drops
-	// UDP and hijacks DNS before either gets this far.
+	// Nothing but TCP reaches here, because JudgeFlow drops UDP and hijacks
+	// DNS before either gets this far - so the protocol to look the owner up
+	// under is a constant, and it is named rather than written as 6.
 	row := h.hosts.opened(destination.String(), h.label(destination),
-		whoOpened(6, source.String(), destination.String()))
+		whoOpened(ipProtoTCP, source.String(), destination.String()))
 
 	upstream, spare, err := h.exit.Open(destination.String(), 15*time.Second)
 	if err != nil {
-		h.hosts.closed(row, 0, 0)
+		h.hosts.closed(row)
 		return err
 	}
 	defer upstream.Close()
@@ -275,14 +295,16 @@ func (h *handler) carry(ctx context.Context, conn net.Conn, source, destination 
 	// a corruption that only shows up as a page that half loads.
 	if len(spare) > 0 {
 		if _, err := conn.Write(spare); err != nil {
+			h.hosts.closed(row)
 			return err
 		}
+		h.hosts.moved(row, 0, int64(len(spare)))
 	}
 
-	// io.Copy already returns what it moved, so the counting is free - no
-	// wrapper reader, no extra allocation per chunk, nothing in the path of
-	// the bytes themselves.
-	var up, down atomic.Int64
+	// Counted as the bytes pass, through a writer that adds each chunk to
+	// the row - so the meter moves during a download, not after it.
+	toExit := counted{w: upstream, h: h.hosts, row: row}
+	toApp := counted{w: conn, h: h.hosts, row: row, down: true}
 	done := make(chan error, 2)
 	go func() {
 		// The first thing a client sends is where its name is, if it has
@@ -291,36 +313,25 @@ func (h *handler) carry(ctx context.Context, conn net.Conn, source, destination 
 		//
 		// Only the client-to-exit direction, and only the first message.
 		// Everything else goes straight through io.Copy as before.
-		var moved int64
 		if first, err := firstBytes(conn); err == nil && len(first) > 0 {
 			if name := sniFrom(first); name != "" {
 				h.hosts.rename(destination.String(),
 					net.JoinHostPort(name, strconv.Itoa(int(destination.Port))))
 			}
-			n, werr := upstream.Write(first)
-			moved += int64(n)
-			if werr != nil {
-				up.Store(moved)
+			if _, werr := toExit.Write(first); werr != nil {
 				done <- werr
 				return
 			}
 		}
-		n, err := io.Copy(upstream, conn)
-		up.Store(moved + n)
+		_, err := io.Copy(toExit, conn)
 		done <- err
 	}()
-	go func() { n, err := io.Copy(conn, upstream); down.Store(n); done <- err }()
+	go func() { _, err := io.Copy(toApp, upstream); done <- err }()
 
-	// Both halves have to finish before the counts are read, and that is not
-	// fussiness - it was wrong. select returns on whichever copier ends
-	// first, and the deferred record then read a counter the other one had
-	// not written yet. In practice the client closes first, so the upload was
-	// counted and the download was always zero:
-	//
-	//	149.154.167.91:5222   down 0 B   up 2.33 KB
-	//
-	// Closing upstream is what ends the other copy, so waiting for it is
-	// bounded: one read that is already failing.
+	// Both halves finish before the row is marked closed, so it is never
+	// shown as idle while one copier is still adding to it. Closing upstream
+	// is what ends the other copy, so waiting for it is bounded: one read
+	// that is already failing.
 	var first error
 	select {
 	case first = <-done:
@@ -331,7 +342,7 @@ func (h *handler) carry(ctx context.Context, conn net.Conn, source, destination 
 	conn.Close()
 	<-done
 
-	h.hosts.closed(row, up.Load(), down.Load())
+	h.hosts.closed(row)
 	return first
 }
 
@@ -360,6 +371,19 @@ func (h *handler) NewDNSPacket(payload []byte, _ M.Socksaddr, _ M.Socksaddr, wri
 			// up, which is the same thing it does for a dropped packet -
 			// and inventing a SERVFAIL here would have applications cache
 			// the failure.
+			//
+			// Said out loud all the same. Silence towards the phone is
+			// right; silence everywhere is how "no name resolves, but every
+			// address does" becomes an afternoon. From outside, a resolver
+			// that answered nothing and a packet that never arrived look
+			// identical, and this is the only place that knows which of the
+			// two it was. gomobile puts Go's stderr on logcat, so it lands
+			// beside the service's own lines.
+			if err != nil {
+				log.Printf("relay: dns through the exit: %v", err)
+			} else {
+				log.Printf("relay: dns through the exit: empty answer")
+			}
 			return
 		}
 		// Read on the way past, not on the way in: an answer is what maps a

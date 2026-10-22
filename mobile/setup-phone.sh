@@ -26,7 +26,7 @@ unset MSYS_NO_PATHCONV
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 
-APK="$HERE/app/build/app/outputs/flutter-apk/app-debug.apk"
+APK="$ROOT/android/app/build/outputs/apk/debug/app-debug.apk"
 APP_ID="com.erelay.relay.debug"
 FILES="/sdcard/Android/data/$APP_ID/files"
 
@@ -39,8 +39,8 @@ fi
 
 [ -f "$APK" ] || {
     echo "build it first:" >&2
-    echo "    ./build-android.sh && ./sync-ui.sh" >&2
-    echo "    cd app && flutter build apk --debug --target-platform android-arm64" >&2
+    echo "    ./build-android.sh" >&2
+    echo "    cd ../android && ./gradlew :app:assembleDebug" >&2
     exit 1
 }
 

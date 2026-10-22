@@ -1512,9 +1512,23 @@ canvas.blob__body {
 }
 
 /* On while a connection to that name is open. Not a status light for the
-   row - a row with no dot is not broken, it is simply finished. */
+   row - a row with no dot is not broken, it is simply finished.
+
+   In the row's own left padding rather than in front of the name. As a flex
+   item it was 5px wide with a 6px gap after it, so every row that had one
+   started its name 11px right of every row that did not - and in a sheet
+   seventy rows deep the six live ones read as a column that had slipped.
+   Measured on a phone, where the list is long enough to see it: 66 rows at
+   x=25 and six at x=36.
+
+   The gutter is already there and holds nothing, and a marker in a margin is
+   what this always was. `top` centres it on the first line rather than on the
+   row, because a row with a second line is taller and the dot belongs beside
+   the name. */
 .lrow__live {
-  flex: none;
+  position: absolute;
+  left: 5px;
+  top: 14px;
   width: 5px;
   height: 5px;
   border-radius: 50%;
@@ -4084,10 +4098,27 @@ canvas.blob__body {
   font-size: 10px;
   color: var(--text-off);
 }
+/* A width, not a minimum - and that is the whole of it.
+ *
+ * The row is a flex line of four cells and the name is the one that gives,
+ * so the width of this last cell decides where the three before it sit. A
+ * min-width let it be 62px on "not tested" and 116px on "no proxy for this
+ * account", and the address beside it moved 54px between two rows of the
+ * same open list. Six exits under Bulgaria, four addresses at one x and two
+ * at another: a column of monospace addresses that is not a column reads as
+ * a list that failed to finish drawing.
+ *
+ * The cost is 56px off the name, which is a city that is usually one short
+ * word and is repeated down the list anyway - Surfshark pins several
+ * addresses to one host, so the address is the thing that differs. A reason
+ * longer than the cell ellipsises and keeps its title. */
 .exit__ping {
   flex: none;
-  min-width: 62px;
+  width: 118px;
   text-align: right;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-size: 10.5px;
   color: var(--text-muted);
 }
@@ -4095,11 +4126,7 @@ canvas.blob__body {
    are refused is the finding - dropping them would leave a shorter list
    with no way to tell it had been filtered. */
 .exit[data-state="blocked"] { opacity: 0.55; }
-.exit[data-state="blocked"] .exit__ping {
-  color: var(--fail);
-  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-  max-width: 120px;
-}
+.exit[data-state="blocked"] .exit__ping { color: var(--fail); }
 .exit[data-state="ok"] .exit__ping { color: var(--ok); }
 
 /* ------------------------------------------- keeping names off the flags */
