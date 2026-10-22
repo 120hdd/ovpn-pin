@@ -305,6 +305,9 @@ function render() {
 
 function openPicker() {
   const began = performance.now();
+  state.freeze = null;
+  $('list').dataset.key = '';
+  maybeQuick();
   $('search').value = '';
   $('searchMain').classList.remove('is-typed');
   state.cursor = 0;
@@ -391,8 +394,30 @@ function drawList(query) {
     list.append(auto);
   }
 
-  const found = sortCountries(
+  let found = sortCountries(
     q ? state.fuse.search(q).map((r) => r.item) : state.countries);
+  // The order a quick run found the list in, held while its results land:
+  // rows that move out from under the pointer are worse than numbers that
+  // are briefly out of order. Fastest first puts them in place.
+  if (!q && state.freeze) {
+    const at = new Map(state.freeze.order.map((code, i) => [code, i]));
+    const pos = (c) => (at.has(c.code) ? at.get(c.code) : 1e9);
+    found = found.slice().sort((a, b) => pos(a) - pos(b));
+  }
+  // Fastest first is only honest about the countries that were timed; the
+  // rest go below their own heading, in alphabetical order.
+  let untimedAt = -1;
+  if (!q && (state.sortBy || 'ping') === 'ping') {
+    const timed = (c) => (state.freeze ? state.freeze.tested.has(c.code) : !!c.tested);
+    const fav = (c) => (isFavourite(c.code) ? 0 : 1);
+    const yes = found.filter(timed);
+    const no = found.filter((c) => !timed(c))
+      .sort((a, b) => fav(a) - fav(b) || a.name.localeCompare(b.name));
+    if (no.length) {
+      untimedAt = yes.length;
+      found = yes.concat(no);
+    }
+  }
   if (!found.length) {
     const e = document.createElement('p');
     e.className = 'empty';
@@ -419,7 +444,19 @@ function drawList(query) {
      is sometimes empty. */
   const tagCols = tagColumns();
 
-  const buildGroup = (c) => {
+  const buildGroup = (c, i) => {
+    const head = [];
+    if (i === untimedAt) {
+      const split = document.createElement('p');
+      split.className = 'listsplit';
+      split.innerHTML = 'Not tested yet <b></b>';
+      split.querySelector('b').textContent = String(found.length - untimedAt);
+      head.push(split);
+    }
+    return head.concat(groupOf(c));
+  };
+
+  const groupOf = (c) => {
     /* One row per place, and a sign for who backs it.
 
        A country reached by both used to split into a row per provider, and
@@ -514,6 +551,18 @@ function drawList(query) {
       // been asked, because "untested" and "blocked" must not look alike.
       meta.textContent = meta.textContent + reachSaid(c);
       row.dataset.state = reachState(c);
+      const cities = c.cityList || [];
+      for (const [has, word, why] of [
+        [cities.some((x) => x.gbps === 10), '10G', '10 Gbps link'],
+        [cities.some((x) => x.p2p), 'P2P', 'P2P allowed'],
+      ]) {
+        if (!has) continue;
+        const m = document.createElement('span');
+        m.className = 'mark';
+        m.textContent = word;
+        m.title = why;
+        meta.append(m);
+      }
     }
     copy.append(name, meta);
     // Which provider the exits behind this country actually come from.
@@ -580,7 +629,7 @@ function drawList(query) {
   $('listCount').textContent = String(found.length);
 
   const AT_ONCE = 14;
-  for (const c of found.slice(0, AT_ONCE)) list.append(...buildGroup(c));
+  found.slice(0, AT_ONCE).forEach((c, i) => list.append(...buildGroup(c, i)));
   markCursor();
   // Restored after the first batch, and again once the tail lands: the list
   // is not tall enough to hold the old position until the rest of it is
@@ -600,7 +649,8 @@ function drawList(query) {
     // tail was queued would otherwise have the old countries land under it.
     if (list.dataset.key !== key) return;
     const batch = document.createDocumentFragment();
-    for (const c of rest.slice(at, at + AT_ONCE)) batch.append(...buildGroup(c));
+    rest.slice(at, at + AT_ONCE).forEach((c, i) =>
+      batch.append(...buildGroup(c, AT_ONCE + at + i)));
     list.append(batch);
     if (wasAt && list.scrollTop !== wasAt) list.scrollTop = wasAt;
     at += AT_ONCE;
@@ -1579,9 +1629,35 @@ const WAY_SAID = {
 const WAY_NEEDS_TUNNEL = 'Set the domain and passwords under Settings → '
   + 'Your own tunnel first.';
 
+/* Which ways out can work right now. A provider needs an account and its
+   servers, your server needs the tunnel set up, and server + exit needs
+   both - so in practice the strip is either all three or nothing to choose. */
+function waysOpen() {
+  const provider = !!state.hasCredentials && (state.serverCount || 0) > 0;
+  const tunnel = !!state.tunnelReady
+    || !!(state.tunnel && state.tunnel.domain && state.tunnel.hasPassword);
+  return ['surfshark', 'single', 'multi'].filter((w) =>
+    w === 'surfshark' ? provider : w === 'single' ? tunnel : tunnel && provider);
+}
+
 function paintWay() {
   const way = state.way || 'surfshark';
   const ready = way === 'surfshark' || (state.tunnel && state.tunnel.domain);
+
+  // Only once the window knows both halves - before info() lands, nothing
+  // here can tell a tunnel that is not set up from one not yet asked about.
+  if (state.serverCount !== undefined && state.tunnelReady !== undefined) {
+    const open = waysOpen();
+    for (const b of $('way').querySelectorAll('.seg__opt')) {
+      b.hidden = !open.includes(b.dataset.way);
+    }
+    // One way left is nothing to choose, so the strip is not drawn at all.
+    $('wayWrap').querySelector('.way__row').hidden = open.length < 2;
+    if (open.length && !open.includes(way)) {
+      chooseWay(open[0]);
+      return;
+    }
+  }
 
   $('way').dataset.way = way;
   $('wayWrap').dataset.way = way;
@@ -1751,6 +1827,11 @@ function paintPrefs(info) {
   $('folderPath').textContent = info.folder || '—';
   $('folderCount').textContent =
     `${info.serverCount || 0} servers · ${state.countries.length} countries`;
+  state.serverCount = info.serverCount || 0;
+  state.tunnelReady = !!info.tunnelReady;
+  if (info.quickAt !== undefined) state.quickAt = info.quickAt || 0;
+  if (info.autoQuick !== undefined) state.autoQuick = info.autoQuick !== false;
+  paintQuick();
   $('aboutPaths').textContent = info.about || '';
 
   // Whether anything can connect at all. What is signed in as what is the
@@ -4445,6 +4526,59 @@ async function startReach(code) {
   said($('reachSaid'), `Asking ${r.total} in ${nameOf(code)}…`);
 }
 
+/* One exit per country, six at a time. By hand from Test all or Settings;
+   on its own when the list opens and the last run is over six hours old -
+   never with the tunnel up, where every time would be the tunnel's. */
+async function startQuick(auto) {
+  if (state.testing) {
+    if (state.testing === 'quick' && !auto) await window.pywebview.api.cancelReach();
+    return;
+  }
+  const r = await window.pywebview.api.quickTest();
+  if (!r.ok) {
+    if (!auto) {
+      said($('reachSaid'), r.error, 'bad');
+      said($('quickSaid'), r.error, 'bad');
+    }
+    return;
+  }
+  state.testing = 'quick';
+  paintTesting();
+  said($('reachSaid'), `Timing ${r.total} countries…`);
+}
+
+function maybeQuick() {
+  const stale = Date.now() / 1000 - (state.quickAt || 0) > 6 * 3600;
+  const up = state.mode === 'on' || state.mode === 'busy';
+  if (state.autoQuick !== false && stale && !state.testing && !up) startQuick(true);
+}
+
+/* Settings' Quick timing: when it last ran, whether it runs on its own. */
+function paintQuick() {
+  const pill = $('quickPill');
+  if (!pill) return;
+  const running = state.testing === 'quick';
+  const at = state.quickAt || 0;
+  const mins = at ? Math.floor((Date.now() / 1000 - at) / 60) : null;
+  pill.textContent = running ? 'timing'
+    : mins === null ? 'never'
+      : mins < 60 ? `${mins}m ago`
+        : mins < 1440 ? `${Math.floor(mins / 60)}h ago` : `${Math.floor(mins / 1440)}d ago`;
+  pill.dataset.state = running || (mins !== null && mins < 360) ? 'on' : 'off';
+  $('autoQuick').setAttribute('aria-checked', String(state.autoQuick !== false));
+  const run = $('quickRun');
+  run.textContent = running ? 'Stop' : 'Time every country';
+  run.disabled = !!state.testing && !running;
+}
+
+$('testAll').addEventListener('click', () => startQuick(false));
+$('quickRun').addEventListener('click', () => startQuick(false));
+$('autoQuick').addEventListener('click', async () => {
+  state.autoQuick = state.autoQuick === false;
+  paintQuick();
+  await window.pywebview.api.setAutoQuick(state.autoQuick);
+});
+
 /* The bolt that is running, marked without rebuilding the list under the
    reader. Every other bolt goes quiet with it: a second press would only
    stop the first, and a row that looks pressable while it is not is worse
@@ -4458,6 +4592,12 @@ function paintTesting() {
       : 'Test the servers here');
     el.title = busy ? 'Stop' : 'Test these';
   }
+  const all = $('testAll');
+  const quick = state.testing === 'quick';
+  all.dataset.running = quick ? '1' : '0';
+  all.disabled = !!state.testing && !quick;
+  $('testAllLabel').textContent = quick ? 'Stop' : 'Test all';
+  paintQuick();
 }
 
 /* Each result as it lands, written straight onto the row it belongs to.
@@ -4536,6 +4676,17 @@ window.onReach = (p) => {
 };
 
 window.onReachDone = (r) => {
+  const quick = r.code === 'quick';
+  // A quick run over an open list keeps the list where it is: the order
+  // and which rows count as timed are taken now, before the new answers.
+  if (quick && r.ok && $('picker').open && !$('search').value.trim()) {
+    state.freeze = {
+      order: rows().map((x) => x.dataset.code)
+        .filter((code) => code && code !== 'auto' && !/[/:]/.test(code)),
+      tested: new Set((state.countries || []).filter((c) => c.tested).map((c) => c.code)),
+    };
+  }
+  if (quick && r.quickAt) state.quickAt = r.quickAt;
   state.testing = null;
   paintTesting();
   $('reachBar').style.setProperty('--at', '0%');
@@ -4546,7 +4697,7 @@ window.onReachDone = (r) => {
   // Named, because a run is now about one place and the line under the list
   // is the only thing that says which. "30 of 37 answered" over a list of
   // ninety countries is a sentence about nothing in particular.
-  const where = r.code ? ` in ${nameOf(r.code)}` : '';
+  const where = r.code && !quick ? ` in ${nameOf(r.code)}` : '';
   // A run where the exits turned the account away is not a run about the
   // exits, and "0 of 37 answered" reads as thirty-seven broken servers. The
   // same account is at every one of those addresses, so the count is one
@@ -4580,8 +4731,12 @@ window.onReachDone = (r) => {
         : refused
           ? `${answered} of ${r.tested} answered${where}. `
             + `${refused} turned these credentials away.`
-          : `${answered} of ${r.tested} answered${where}.`,
+          : quick
+            ? `${answered} of ${r.tested} countries answered.`
+              + (state.freeze ? ' New times are in — press Fastest first to put them in order.' : '')
+            : `${answered} of ${r.tested} answered${where}.`,
     answered ? 'good' : 'bad');
+  if (quick) said($('quickSaid'), `${answered} of ${r.tested} countries answered.`);
   // The list is rebuilt rather than patched: every row's order can change,
   // because answering ones sort above blocked ones.
   $('list').dataset.key = '';
@@ -4611,6 +4766,24 @@ window.onReachDone = (r) => {
    something anybody reads. But once each exit has a measured time, the
    individual ones are worth being able to look at - "why is this country
    slow" and "is this one blocked" are questions about a server. */
+
+/* A server's own number out of its host or filename: ar-008.x.com is #008. */
+function serverNumber(host) {
+  const m = /[a-z]{2}-(\d{2,4})(?:\.|_|$)/.exec(String(host || '').toLowerCase());
+  return m ? `#${m[1]}` : '';
+}
+
+/* The engine's word for why an exit failed, said for a person. */
+function failReason(why) {
+  const w = String(why || '');
+  if (!w) return 'It did not answer.';
+  if (/timeout|timed out|deadline/i.test(w)) {
+    return 'It did not answer in time. It may be down, or blocked on this line.';
+  }
+  if (/refused/i.test(w)) return 'It refused the connection.';
+  if (/407|auth/i.test(w)) return 'It turned the account away.';
+  return w.charAt(0).toUpperCase() + w.slice(1);
+}
 
 async function toggleExits(code, after) {
   const open = state.openExits === code;
@@ -4672,19 +4845,37 @@ async function toggleExits(code, after) {
     // "Jakarta - id-jak" eight times over: the city said eight times, and
     // the address - the only thing that differed - crowded to the edge.
     name.textContent = (where && shared) ? where
-      : where && where !== short ? `${where} · ${short}` : short;
+      : where && where !== short ? where : short;
+    // The server's own number tells two exits in one city apart: ar-008.
+    const num = serverNumber(x.host || x.file);
+    if (num && where) {
+      const n = document.createElement('span');
+      n.className = 'exit__num';
+      n.textContent = num;
+      name.append(n);
+    }
     name.title = x.host || '';
 
     const meta = document.createElement('span');
     meta.className = 'exit__meta';
     meta.textContent = x.ip;
 
-    const said_ = document.createElement('span');
+    let said_ = document.createElement('span');
     said_.className = 'exit__ping';
-    said_.textContent = x.ok === true ? msSaid(x.ms)
-      : x.ok === false ? (x.why || 'no answer')
-        : 'not tested';
-    if (x.ok === false) said_.title = x.why || '';
+    said_.textContent = x.ok === true ? msSaid(x.ms) : x.ok === false ? '' : 'not tested';
+    if (x.ok === false) {
+      // A red mark where the time would be; the reason is behind it.
+      said_ = document.createElement('span');
+      said_.className = 'exit__why';
+      said_.tabIndex = 0;
+      said_.setAttribute('aria-label', failReason(x.why));
+      said_.append(icon('#i-alert', 'ico'));
+      const bubble = document.createElement('span');
+      bubble.className = 'info__bubble';
+      bubble.setAttribute('role', 'tooltip');
+      bubble.textContent = failReason(x.why);
+      said_.append(bubble);
+    }
 
     row.append(sign, name, meta, said_);
     box.append(row);
@@ -5063,6 +5254,9 @@ $('sortBy').addEventListener('click', async (e) => {
   const opt = e.target.closest('.pair__opt');
   if (!opt) return;
   state.sortBy = opt.dataset.sort;
+  // The list is laid out afresh, so the line asking for it is done with.
+  if (state.freeze) said($('reachSaid'), '');
+  state.freeze = null;
   paintSort();
   $('list').dataset.key = '';
   drawList($('search').value.trim());

@@ -33,6 +33,11 @@ changes a feature updates its row.
 | Live connection timer | no | yes | Android: in the notification |
 | Version in About | no | yes | |
 | Tray / quick-settings tile, one-press connect | part | yes | Windows: tray menu |
+| Accounts screen, one card per provider, one account each | yes | yes | |
+| Quick timing: one exit per country, on its own every 6 h | yes | yes | |
+| Untimed countries listed apart under Fastest first | yes | yes | |
+| Failed exit: red mark, reason on hover / tap | yes | yes | |
+| Connection-type strip only when more than one works | yes | yes | |
 | Window size, single instance | yes | n/a | |
 
 ## Releases

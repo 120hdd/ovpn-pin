@@ -667,6 +667,9 @@ class Api:
                 'picked': self._settings.get('picked', 'auto'),
                 'favourites': self._settings.get('favourites') or [],
                 'sortBy': self._settings.get('sortBy', 'ping'),
+                'quickAt': self._settings.get('quickAt', 0),
+                'autoQuick': self._settings.get('autoQuick', True),
+                'connected': bool(self._engine.running()),
                 'keepOnClose': bool(self._settings.get('keepOnClose')),
                 'window': self._window_options(),
                 'orbColors': self._settings.get('orbColors', 'signal'),
@@ -1767,6 +1770,8 @@ class Api:
         or a single file.
         """
         code = code or ''
+        if code == 'quick':
+            return self._quick_pool()
         if code.startswith('file:'):
             name = code[5:]
             return [s for s in self._engine.servers() if s.file == name]
@@ -1785,6 +1790,42 @@ class Api:
                 continue
             out.append(s)
         return out
+
+    def _quick_pool(self):
+        """One exit per country: enough to put a time on every row of the
+        list, at a fraction of the cost of asking every exit - a few hundred
+        handshakes in a burst is what this line starts dropping, and what a
+        provider may read as one address hammering its logins.
+
+        The one asked is the one most likely to stand for its country: the
+        last to answer, else one never tried, else the first.
+        """
+        found = self._engine.reach()
+        best = {}
+        for s in self._engine.servers():
+            rec = found.get(s.file)
+            rank = 1 if rec is None else (2 if rec.get('ok') else 0)
+            if s.country not in best or rank > best[s.country][0]:
+                best[s.country] = (rank, s)
+        return [s for _, s in best.values()]
+
+    def quickTest(self):
+        """Time one exit per country, gently: six at a time, a short wait.
+
+        Only with the tunnel down. Through it, every exit would be timed from
+        wherever the tunnel comes out, which says nothing about this line.
+        """
+        if self._engine.running():
+            return {'ok': False,
+                    'error': "Disconnect first: through the tunnel, the "
+                             "times would be the tunnel's."}
+        return self.testReach('quick')
+
+    def setAutoQuick(self, on=True):
+        """Whether opening the list times a stale one on its own."""
+        self._settings['autoQuick'] = bool(on)
+        save_settings(self._settings)
+        return {'ok': True, 'autoQuick': bool(on)}
 
     def testReach(self, code=None):
         """Ask the exits behind one row whether they take the credentials.
@@ -1809,12 +1850,20 @@ class Api:
         if not pool:
             return {'ok': False, 'error': 'Nothing to test.'}
         only = {s.file for s in pool}
+        quick = code == 'quick'
         self._testing = True
 
         def work():
             try:
+                # The whole list is the gentle run: fewer at once, shorter
+                # waits, so a minute of it does not read as an attack.
+                kw = {'width': 6, 'timeout': 3.5} if quick else {}
                 out = self._engine.test_reach(
-                    lambda p: self._emit('Reach', p), only=only)
+                    lambda p: self._emit('Reach', p), only=only, **kw)
+                if quick and not out.get('cancelled'):
+                    self._settings['quickAt'] = int(time.time())
+                    save_settings(self._settings)
+                    out['quickAt'] = self._settings['quickAt']
                 # Moved out of the way of `ok`, which every call in this
                 # class uses for "the call worked" and which was being set
                 # over the top of it here - so the count reached the page as

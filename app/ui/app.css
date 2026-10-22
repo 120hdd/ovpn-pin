@@ -5652,3 +5652,72 @@ canvas.blob__body {
    window - on a copy not set up yet, where the hint runs to two lines. The
    stage centres the orb on whatever room it has, so it can give back ten. */
 .app:has(#details:not([hidden])) .hero { min-height: 226px; }
+
+/* ------------------------------------------------- timing every country */
+
+.reach__all {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(97, 239, 191, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(97, 239, 191, 0.4);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 150ms var(--ease), box-shadow 150ms var(--ease);
+}
+.reach__all .ico { color: var(--ok); }
+.reach__all:hover { background: rgba(97, 239, 191, 0.2); }
+.reach__all[data-running="1"] {
+  background: rgba(255, 143, 155, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 143, 155, 0.45);
+}
+.reach__all[data-running="1"] .ico { color: var(--fail); }
+.reach__all:disabled { opacity: 0.45; cursor: default; }
+
+/* The line between what was timed and what was not. */
+.listsplit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 4px 4px;
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-off);
+}
+.listsplit b { color: var(--text); font-weight: 600; }
+
+/* 10G and P2P on a country's own line. */
+.row__meta .mark { margin-left: 5px; vertical-align: 1px; }
+
+/* An exit that failed: a red mark where its time would be, and the reason
+   behind it on hover or focus. */
+.exit__why {
+  position: relative;
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  width: 118px; height: 22px;
+  color: var(--fail);
+  cursor: help;
+}
+.exit__why .ico { width: 15px; height: 15px; }
+.exit__why .info__bubble { left: auto; right: 0; transform: none; min-width: 200px; }
+.exit__why:hover .info__bubble,
+.exit__why:focus .info__bubble { opacity: 1; visibility: visible; }
+.exit__num { color: var(--text-off); font-weight: 400; margin-left: 6px; }
+
+.quick__row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.quick__cap { flex: 1; display: grid; gap: 2px; font-size: 12px; color: var(--text); }
+.quick__sub { font-size: 10.5px; color: var(--text-off); }
+#prefQuick .note:empty { display: none; }
