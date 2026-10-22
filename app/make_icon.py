@@ -20,8 +20,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, 'assets', 'app.ico')
 PNG = os.path.join(HERE, 'assets', 'app.png')
 
-DISC = (244, 246, 250, 255)
-RING = (97, 239, 191, 255)
+DISC = (97, 239, 191, 255)
+RING = (255, 255, 255, 255)
 EDGE = (150, 158, 172, 255)
 
 # The grid. The ring runs clockwise from 10 degrees above three o'clock to
@@ -49,17 +49,20 @@ def mark(d, s, inset):
         d.ellipse([x - r, y - r, x + r, y + r], fill=fill)
 
     dot(cx, cy, DISC_R * k, DISC)
-    # A grey edge on the disc: with no panel behind it, a white disc on a
-    # light taskbar is not there at all.
-    r = DISC_R * k
-    d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=EDGE, width=max(1, round(8 * k)))
-    r, w = RING_R * k, RING_W * k
-    d.arc([cx - r - w / 2, cy - r - w / 2, cx + r + w / 2, cy + r + w / 2],
-          RING_FROM, RING_TO, fill=RING, width=max(1, round(w)))
-    # PIL's arc has square ends; the mark's are round.
-    for end in (RING_FROM, RING_TO):
-        dot(*at(end, RING_R), w / 2, RING)
-    dot(*at(BEAD_ANGLE, BEAD_OUT), BEAD_R * k, RING)
+
+    def ring_and_bead(colour, grow):
+        r, w = RING_R * k, RING_W * k + 2 * grow
+        d.arc([cx - r - w / 2, cy - r - w / 2, cx + r + w / 2, cy + r + w / 2],
+              RING_FROM, RING_TO, fill=colour, width=max(1, round(w)))
+        # PIL's arc has square ends; the mark's are round.
+        for end in (RING_FROM, RING_TO):
+            dot(*at(end, RING_R), w / 2, colour)
+        dot(*at(BEAD_ANGLE, BEAD_OUT), BEAD_R * k + grow, colour)
+
+    # The white ring and bead drawn over a slightly wider grey one: with no
+    # panel behind it, white on a light taskbar is not there at all.
+    ring_and_bead(EDGE, max(1, 4 * k))
+    ring_and_bead(RING, 0)
 
 
 def draw(size):
