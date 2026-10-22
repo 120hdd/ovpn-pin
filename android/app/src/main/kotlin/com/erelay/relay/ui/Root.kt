@@ -234,7 +234,8 @@ fun Root(core: RelayCore) {
                 conn = conn, realIp = realIp, realIpAsked = realIpAsked, seen = seen,
                 seenFailed = seenFailed, traffic = traffic, way = way,
                 tunnelReady = tunnel.ready, picked = picked,
-                pickLabel = nameOfPick(picked, names), countries = countries.size,
+                pickLabel = nameOfPick(picked, names, countries.associate { it.code to it.cities }),
+                countries = countries.size,
                 serverCount = serverCount, loaded = loaded, hasCredentials = hasCredentials,
                 deadCount = dead.dead, hint = hint, hintBad = hintBad, feel = feel,
             ),
@@ -274,6 +275,8 @@ fun Root(core: RelayCore) {
                     if (conn.mode != Mode.BUSY) connect(code)
                 },
                 onSources = { over2 = Over2.SOURCES },
+                onTestAll = { core.quickTest().let { if (!it.ok) Toast.makeText(context, it.text, Toast.LENGTH_SHORT).show() } },
+                onOpen = { if (core.quickDue()) core.quickTest() },
             ),
             onClose = { over = Over.NONE },
         )
@@ -310,17 +313,18 @@ fun Root(core: RelayCore) {
             onClose = { over2 = Over2.NONE })
 
         AddAccount(over2 == Over2.ADD_ACCOUNT, provider = addFor,
+            taken = accounts.map { it.provider }.toSet(),
             onClose = { over2 = Over2.NONE },
             addSurfshark = { label, user, pass -> core.addSurfshark(label, user, pass) },
             beginWindscribe = { label, user, pass -> core.beginWindscribe(label, user, pass) },
             finishWindscribe = { token, solution, xs, ys, code -> core.finishWindscribe(token, solution, xs, ys, code) },
-            onDone = { msg ->
+            onDone = { msg, added ->
                 // A new account is fetched and pinned at once. On a first run
                 // the setup screen shows it; added later from Settings, the
-                // progress shows under Sign-in's provider cards.
+                // progress shows under the provider cards in Accounts.
                 notice = msg
                 over2 = Over2.NONE
-                scope.launch { core.prepareServers(addFor) }
+                scope.launch { core.prepareServers(added) }
             })
     }
     }
@@ -360,9 +364,9 @@ private fun hintOf(
         closedMinutes != null -> "Tunnel closed." to false
         !loaded -> "" to false
         way == Way.PROVIDER && serverCount == 0 ->
-            "No servers yet. Get them under Settings → Sign-in." to false
+            "No servers yet. Get them under Settings → Accounts." to false
         way == Way.PROVIDER && !hasCredentials ->
-            "Add an account under Settings → Sign-in to connect." to false
+            "Add an account under Settings → Accounts to connect." to false
         way == Way.PROVIDER -> "$countries countries ready." to false
         else -> "" to false
     }
@@ -381,7 +385,7 @@ fun failureSaid(why: String, picked: String, names: Map<String, String>): String
             "with, and they change when you reset them there."
     why.startsWith("no-servers") -> "No servers for that country."
     why.startsWith("no-credentials") || why.startsWith("no credentials") ->
-        "There is no account to sign in with. Add one under Settings → Sign-in."
+        "There is no account to sign in with. Add one under Settings → Accounts."
     why.startsWith("permission refused") ->
         "Android was not given permission to start a VPN. Connect again and allow it."
     why.startsWith("cancelled") -> "Cancelled."

@@ -117,6 +117,18 @@ class RelayCore(private val app: Application) {
         Accounts.SURFSHARK to ProviderCard(), Accounts.WINDSCRIBE to ProviderCard()))
     val cards: StateFlow<Map<String, ProviderCard>> = _cards.asStateFlow()
 
+    private val _quickAt = MutableStateFlow(prefs.getLong("quickAt", 0L))
+    /** When one exit per country was last timed, in epoch milliseconds; 0 for never. */
+    val quickAt: StateFlow<Long> = _quickAt.asStateFlow()
+    private val _autoQuick = MutableStateFlow(prefs.getBoolean("autoQuick", true))
+    /** Whether opening the exit list times a stale list on its own. */
+    val autoQuick: StateFlow<Boolean> = _autoQuick.asStateFlow()
+
+    fun setAutoQuick(on: Boolean) {
+        _autoQuick.value = on
+        prefs.edit().putBoolean("autoQuick", on).apply()
+    }
+
     private val _reach = MutableStateFlow(ReachRun())
     val reach: StateFlow<ReachRun> = _reach.asStateFlow()
 
@@ -588,10 +600,10 @@ class RelayCore(private val app: Application) {
     fun ready(): Said = when (_way.value) {
         Way.PROVIDER -> when {
             AppFiles.count(AppFiles.pinned(app)) == 0 ->
-                Said.no("No servers yet. Get them under Settings → Sign-in, " +
+                Said.no("No servers yet. Get them under Settings → Accounts, " +
                     "or import a folder of configs under Settings → Servers.")
             credentials(Accounts.SURFSHARK) == null && credentials(Accounts.WINDSCRIBE) == null ->
-                Said.no("No account yet. Add one under Settings → Sign-in.")
+                Said.no("No account yet. Add one under Settings → Accounts.")
             else -> Said.OK
         }
         else -> if (_tunnel.value.ready) Said.OK
@@ -607,7 +619,7 @@ class RelayCore(private val app: Application) {
             // One is enough to start: the core drops the exits there is no
             // credential for and only refuses when that leaves nothing.
             val creds = credentials(Accounts.SURFSHARK) ?: credentials(Accounts.WINDSCRIBE)
-                ?: return Said.no("No account yet. Add one under Settings → Sign-in.")
+                ?: return Said.no("No account yet. Add one under Settings → Accounts.")
             intent
                 .putExtra(RelayVpnService.EXTRA_PROVIDER, "surfshark")
                 .putExtra(RelayVpnService.EXTRA_USER, creds.first)
@@ -649,7 +661,7 @@ class RelayCore(private val app: Application) {
      * One row at a time: a whole-folder run is where the line starts dropping
      * connections and the answers stop being about the exits.
      */
-    fun testReach(code: String): Said {
+    fun testReach(code: String, timeoutMs: Long = 5000L, width: Long = 12L): Said {
         if (_reach.value.running) return Said.no("A test is already running.")
         val c = catalogue()
         val pool = try { c.poolFiles(code) } catch (e: Exception) { "" }
@@ -658,7 +670,7 @@ class RelayCore(private val app: Application) {
         _reach.value = ReachRun(code = code, total = total, running = true)
         scope.launch {
             val answer = try {
-                JSONObject(c.testReach(code, 5000L, 12L, object : ReachProgress {
+                JSONObject(c.testReach(code, timeoutMs, width, object : ReachProgress {
                     override fun onReach(payload: String) {
                         val p = try { JSONObject(payload) } catch (e: Exception) { return }
                         _reach.update { it.copy(done = p.optInt("done", it.done),
@@ -672,10 +684,16 @@ class RelayCore(private val app: Application) {
                 !answer.optBoolean("ok") -> answer.optString("error", "The test did not run.").let {
                     if (it.startsWith("no credentials for ")) "No ${it.removePrefix("no credentials for ")
                         .replaceFirstChar { c -> c.uppercase() }} account to test with - add one under " +
-                        "Settings → Sign-in." else it
+                        "Settings → Accounts." else it
                 }
                 answer.optBoolean("cancelled") -> "Stopped."
+                code == QUICK -> "${answer.optInt("answered")} of ${answer.optInt("tested")} countries answered."
                 else -> "${answer.optInt("answered")} of ${answer.optInt("tested")} answered."
+            }
+            if (code == QUICK && answer.optBoolean("ok") && !answer.optBoolean("cancelled")) {
+                val now = System.currentTimeMillis()
+                prefs.edit().putLong("quickAt", now).apply()
+                _quickAt.value = now
             }
             _reach.value = ReachRun(code = code, running = false, said = said)
             refreshList()
@@ -683,6 +701,26 @@ class RelayCore(private val app: Application) {
         }
         return Said.OK
     }
+
+    /**
+     * One exit per country, so every row of the list has a time. Six at a
+     * time with a short wait: a few dozen small requests, gentle on the line
+     * and on the providers' logins.
+     *
+     * Only with the tunnel down. Through it, every exit would be timed from
+     * wherever the tunnel comes out, which says nothing about this line.
+     */
+    fun quickTest(): Said {
+        if (_conn.value.mode == Mode.ON || _conn.value.mode == Mode.BUSY) {
+            return Said.no("Disconnect first: through the tunnel, the times would be the tunnel's.")
+        }
+        return testReach(QUICK, 3500L, 6L)
+    }
+
+    /** Whether the quick test is old enough to run again on its own. */
+    fun quickDue(): Boolean =
+        _autoQuick.value && System.currentTimeMillis() - _quickAt.value > QUICK_EVERY_MS &&
+            !_reach.value.running && _conn.value.mode != Mode.ON && _conn.value.mode != Mode.BUSY
 
     fun cancelReach() {
         scope.launch { try { catalogue().cancelReach() } catch (e: Exception) { } }
@@ -1041,3 +1079,9 @@ class RelayCore(private val app: Application) {
     @Suppress("unused")
     private fun JSONArray.toList(): List<String> = (0 until length()).map { optString(it) }
 }
+
+/** The pool code for one exit per country. */
+const val QUICK = "quick"
+
+/** How old a quick test may get before opening the list runs another: six hours. */
+private const val QUICK_EVERY_MS = 6L * 60 * 60 * 1000

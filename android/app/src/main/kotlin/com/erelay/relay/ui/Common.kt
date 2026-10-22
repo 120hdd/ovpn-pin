@@ -443,11 +443,15 @@ fun Divider() {
  * anything outside it is touched.
  */
 @Composable
-fun InfoTip(text: String, modifier: Modifier = Modifier) {
+fun InfoTip(
+    text: String, modifier: Modifier = Modifier,
+    /** Another mark for the button - an alert for an error's reason. */
+    icon: ImageVector = Glyph.info, tint: Color? = null, label: String = "What is this?",
+) {
     var open by remember { mutableStateOf(false) }
     Box(modifier) {
-        IconButton(Glyph.info, "What is this?", { open = !open }, size = 36.dp,
-            tint = if (open) Tone.ok else Tone.textOff)
+        IconButton(icon, label, { open = !open }, size = 36.dp,
+            tint = tint ?: if (open) Tone.ok else Tone.textOff)
         if (open) {
             val margin = with(androidx.compose.ui.platform.LocalDensity.current) { 16.dp.roundToPx() }
             androidx.compose.ui.window.Popup(
