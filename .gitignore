@@ -41,6 +41,8 @@ windscribe.md
 # which is already ignored below.
 .windscribe-auth
 .windscribe-auth.*
+# Cloudflare API token and account id, for deploying worker/relay.js.
+cl_api.txt
 
 # pid, log and what-is-connected, written while a tunnel is up.
 .state/
