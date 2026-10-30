@@ -269,6 +269,10 @@ class RelayCore(private val app: Application) {
             note.startsWith("opening") || note.startsWith("finding") ||
             note.startsWith("checking"))
         val mode = when {
+            // Up, but its exit stopped carrying and another is being found.
+            // Shown as working rather than as on: "connected" here is the
+            // claim that was false for as long as nothing checked it.
+            up && RelayVpnService.stalled -> Mode.BUSY
             up -> Mode.ON
             failed -> Mode.FAIL
             busy -> Mode.BUSY

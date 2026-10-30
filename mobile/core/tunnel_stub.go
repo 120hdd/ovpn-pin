@@ -2,7 +2,10 @@
 
 package core
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // Everything in tunnel.go needs a tun device, and a tun device on Windows is
 // a driver rather than a file descriptor. The desktop half of this repo has
@@ -18,3 +21,7 @@ func StartTunnel(int, int, Way) (*Tunnel, error) { return nil, ErrNoTunnelHere }
 func (t *Tunnel) Exit() string      { return "" }
 func (t *Tunnel) HostsJSON() string { return `{"live":false,"rows":[]}` }
 func (t *Tunnel) Close() error      { return nil }
+
+func (t *Tunnel) SetWay(Way) error             { return ErrNoTunnelHere }
+func (t *Tunnel) Health() (int, time.Duration) { return 0, 0 }
+func (t *Tunnel) Way() Way                     { return nil }

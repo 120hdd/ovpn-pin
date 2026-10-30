@@ -8,7 +8,10 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,6 +20,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -26,6 +30,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -33,6 +38,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -44,6 +55,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -56,6 +70,7 @@ import com.erelay.relay.data.Source
 import com.erelay.relay.ui.theme.Mono
 import com.erelay.relay.ui.theme.Tone
 import com.erelay.relay.ui.theme.Type
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 /** What the picker needs from the core, as plain values and callbacks. */
@@ -126,6 +141,27 @@ private fun ordered(list: List<Country>, sort: Sort, favourites: Set<String>): L
                 Sort.NAME -> compareBy { it.name }
             }))
 
+/**
+ * A narrow row: a small screen, or a large font on an ordinary one - what
+ * counts is how much text fits across. The bolt and the star then go down
+ * to the badge line, so a name keeps the row's width instead of losing its
+ * end to three icons.
+ */
+private val LocalNarrow = staticCompositionLocalOf { false }
+
+/** The closest two scroll ticks may come: a fling past ten rows is a run of ticks, not a hum. */
+private const val TICK_GAP_MS = 45L
+
+@Composable
+private fun narrowScreen(): Boolean {
+    val density = LocalDensity.current
+    val wide = with(density) { LocalWindowInfo.current.containerSize.width.toDp() }
+    // Most phones are 360 to 412 wide, and at those the three icons beside
+    // the name were already cutting off "2 cities  ·  11 relays".
+    return wide.value / density.fontScale < 420f
+}
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun Picker(open: Boolean, m: PickerModel, onClose: () -> Unit) {
     var query by remember { mutableStateOf("") }
@@ -158,18 +194,41 @@ fun Picker(open: Boolean, m: PickerModel, onClose: () -> Unit) {
         val stale = split && untimed.any { it.ping != null }
         val expanded = remember { mutableStateMapOf<String, Boolean>() }
         val list = rememberLazyListState()
+        // A light tick as each country passes the top of the list, the way
+        // a picker wheel clicks under the thumb. Only while the list is being
+        // moved - a finger or a fling, not a re-sort - only with haptics on
+        // in Look and feel, and never closer together than a fast fling's
+        // rows would make a buzz of it.
+        val haptics = LocalHapticFeedback.current
+        val buzz = LocalFeel.current.haptics
+        LaunchedEffect(list, buzz) {
+            if (!buzz) return@LaunchedEffect
+            var last = 0L
+            snapshotFlow { list.firstVisibleItemIndex }
+                .drop(1)
+                .collect {
+                    val now = android.os.SystemClock.uptimeMillis()
+                    if (list.isScrollInProgress && now - last >= TICK_GAP_MS) {
+                        last = now
+                        haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
+                    }
+                }
+        }
         val quick = m.reach.code == "quick"
 
         Column(Modifier.padding(horizontal = 16.dp)) {
             Search(query) { query = it }
             Spacer(Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // Wraps when it has to: on a narrow screen the source goes to a
+            // line of its own rather than being squeezed letter by letter.
+            FlowRow(verticalArrangement = Arrangement.spacedBy(8.dp),
+                itemVerticalAlignment = Alignment.CenterVertically) {
                 SortChip(Glyph.gauge, "Ping", m.sort == Sort.PING) {
                     if (m.sort == Sort.PING) resort++ else m.onSort(Sort.PING)
                 }
                 SortChip(Glyph.layers, "Load", m.sort == Sort.LOAD) { m.onSort(Sort.LOAD) }
                 SortChip(Glyph.az, "A–Z", m.sort == Sort.NAME) { m.onSort(Sort.NAME) }
-                Grow()
+                Spacer(Modifier.weight(1f))
                 SourceChip(m.sources.firstOrNull { it.key == m.source }?.name ?: "Everything", m.onSources)
             }
             Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -194,6 +253,8 @@ fun Picker(open: Boolean, m: PickerModel, onClose: () -> Unit) {
             }
         }
 
+        val narrow = narrowScreen()
+        CompositionLocalProvider(LocalNarrow provides narrow) {
         LazyColumn(Modifier.fillMaxWidth().weight(1f), state = list,
             contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 12.dp)) {
             if (q.isEmpty()) {
@@ -224,6 +285,7 @@ fun Picker(open: Boolean, m: PickerModel, onClose: () -> Unit) {
                 items(untimed, key = { it.code }, contentType = { "country" }) { c -> CountryItem(c, m, expanded) }
             }
             item { Spacer(Modifier.height(24.dp)) }
+        }
         }
     }
 }
@@ -336,7 +398,7 @@ private fun SortChip(icon: ImageVector, label: String, on: Boolean, onClick: () 
         Icon(icon, null, Modifier.size(13.dp), tint = if (on) Tone.ok else Tone.textOff)
         Spacer(Modifier.width(5.dp))
         Text(label, style = Type.small.copy(color = if (on) Tone.text else Tone.textMuted,
-            fontWeight = if (on) FontWeight.W600 else FontWeight.W500))
+            fontWeight = if (on) FontWeight.W600 else FontWeight.W500), maxLines = 1, softWrap = false)
     }
 }
 
@@ -347,7 +409,8 @@ private fun SourceChip(name: String, onClick: () -> Unit) {
             .border(1.dp, Tone.divider, CircleShape).padding(start = 11.dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(name, style = Type.small.copy(color = Tone.textMuted, fontWeight = FontWeight.W600))
+        Text(name, style = Type.small.copy(color = Tone.textMuted, fontWeight = FontWeight.W600),
+            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 180.dp))
         Icon(Glyph.chevDown, null, Modifier.padding(start = 4.dp).size(13.dp), tint = Tone.textOff)
     }
 }
@@ -375,7 +438,7 @@ private fun AutoRow(picked: Boolean, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text("Fastest available", style = Type.strong.copy(fontSize = 16.sp))
             Text("Races every location, takes the first to answer", style = Type.small,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -400,6 +463,7 @@ private fun CountryCard(
     inside: @Composable () -> Unit,
 ) {
     val testing = reach?.running == true
+    val narrow = LocalNarrow.current
     val shape = RoundedCornerShape(18.dp)
     val tenG = c.cities.any { (it.gbps ?: 0) >= 10 }
     val p2p = c.cities.any { it.p2p == true }
@@ -416,15 +480,34 @@ private fun CountryCard(
             Modifier.fillMaxWidth().tap(onClick = onChoose).padding(start = 12.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Flag(c.code, 42.dp)
-            Spacer(Modifier.width(12.dp))
+            Flag(c.code, if (narrow) 36.dp else 42.dp)
+            Spacer(Modifier.width(if (narrow) 10.dp else 12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(c.name, style = Type.strong.copy(fontSize = 15.5.sp), maxLines = 1,
                         overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 }
                 Spacer(Modifier.height(3.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                val places = if (c.cities.size > 1) "${c.cities.size} cities"
+                    else c.cities.firstOrNull()?.name?.takeIf { it.isNotEmpty() }
+                val rest = listOfNotNull(places, "${c.count} relay${if (c.count == 1) "" else "s"}")
+                // Narrow, the line is one piece of text, so when it has to
+                // wrap it wraps between words like a sentence - not the time
+                // in one column and the rest folded up beside it.
+                if (narrow) Text(buildAnnotatedString {
+                    when {
+                        testing -> withStyle(SpanStyle(color = Tone.work)) { append("Testing ${reach.done}/${reach.total}") }
+                        c.blocked -> withStyle(SpanStyle(color = Tone.fail)) { append("Blocked here") }
+                        c.ping != null -> {
+                            withStyle(SpanStyle(color = pingTone(c.ping), fontSize = 8.sp)) { append("●  ") }
+                            withStyle(SpanStyle(color = Tone.text, fontWeight = FontWeight.W600)) { append("${c.ping} ms") }
+                        }
+                    }
+                    if (length > 0) append("  ·  ")
+                    // "11 relays" breaks before the number, never inside it.
+                    append(rest.joinToString("  ·  ") { it.replace(' ', '\u00A0') })
+                }, style = Type.small, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                else Row(verticalAlignment = Alignment.CenterVertically) {
                     when {
                         testing -> Text("Testing ${reach.done}/${reach.total}", style = Type.small.copy(color = Tone.work))
                         c.blocked -> Text("Blocked here", style = Type.small.copy(color = Tone.fail))
@@ -434,9 +517,6 @@ private fun CountryCard(
                             Text("${c.ping} ms", style = Type.small.copy(color = Tone.text, fontWeight = FontWeight.W600))
                         }
                     }
-                    val places = if (c.cities.size > 1) "${c.cities.size} cities"
-                        else c.cities.firstOrNull()?.name?.takeIf { it.isNotEmpty() }
-                    val rest = listOfNotNull(places, "${c.count} relay${if (c.count == 1) "" else "s"}")
                     Text((if (testing || c.blocked || c.ping != null) "  ·  " else "") + rest.joinToString("  ·  "),
                         style = Type.small, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -448,11 +528,17 @@ private fun CountryCard(
                     }
                     if (tenG) Badge("10G", Tone.accent)
                     if (p2p) Badge("P2P", Tone.ok)
+                    if (narrow) {
+                        Grow()
+                        Bolt(testing, size = 32.dp, onClick = onTest)
+                        Star(starred, 32.dp, onStar)
+                    }
                 }
             }
-            Bolt(testing, onClick = onTest)
-            IconButton(if (starred) Glyph.starFilled else Glyph.star, if (starred) "Unstar" else "Star", onStar,
-                tint = if (starred) Tone.work else Tone.textOff, size = 36.dp)
+            if (!narrow) {
+                Bolt(testing, onClick = onTest)
+                Star(starred, 36.dp, onStar)
+            }
             if (expandable) {
                 val turn by androidx.compose.animation.core.animateFloatAsState(if (expanded) 180f else 0f,
                     tween(220), label = "chev")
@@ -477,9 +563,14 @@ private fun CountryCard(
 private fun Badge(text: String, color: Color) {
     // The word in its colour and nothing round it, like the provider's mark
     // beside it: a row of three boxed things read as buttons.
-    Text(text, style = Type.eyebrow.copy(color = color, fontSize = 10.sp),
+    Text(text, style = Type.eyebrow.copy(color = color, fontSize = 10.sp), maxLines = 1, softWrap = false,
         modifier = Modifier.padding(end = 7.dp))
 }
+
+@Composable
+private fun Star(starred: Boolean, size: Dp, onClick: () -> Unit) =
+    IconButton(if (starred) Glyph.starFilled else Glyph.star, if (starred) "Unstar" else "Star", onClick,
+        tint = if (starred) Tone.work else Tone.textOff, size = size)
 
 @Composable
 private fun Bolt(testing: Boolean, size: Dp = 36.dp, onClick: () -> Unit) {
@@ -533,6 +624,7 @@ fun ProviderTag(provider: String, tested: Boolean = false, ok: Boolean = false) 
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CityBlock(city: City, m: PickerModel) {
     var open by remember { mutableStateOf(false) }
@@ -551,44 +643,61 @@ private fun CityBlock(city: City, m: PickerModel) {
             else -> Tone.textOff
         }))
         Spacer(Modifier.width(12.dp))
+        val narrow = LocalNarrow.current
+        val testing = m.reach.running && m.reach.code == city.code
+        val starred = city.code in m.favourites
+        val onTest = { if (testing) m.onCancelTest() else m.onTest(city.code) }
+        // The time, or how far its test has got.
+        val time = @Composable {
+            if (testing) {
+                Text("${m.reach.done}/${m.reach.total}", style = Type.small.copy(color = Tone.work),
+                    modifier = Modifier.padding(end = 2.dp))
+            } else {
+                CityPing(city)
+            }
+        }
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // The name is measured first; the nickname gets what is left.
                 Text(city.name.ifEmpty { city.code }, style = Type.strong.copy(fontSize = 14.sp),
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (city.nick.isNotEmpty()) {
                     Spacer(Modifier.width(6.dp))
                     Text(city.nick, style = Type.small.copy(color = Tone.textOff), maxLines = 1,
-                        overflow = TextOverflow.Ellipsis)
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                }
+                if (narrow) {
+                    Grow()
+                    time()
                 }
             }
             Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                for ((provider, n) in city.by.toSortedMap()) if (n > 0) ProviderTag(provider)
-                if ((city.gbps ?: 0) >= 10) Badge("10G", Tone.accent)
-                if (city.p2p == true) Badge("P2P", Tone.ok)
-                // The load moves down here: the time is what picks a city,
-                // so it is the number that stands on the right.
-                Text(buildString {
-                    append("${city.count} relay${if (city.count == 1) "" else "s"}")
-                    if (city.load != null) append(" · ${city.load}% load")
-                }, style = Type.small, maxLines = 1)
+                // Wraps rather than cutting the count off when it runs out of room.
+                FlowRow(Modifier.weight(1f), itemVerticalAlignment = Alignment.CenterVertically) {
+                    for ((provider, n) in city.by.toSortedMap()) if (n > 0) ProviderTag(provider)
+                    if ((city.gbps ?: 0) >= 10) Badge("10G", Tone.accent)
+                    if (city.p2p == true) Badge("P2P", Tone.ok)
+                    // The load moves down here: the time is what picks a city,
+                    // so it is the number that stands on the right.
+                    Text(buildString {
+                        append("${city.count} relay${if (city.count == 1) "" else "s"}")
+                        if (city.load != null) append(" · ${city.load}% load")
+                    }, style = Type.small, maxLines = 1, softWrap = false)
+                }
+                if (narrow) {
+                    Bolt(testing, size = 32.dp, onClick = onTest)
+                    Star(starred, 32.dp) { m.onStar(city.code) }
+                }
             }
         }
-        val testing = m.reach.running && m.reach.code == city.code
-        if (testing) {
-            Text("${m.reach.done}/${m.reach.total}", style = Type.small.copy(color = Tone.work),
-                modifier = Modifier.padding(end = 2.dp))
-        } else {
-            CityPing(city)
+        if (!narrow) {
+            time()
+            // The same two the country's card has: time just this city, and
+            // keep it at the top of the list.
+            Bolt(testing, size = 32.dp, onClick = onTest)
+            Star(starred, 32.dp) { m.onStar(city.code) }
         }
-        // The same two the country's card has: time just this city, and keep
-        // it at the top of the list.
-        Bolt(testing, size = 32.dp) {
-            if (testing) m.onCancelTest() else m.onTest(city.code)
-        }
-        val starred = city.code in m.favourites
-        IconButton(if (starred) Glyph.starFilled else Glyph.star, if (starred) "Unstar" else "Star",
-            { m.onStar(city.code) }, tint = if (starred) Tone.work else Tone.textOff, size = 32.dp)
         val turn by androidx.compose.animation.core.animateFloatAsState(if (open) 180f else 0f, tween(220), label = "chev")
         Box(Modifier.graphicsLayer { rotationZ = turn }) {
             IconButton(Glyph.chevDown, if (open) "Hide exits" else "Show exits", { open = !open }, size = 32.dp)

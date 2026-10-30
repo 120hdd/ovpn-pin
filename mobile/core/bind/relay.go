@@ -67,6 +67,11 @@ type Client struct {
 	// Held apart from the tunnel because it outlives a single connection and
 	// has to be closed by hand.
 	server *core.TunnelServer
+
+	// Exits given up on while connected, by address. Kept out of the next
+	// race so that replacing an exit that stopped carrying does not pick the
+	// same one again because it still answers the race's quick question.
+	avoid map[string]bool
 }
 
 var errTunnelUp = errors.New("a tunnel is already up - stop it before starting another")
@@ -219,6 +224,21 @@ func (c *Client) race(servers []core.Server, timeoutMs int, width int, p Progres
 	logins := core.Logins{}
 	for k, v := range c.logins {
 		logins[k] = v
+	}
+	// Without the exits given up on - unless that leaves nothing, which is a
+	// pick of one exit, or a city of two that both went. Asking the one that
+	// stopped again is a better answer than "no servers" about a list that is
+	// plainly on screen, and it may have come back.
+	if len(c.avoid) > 0 {
+		var kept []core.Server
+		for _, s := range servers {
+			if !c.avoid[s.Addr] {
+				kept = append(kept, s)
+			}
+		}
+		if len(kept) > 0 {
+			servers = kept
+		}
 	}
 	c.mu.Unlock()
 
@@ -473,6 +493,102 @@ func (c *Client) StopTunnel() error {
 		return nil
 	}
 	return t.Close()
+}
+
+// Health is how the way out has been answering, read from the traffic it
+// carried rather than from anything sent to find out.
+type Health struct {
+	// Connections in a row the way itself failed - no TCP, no TLS, no answer
+	// to CONNECT. A refusal is an answer and resets it.
+	Fails int
+	// How long since the way last answered anything, in milliseconds.
+	SinceOKMs int
+}
+
+// Health is nil when no tunnel is up. Cheap enough to ask every few seconds:
+// two numbers, nothing on the wire.
+func (c *Client) Health() *Health {
+	c.mu.Lock()
+	t := c.tunnel
+	c.mu.Unlock()
+	if t == nil {
+		return nil
+	}
+	fails, since := t.Health()
+	return &Health{Fails: fails, SinceOKMs: int(since.Milliseconds())}
+}
+
+// Check is one real request through whatever is carrying, and how long it
+// took in milliseconds.
+//
+// The question the counts above cannot answer on their own: an idle phone
+// opens nothing, so nothing fails, and an exit that accepts CONNECT and then
+// forwards nothing passes every count. This goes all the way - CONNECT, TLS
+// inside it, an HTTP answer back - so a success means bytes came home.
+//
+// Asked of the way directly, not through the tun, and so not counted in
+// Health: a check that failed would otherwise be counted twice.
+func (c *Client) Check(timeoutMs int) (int, error) {
+	c.mu.Lock()
+	t := c.tunnel
+	c.mu.Unlock()
+	if t == nil {
+		return 0, errors.New("no tunnel is up")
+	}
+	start := time.Now()
+	if _, err := core.SeenAsThrough(t.Way(), time.Duration(timeoutMs)*time.Millisecond); err != nil {
+		return 0, err
+	}
+	return int(time.Since(start).Milliseconds()), nil
+}
+
+// Avoid keeps one exit out of every race this Client runs from now on. What
+// the phone calls on an exit that stopped carrying, before racing for its
+// replacement.
+func (c *Client) Avoid(addr string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.avoid == nil {
+		c.avoid = map[string]bool{}
+	}
+	c.avoid[addr] = true
+}
+
+// SwitchExit moves the running tunnel onto another exit, without taking the
+// interface down. Connections already open finish on the old one; everything
+// after goes through the new.
+//
+// Same arguments as StartTunnel, for the same reason: the caller has the
+// winner of a race, and that winner's own provider is the credential to use.
+func (c *Client) SwitchExit(addr, name, provider string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.tunnel == nil {
+		return errors.New("no tunnel is up")
+	}
+	login := c.login(provider)
+	exit := core.NewExit(addr, name, login.User, login.Password)
+	if err := c.tunnel.SetWay(exit); err != nil {
+		return err
+	}
+	core.SetLive(exit)
+	return nil
+}
+
+// ResetServer drops the session to the user's own server, so the next
+// connection dials a fresh one.
+//
+// What a stalled server path needs. A session whose websocket has gone quiet
+// is not closed until smux's keepalive gives up on it, and until then every
+// stream is opened on a corpse. Closing it here costs one dial, which the
+// next connection pays.
+func (c *Client) ResetServer() {
+	c.mu.Lock()
+	srv := c.server
+	c.mu.Unlock()
+	if srv != nil {
+		srv.Close()
+	}
 }
 
 // TunnelExit is the address traffic is leaving by, or "" when nothing is up.

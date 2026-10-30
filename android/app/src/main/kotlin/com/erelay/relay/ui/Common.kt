@@ -14,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -67,8 +68,21 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.text.TextAutoSize
+import androidx.compose.foundation.text.modifiers.TextAutoSizeLayoutScope
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.erelay.relay.ui.theme.Mono
@@ -165,7 +179,10 @@ fun Sheet(
     ) {
         BackHandler { (onBack ?: onClose)() }
         Backdrop {
-            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+            // On a tablet the sheet stands in a column down the middle rather
+            // than stretching a list of rows across the whole screen.
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+            Column(Modifier.widthIn(max = CONTENT_MAX).fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                 Row(
                     Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp, top = 18.dp, bottom = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -189,9 +206,13 @@ fun Sheet(
                     Column(body, content = content)
                 }
             }
+            }
         }
     }
 }
+
+/** As wide as a screen's content gets: a large phone's width, and a little more. */
+val CONTENT_MAX = 600.dp
 
 @Composable
 fun IconButton(
@@ -214,6 +235,7 @@ fun IconButton(
 }
 
 /** A pane: the rounded, bordered block every settings screen is made of. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun Pane(
     modifier: Modifier = Modifier,
@@ -234,18 +256,26 @@ fun Pane(
             .padding(14.dp),
     ) {
         if (title != null) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (icon != null) {
-                    Box(
-                        Modifier.size(32.dp).clip(RoundedCornerShape(9.dp)).background(Tone.control),
-                        contentAlignment = Alignment.Center,
-                    ) { Icon(icon, null, Modifier.size(16.dp), tint = Tone.textMuted) }
-                    Spacer(Modifier.width(10.dp))
+            // The pill sits at the end of the title's line while both fit,
+            // and goes under it when they do not - squeezed in beside it,
+            // a long one left the title a letter wide.
+            FlowRow(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp),
+                itemVerticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (icon != null) {
+                        Box(
+                            Modifier.size(32.dp).clip(RoundedCornerShape(9.dp)).background(Tone.control),
+                            contentAlignment = Alignment.Center,
+                        ) { Icon(icon, null, Modifier.size(16.dp), tint = Tone.textMuted) }
+                        Spacer(Modifier.width(10.dp))
+                    }
+                    Text(title, style = Type.strong, modifier = Modifier.weight(1f, fill = false))
+                    if (help != null) InfoTip(help)
                 }
-                Text(title, style = Type.strong)
-                if (help != null) InfoTip(help)
-                Spacer(Modifier.weight(1f))
-                if (pill != null) Pill(pill, good = pillGood)
+                if (pill != null) {
+                    Spacer(Modifier.weight(1f))
+                    Pill(pill, good = pillGood)
+                }
             }
             Spacer(Modifier.height(12.dp))
         }
@@ -269,7 +299,9 @@ fun Pill(text: String, good: Boolean = true, dot: Boolean = false,
             Box(Modifier.size(5.dp).clip(CircleShape).background(c))
             Spacer(Modifier.width(6.dp))
         }
-        Text(text, style = Type.eyebrow.copy(color = c, fontSize = 10.sp))
+        // A pill is one word or two; broken over two lines it reads as two
+        // pills. The title beside it gives way instead.
+        Text(text, style = Type.eyebrow.copy(color = c, fontSize = 10.sp), maxLines = 1, softWrap = false)
     }
 }
 
@@ -308,44 +340,126 @@ fun Btn(
             Icon(icon, null, Modifier.size(16.dp), tint = if (enabled) fg else fg.copy(alpha = 0.5f))
             Spacer(Modifier.width(8.dp))
         }
-        Text(text, style = Type.button.copy(fontSize = 14.sp, color = if (enabled) fg else fg.copy(alpha = 0.5f)),
-            maxLines = 1)
+        // Two lines, broken between words, before it gets smaller: one line
+        // with a large font setting cut "Windscribe" off at "Windsc".
+        androidx.compose.foundation.text.BasicText(text, style = Type.button.copy(fontSize = 14.sp,
+            color = if (enabled) fg else fg.copy(alpha = 0.5f), textAlign = TextAlign.Center),
+            maxLines = 2, modifier = Modifier.weight(1f, fill = false),
+            autoSize = FitText(14.sp, floor = 10.dp))
     }
 }
 
-/** The desktop's segment: options in a dark track, a pill sliding under the chosen one. */
+/**
+ * The desktop's segment: options in a dark track, a pill sliding under the chosen one.
+ *
+ * Every label is set in one size, the largest that fits them all - on one
+ * line if it can, and then on two, broken between words, never inside one.
+ * A narrow phone with a large font setting had "Your server" running into
+ * "Server + exit", which ran off the end: a size floor in sp grows with the
+ * font setting, so the floor here is in dp and the track grows a line instead.
+ */
 @Composable
 fun <T> Segment(options: List<T>, chosen: T, label: (T) -> String, onPick: (T) -> Unit,
                 modifier: Modifier = Modifier, enabled: Boolean = true) {
+    val at by animateFloatAsState(options.indexOf(chosen).coerceAtLeast(0).toFloat(),
+        tween(300, easing = Shape.swing), label = "seg")
     BoxWithConstraints(
         modifier
             .fillMaxWidth()
-            .height(48.dp)
+            .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(Tone.bg.copy(alpha = 0.6f))
             .border(1.dp, Tone.divider, RoundedCornerShape(12.dp))
             .padding(3.dp),
     ) {
-        val each = maxWidth / options.size
-        val at by animateDpAsState(each * options.indexOf(chosen).coerceAtLeast(0),
-            tween(300, easing = Shape.swing), label = "seg")
-        Box(Modifier.offset(x = at).width(each).fillMaxHeight()
-            .clip(RoundedCornerShape(9.dp)).background(Tone.controlActive))
-        Row(Modifier.fillMaxSize()) {
-            for (o in options) {
+        val inset = 5.dp
+        val base = Type.button.copy(fontSize = 13.sp, textAlign = TextAlign.Center)
+        val measurer = rememberTextMeasurer()
+        val density = LocalDensity.current
+        val labels = options.map(label)
+        val cell = with(density) { (maxWidth / options.size - inset * 2).roundToPx().coerceAtLeast(1) }
+        val fit = remember(labels, cell, density) { fitLabels(measurer, labels, base, cell, density) }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 42.dp)
+                .drawBehind {
+                    val w = size.width / options.size
+                    drawRoundRect(Tone.controlActive, topLeft = androidx.compose.ui.geometry.Offset(w * at, 0f),
+                        size = androidx.compose.ui.geometry.Size(w, size.height),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(9.dp.toPx()))
+                },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            for ((i, o) in options.withIndex()) {
                 Box(
-                    Modifier.weight(1f).fillMaxHeight()
+                    Modifier.weight(1f).heightIn(min = 42.dp)
                         .press(enabled, RoundedCornerShape(9.dp), feel = HapticFeedbackType.SegmentTick) {
                             if (o != chosen) onPick(o)
-                        },
+                        }
+                        .padding(horizontal = inset, vertical = 4.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(label(o), style = Type.button.copy(
-                        fontSize = 13.sp,
-                        color = if (o == chosen) Tone.text else Tone.textOff), maxLines = 1)
+                    Text(labels[i], style = base.copy(fontSize = fit.size, lineHeight = 1.15.em,
+                        color = if (o == chosen) Tone.text else Tone.textOff),
+                        maxLines = fit.lines, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
+    }
+}
+
+/** The size and line count a row of labels is set in: see [Segment]. */
+private data class LabelFit(val size: TextUnit, val lines: Int)
+
+private fun fitLabels(
+    measurer: TextMeasurer, labels: List<String>, style: TextStyle, width: Int, density: Density,
+): LabelFit {
+    val max = style.fontSize.value
+    // 9dp, whatever the font setting: below that a label is not read.
+    val floor = minOf(max, 9f / density.fontScale)
+    fun fits(size: Float, lines: Int) = labels.all { text ->
+        val r = measurer.measure(text, style.copy(fontSize = size.sp, lineHeight = 1.15.em),
+            maxLines = lines, constraints = Constraints(maxWidth = width), density = density)
+        !r.hasVisualOverflow && !r.breaksWord(text)
+    }
+    // One line while the labels keep most of their size; past that two lines
+    // read better than small print.
+    var s = max
+    while (s >= max * 0.8f) {
+        if (fits(s, 1)) return LabelFit(s.sp, 1)
+        s -= 0.5f
+    }
+    s = max
+    while (s >= floor) {
+        if (fits(s, 2)) return LabelFit(s.sp, 2)
+        s -= 0.5f
+    }
+    return LabelFit(floor.sp, 2)
+}
+
+/** Whether a line of this layout ends inside a word, breaking it in two. */
+private fun TextLayoutResult.breaksWord(text: CharSequence) = (0 until lineCount - 1).any { line ->
+    val end = getLineEnd(line)
+    text.getOrNull(end - 1)?.isLetterOrDigit() == true && text.getOrNull(end)?.isLetterOrDigit() == true
+}
+
+/**
+ * Text that steps down from [max] until it fits its lines with no word broken
+ * in two, but not below [floor]. The floor is in dp, not sp: one in sp grows
+ * with the phone's font setting, and at twice the size it no longer fits
+ * anything - the text was cut off at the floor instead of shrinking past it.
+ */
+data class FitText(val max: TextUnit, val floor: Dp, val step: TextUnit = 0.5.sp) : TextAutoSize {
+    override fun TextAutoSizeLayoutScope.getFontSize(constraints: Constraints, text: AnnotatedString): TextUnit {
+        val least = minOf(max.value, floor.value / fontScale)
+        var s = max.value
+        while (s > least) {
+            val r = performLayout(constraints, text, s.sp)
+            if (!r.hasVisualOverflow && !r.breaksWord(text)) return s.sp
+            s -= step.value
+        }
+        return least.sp
     }
 }
 
@@ -370,9 +484,13 @@ fun Toggle(on: Boolean, onChange: (Boolean) -> Unit, enabled: Boolean = true) {
 @Composable
 fun ToggleRow(title: String, help: String?, on: Boolean, onChange: (Boolean) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(title, style = Type.strong)
-        if (help != null) InfoTip(help)
-        Spacer(Modifier.weight(1f))
+        // The words wrap in what the switch leaves them; the switch is
+        // never the thing pushed off the edge.
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+            Text(title, style = Type.strong, modifier = Modifier.weight(1f, fill = false))
+            if (help != null) InfoTip(help)
+        }
+        Spacer(Modifier.width(8.dp))
         Toggle(on, onChange)
     }
 }

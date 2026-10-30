@@ -270,7 +270,7 @@ func (t *TunnelServer) connect(conn net.Conn, target string) ([]byte, error) {
 	case code == "407":
 		return nil, errors.New("the server refused the tunnel password")
 	case !strings.HasPrefix(code, "2"):
-		return nil, fmt.Errorf("CONNECT refused: %s", strings.TrimSpace(line))
+		return nil, fmt.Errorf("%w: %s", ErrTargetRefused, strings.TrimSpace(line))
 	}
 
 	// Anything bufio read ahead belongs to the tunnel and has to go back.

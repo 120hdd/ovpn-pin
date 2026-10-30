@@ -52,6 +52,13 @@ func NewExit(addr, name, user, password string) *Exit {
 // exit and take a different address for it.
 var ErrFiltered = errors.New("filtered here - TCP answers, TLS gets nothing back")
 
+// ErrTargetRefused is the way out answering, and saying no about where it was
+// asked to go - a 502 for a site that is down, a 403 for a port it will not
+// carry. Told apart from every other failure because it is proof of life: the
+// exit heard the question and answered it, so a tunnel counting how its exit
+// is doing must not count this against it. A dead website is not a dead exit.
+var ErrTargetRefused = errors.New("CONNECT refused")
+
 // Dial opens the TLS connection to the exit: to the address, without the
 // name, proving the name anyway.
 //
@@ -226,7 +233,7 @@ func (e *Exit) connect(conn *tls.Conn, target string) ([]byte, error) {
 		// it, which is a different thing to go and fix.
 		return nil, errors.New(REFUSED)
 	case !strings.HasPrefix(code, "2"):
-		return nil, fmt.Errorf("CONNECT refused: %s", strings.TrimSpace(status))
+		return nil, fmt.Errorf("%w: %s", ErrTargetRefused, strings.TrimSpace(status))
 	}
 	return spare, nil
 }

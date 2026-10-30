@@ -87,6 +87,7 @@ class RelayTile : TileService() {
         tile.icon = Icon.createWithResource(this, R.drawable.ic_relay)
         if (Build.VERSION.SDK_INT >= 29) {
             tile.subtitle = when {
+                up && RelayVpnService.stalled -> "Reconnecting…"
                 up -> RelayVpnService.exitName.take(2).let { cc ->
                     countryName(cc).ifEmpty { "Connected" }.takeIf { RelayVpnService.exitProvider.isNotEmpty() }
                         ?: "Your server"

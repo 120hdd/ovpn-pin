@@ -33,6 +33,7 @@ import (
 	"net/netip"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tun "github.com/sagernet/sing-tun"
@@ -49,15 +50,65 @@ const dnsThroughTunnel = "https://1.1.1.1/dns-query"
 
 // Tunnel is one way out, carrying everything. See way.go for what a Way is.
 type Tunnel struct {
-	exit  Way
+	// The way out, behind a pointer so it can be changed under a running
+	// stack. An exit that stops answering is replaced here, not by tearing
+	// the interface down and building another: every app on the phone would
+	// see its network vanish and come back, and for the seconds in between
+	// its traffic would leave by the bare line.
+	exit  atomic.Pointer[wayBox]
 	stack tun.Stack
 	dev   tun.Tun
 	dns   *http.Client
 	hosts *Hosts
 	names *dnsNames
 
+	// What the way out has been doing, counted from the traffic itself.
+	health health
+
 	closeOnce sync.Once
 }
+
+// wayBox is a Way that atomic.Pointer can hold - it takes a concrete type,
+// and a Way is an interface.
+type wayBox struct{ Way }
+
+// way is what is carrying now.
+func (t *Tunnel) way() Way { return t.exit.Load().Way }
+
+// open is one connection through whatever is carrying, counted.
+func (t *Tunnel) open(target string, timeout time.Duration) (net.Conn, []byte, error) {
+	conn, spare, err := t.way().Open(target, timeout)
+	t.health.note(err)
+	return conn, spare, err
+}
+
+// SetWay puts a different way out under the running stack.
+//
+// Connections already open stay on the way that opened them, and end when it
+// does; everything opened from now on goes through w. The count starts again,
+// because what the old exit did says nothing about the new one.
+func (t *Tunnel) SetWay(w Way) error {
+	if w == nil {
+		return errors.New("no exit to carry anything to")
+	}
+	t.exit.Store(&wayBox{w})
+	t.health.reset()
+	// Idle DoH connections belong to the old way. Left in the pool, the next
+	// query would be asked of the exit that was just given up on.
+	if tr, ok := t.dns.Transport.(*http.Transport); ok {
+		tr.CloseIdleConnections()
+	}
+	return nil
+}
+
+// Health is how many connections in a row the way out has failed, and how
+// long ago it last answered one. Cheap: two numbers, nothing sent.
+func (t *Tunnel) Health() (fails int, sinceOK time.Duration) {
+	return t.health.read()
+}
+
+// Way is what is carrying now, for a check that has to go through it.
+func (t *Tunnel) Way() Way { return t.way() }
 
 // StartTunnel takes the file descriptor VpnService opened and starts carrying
 // traffic through the exit.
@@ -91,7 +142,9 @@ func StartTunnel(fd int, mtu int, exit Way) (started *Tunnel, err error) {
 		mtu = TunMTU
 	}
 
-	t := &Tunnel{exit: exit, hosts: newHosts(), names: newDNSNames()}
+	t := &Tunnel{hosts: newHosts(), names: newDNSNames()}
+	t.exit.Store(&wayBox{exit})
+	t.health.reset()
 	t.dns = &http.Client{
 		Timeout: 10 * time.Second,
 		Transport: &http.Transport{
@@ -100,7 +153,10 @@ func StartTunnel(fd int, mtu int, exit Way) (started *Tunnel, err error) {
 			// is. The outer handshake announces nothing; the inner one names
 			// 1.1.1.1, which is an address and so is not announced either.
 			DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
-				conn, spare, err := exit.Open(addr, 10*time.Second)
+				// Through t rather than the exit it started with, so a query
+				// asked after the exit was replaced goes out the new one - and
+				// counted, because DNS is usually the first thing to notice.
+				conn, spare, err := t.open(addr, 10*time.Second)
 				if err != nil {
 					return nil, err
 				}
@@ -167,7 +223,7 @@ func (t *Tunnel) HostsJSON() string { return t.hosts.JSON() }
 
 // Exit is the address traffic is currently leaving by, for a status line.
 func (t *Tunnel) Exit() string {
-	switch w := t.exit.(type) {
+	switch w := t.way().(type) {
 	case nil:
 		return ""
 	case *Exit:
@@ -283,7 +339,7 @@ func (h *handler) carry(ctx context.Context, conn net.Conn, source, destination 
 	row := h.hosts.opened(destination.String(), h.label(destination),
 		whoOpened(ipProtoTCP, source.String(), destination.String()))
 
-	upstream, spare, err := h.exit.Open(destination.String(), 15*time.Second)
+	upstream, spare, err := (*Tunnel)(h).open(destination.String(), 15*time.Second)
 	if err != nil {
 		h.hosts.closed(row)
 		return err

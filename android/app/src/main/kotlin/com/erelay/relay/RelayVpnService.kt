@@ -9,10 +9,15 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import android.os.PowerManager
+import android.os.SystemClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import relay.Client
 import relay.Progress
@@ -56,7 +61,14 @@ class RelayVpnService : VpnService() {
     // only so that a status line can say whether one is open; nothing here
     // closes it, because the core does.
     private var tunFd: Int = -1
-    private var client: Client? = null
+    @Volatile private var client: Client? = null
+
+    // The watchdog over a tunnel that is up. See watch().
+    private var watcher: Job? = null
+
+    // The sentence the tunnel came up with, said again when a stall clears
+    // without the exit having changed.
+    private var connectedText = ""
 
     companion object {
         const val TAG = "Relay"
@@ -138,6 +150,31 @@ class RelayVpnService : VpnService() {
         /** The measured exit country, two letters, or empty until checked. */
         @Volatile var seenCountry: String = ""
             private set
+
+        /**
+         * The tunnel is up but its exit has stopped carrying, and the service
+         * is finding another. The interface stays up meanwhile - see watch() -
+         * so [exitAddress] is still set, and this is what says that "up" is
+         * not "connected" just now.
+         */
+        @Volatile var stalled: Boolean = false
+            private set
+
+        // How the watchdog paces itself. Counts are read every few seconds and
+        // cost nothing; a real request through the exit is sent once a minute
+        // while somebody is looking at the phone, and at once when the counts
+        // say apps are failing.
+        private const val WATCH_EVERY_MS = 10_000L
+        private const val CHECK_EVERY_MS = 60_000L
+        // A working exit answers the check in one to two seconds from Iran;
+        // eight is slow enough to forgive a bad moment on the line.
+        private const val CHECK_TIMEOUT_MS = 8_000L
+        private const val RECHECK_AFTER_MS = 2_000L
+        // Connections in a row the exit failed before it is asked directly.
+        private const val FAILS_BEFORE_CHECK = 2
+        // Checks in a row that fail before the exit is given up on. Two, so
+        // one dropped packet on a bad line does not cost a working exit.
+        private const val MISSES_BEFORE_SWITCH = 2
 
         /**
          * What went where, asked of whichever tunnel is up.
@@ -388,7 +425,9 @@ class RelayVpnService : VpnService() {
                 else -> "$domain (your server)"
             }
             since = System.currentTimeMillis() / 1000
-            say("connected through $exitName")
+            connectedText = "connected through $exitName"
+            say(connectedText)
+            watch(c) { redialServer(c) }
         } catch (e: Exception) {
             Log.e(TAG, "server connect failed", e)
             fail(e.message ?: e.toString())
@@ -434,25 +473,7 @@ class RelayVpnService : VpnService() {
 
             total = c.count().toInt()
             say("racing ${c.count()} exits")
-            // Long literals, not Int. gomobile maps Go's int to Java long,
-            // and Kotlin does not widen an Int to fill a Long parameter.
-            // The race keeps reporting after it has a winner - the exits
-            // still in flight answer late - and each report used to overwrite
-            // the status, so a connected tunnel read "asked 8 of 353" in the
-            // notification and the window. Only the race's own lifetime counts.
-            val racing = java.util.concurrent.atomic.AtomicBoolean(true)
-            val winner = try {
-                c.raceIn(country, 6000L, 8L, object : Progress {
-                    override fun onProgress(n: Long, of: Long) {
-                        if (!racing.get()) return
-                        asked = n.toInt()
-                        total = of.toInt()
-                        say("asked $n of $of")
-                    }
-                })
-            } finally {
-                racing.set(false)
-            }
+            val winner = race(c, country)
 
             say("opening the tunnel via ${winner.name}")
 
@@ -483,14 +504,226 @@ class RelayVpnService : VpnService() {
             exitProvider = winner.provider
             tookMs = winner.tookMs.toInt()
             since = System.currentTimeMillis() / 1000
-            say("connected via ${winner.name} (${winner.addr}), ${winner.tookMs} ms")
+            connectedText = "connected via ${winner.name} (${winner.addr}), ${winner.tookMs} ms"
+            say(connectedText)
+            watch(c) { switchExit(c, country) }
         } catch (e: Exception) {
             Log.e(TAG, "connect failed", e)
             fail(e.message ?: e.toString())
         }
     }
 
+    /**
+     * One race over the pick, with the window told how it is going.
+     *
+     * Long literals, not Int. gomobile maps Go's int to Java long, and Kotlin
+     * does not widen an Int to fill a Long parameter.
+     */
+    private fun race(c: Client, country: String): relay.Result {
+        // The race keeps reporting after it has a winner - the exits still in
+        // flight answer late - and each report used to overwrite the status,
+        // so a connected tunnel read "asked 8 of 353" in the notification and
+        // the window. Only the race's own lifetime counts.
+        val racing = java.util.concurrent.atomic.AtomicBoolean(true)
+        return try {
+            c.raceIn(country, 6000L, 8L, object : Progress {
+                override fun onProgress(n: Long, of: Long) {
+                    if (!racing.get()) return
+                    asked = n.toInt()
+                    total = of.toInt()
+                    say("asked $n of $of")
+                }
+            })
+        } finally {
+            racing.set(false)
+        }
+    }
+
+    // -- noticing a tunnel that has stopped carrying ---------------------------
+
+    /**
+     * Watch a tunnel that is up, and do something when its exit stops carrying.
+     *
+     * Without this, "connected" was only ever true of the moment the tunnel
+     * came up. Nothing looked again. When the exit stopped answering later -
+     * filtered after a while on the line, overloaded, taken down - every new
+     * connection waited out its fifteen seconds in the core and failed, every
+     * DNS query waited out its ten, the phone went slow and then dead, and the
+     * notification went on saying "Connected" for as long as anyone cared to
+     * read it.
+     *
+     * Two signals, one cheap and one certain. The core counts connections the
+     * exit itself failed in a row ([Client.health]); that costs nothing and is
+     * read every few seconds. A count that climbs, or a minute with the screen
+     * on, sends one real request through the exit ([Client.check]) - which is
+     * the only way to catch an exit that takes CONNECT and then forwards
+     * nothing, or a phone that is idle and so failing nothing.
+     *
+     * Two checks failing in a row is a stall, and [recover] runs. It does not
+     * take the interface down: the exit is replaced under the running stack,
+     * so apps see slow connections for a moment rather than a network that
+     * vanishes, and nothing leaves by the bare line meanwhile.
+     */
+    private fun watch(c: Client, recover: suspend () -> Boolean) {
+        watcher?.cancel()
+        val power = getSystemService(PowerManager::class.java)
+        watcher = scope.launch {
+            var lastCheck = SystemClock.elapsedRealtime()
+            var failsAtCheck = 0L
+            var misses = 0
+            // After a recovery that found nothing, wait longer each time: a
+            // phone with no signal at all fails every check, and racing every
+            // half a minute until it gets one back is a battery for nothing.
+            var backoff = 0L
+            while (isActive && client === c) {
+                // A check that just failed is asked again almost at once: it
+                // already waited out its own timeout, and every second spent
+                // here is a second every app on the phone is waiting too.
+                delay(if (misses > 0) RECHECK_AFTER_MS else WATCH_EVERY_MS + backoff)
+                if (client !== c) break
+                // Dozing, nothing on the phone has a network - this check
+                // would fail and give up on a working exit for it.
+                if (power?.isDeviceIdleMode == true) continue
+                debugStall(c)
+                val h = c.health() ?: break
+                val now = SystemClock.elapsedRealtime()
+                // Failures since the last check, not in all: a check that
+                // passed does not reset the core's count, and an idle phone
+                // would otherwise be checked every ten seconds after one bad
+                // burst. A count that went down was reset by a new exit.
+                if (h.fails < failsAtCheck) failsAtCheck = 0
+                val failing = h.fails >= FAILS_BEFORE_CHECK && h.fails > failsAtCheck
+                val due = now - lastCheck >= CHECK_EVERY_MS && power?.isInteractive != false
+                if (!failing && !due && misses == 0 && !stalled) continue
+
+                lastCheck = now
+                failsAtCheck = h.fails
+                val ok = try {
+                    c.check(CHECK_TIMEOUT_MS)
+                    true
+                } catch (e: Exception) {
+                    Log.w(TAG, "check through ${exitName.ifEmpty { exitAddress }} failed " +
+                        "(${h.fails} in a row, last answer ${h.sinceOKMs / 1000}s ago): ${e.message}")
+                    false
+                }
+                if (client !== c || !isActive) break
+
+                if (ok) {
+                    misses = 0
+                    backoff = 0
+                    if (stalled) {
+                        // Back on its own - the line came back, or the
+                        // exit did - without anything having been changed.
+                        stalled = false
+                        say(connectedText)
+                    }
+                    continue
+                }
+                misses++
+                if (misses < MISSES_BEFORE_SWITCH) continue
+
+                stalled = true
+                val fixed = try {
+                    recover()
+                } catch (e: Exception) {
+                    Log.w(TAG, "recovering the tunnel", e)
+                    false
+                }
+                if (client !== c) break
+                misses = 0
+                lastCheck = SystemClock.elapsedRealtime()
+                backoff = if (fixed) 0 else (backoff * 2).coerceIn(20_000L, 120_000L)
+            }
+        }
+    }
+
+    /**
+     * Debug builds only: an exit dying under a connected tunnel, on demand.
+     *
+     *     adb shell run-as com.erelay.relay.debug touch files/debug-stall
+     *
+     * points the running tunnel at an address that answers nothing, and tells
+     * the window nothing - which is exactly what the real failure looks like
+     * from the phone. The watchdog is then expected to notice and move on.
+     * A flag file rather than an intent because the service is not exported,
+     * and should not be for this.
+     */
+    private fun debugStall(c: Client) {
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE == 0) return
+        if (!java.io.File(filesDir, "debug-stall").delete()) return
+        Log.w(TAG, "debug: pointing the tunnel at 192.0.2.1, which answers nothing")
+        c.switchExit("192.0.2.1", exitName, exitProvider)
+    }
+
+    /**
+     * A provider exit that stopped carrying, replaced by another from the same
+     * pick. True when traffic is moving again.
+     */
+    private fun switchExit(c: Client, country: String): Boolean {
+        val dead = exitAddress
+        say("reconnecting: ${exitName.ifEmpty { dead }} stopped answering")
+        // Out of this race and every one after it on this Client: it still
+        // answers the race's quick question more often than not, which is how
+        // it would win again and carry nothing again.
+        c.avoid(dead)
+        val winner = try {
+            race(c, country)
+        } catch (e: Exception) {
+            if (client === c) say("reconnecting: no other exit answered - " +
+                (e.message ?: e.toString()).take(100))
+            return false
+        }
+        if (client !== c) return false
+        c.switchExit(winner.addr, winner.name, winner.provider)
+        Log.i(TAG, "switched from $dead to ${winner.addr} (${winner.name})")
+        exitAddress = winner.addr
+        exitName = winner.name
+        exitFile = winner.file
+        exitProvider = winner.provider
+        tookMs = winner.tookMs.toInt()
+        // Where it comes out is a fact about the old exit until asked again.
+        seenCountry = ""
+        since = System.currentTimeMillis() / 1000
+        stalled = false
+        connectedText = "connected via ${winner.name} (${winner.addr}), ${winner.tookMs} ms"
+        say(connectedText)
+        return true
+    }
+
+    /**
+     * The user's own server, stopped carrying. There is no other server to go
+     * to, so the session is dropped and dialled again - a websocket that went
+     * quiet is not closed until smux's keepalive gives up on it, and until
+     * then every connection is opened on a corpse.
+     */
+    private fun redialServer(c: Client): Boolean {
+        say("reconnecting: $exitAddress stopped answering")
+        c.resetServer()
+        try {
+            c.check(CHECK_TIMEOUT_MS)
+        } catch (e: Exception) {
+            if (client === c) say("reconnecting: $exitAddress is not answering - " +
+                (e.message ?: e.toString()).take(100))
+            return false
+        }
+        if (client !== c) return false
+        stalled = false
+        say(connectedText)
+        return true
+    }
+
     private fun stopTunnel() {
+        watcher?.cancel()
+        watcher = null
+        stalled = false
+        // A race in flight - the first one, or one replacing a stalled exit -
+        // ends here rather than finishing on its own and opening something
+        // nobody asked for any more.
+        try {
+            client?.stop()
+        } catch (e: Exception) {
+            Log.w(TAG, "stopping the race", e)
+        }
         seenCountry = ""
         try {
             client?.stopTunnel()
@@ -583,6 +816,8 @@ class RelayVpnService : VpnService() {
         return when {
             text.startsWith("connected") -> "Connected to ${place.ifEmpty { "Relay" }}" to
                 (if (exitProvider.isNotEmpty()) exitName else exitAddress)
+            text.startsWith("reconnecting") -> "Reconnecting…" to
+                text.removePrefix("reconnecting: ").replaceFirstChar { it.uppercase() }
             text.startsWith("failed") -> "Could not connect" to
                 text.removePrefix("failed: ").replaceFirstChar { it.uppercase() }
             text.startsWith("asked") -> "Connecting…" to "Asked ${asked} of $total exits"

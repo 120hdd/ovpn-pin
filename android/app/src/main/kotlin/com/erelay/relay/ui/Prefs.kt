@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -351,7 +352,7 @@ private fun AccountLine(a: Account, brand: Color, onUse: () -> Unit, onRemove: (
                 Spacer(Modifier.width(6.dp))
                 Text(listOfNotNull(if (a.active) "In use" else null,
                     if (a.signedIn) "signed in" else "not signed in").joinToString(" · "),
-                    style = Type.small, maxLines = 1)
+                    style = Type.small, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         when {
@@ -507,10 +508,12 @@ private fun Servers(
             { r -> scope.launch { core.setPinRoute(route = r) } }, enabled = !run.running)
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Addresses per host", style = Type.body.copy(color = Tone.text))
-            InfoTip("A host can answer at several addresses. Each one becomes its own config, " +
-                "so more here means more exits to race and a longer pin.")
-            Spacer(Modifier.weight(1f))
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                Text("Addresses per host", style = Type.body.copy(color = Tone.text),
+                    modifier = Modifier.weight(1f, fill = false))
+                InfoTip("A host can answer at several addresses. Each one becomes its own config, " +
+                    "so more here means more exits to race and a longer pin.")
+            }
             IconButton(Glyph.minus, "Fewer", { scope.launch { core.setPinRoute(maxIps = plan.maxIps - 1) } },
                 size = 34.dp, enabled = !run.running && plan.maxIps > 1)
             Text(plan.maxIps.toString(), style = Type.mono.copy(color = Tone.text, fontSize = 14.sp),
@@ -732,7 +735,8 @@ private fun Swatch(
         }
         Spacer(Modifier.height(6.dp))
         Text(p.label, style = Type.small.copy(color = if (on) Tone.text else Tone.textMuted,
-            fontWeight = if (on) FontWeight.W600 else FontWeight.W400), maxLines = 1)
+            fontWeight = if (on) FontWeight.W600 else FontWeight.W400), maxLines = 1,
+            overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -752,7 +756,7 @@ private fun About(core: RelayCore) {
 @Composable
 private fun Line(label: String, value: String) {
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Text(label, style = Type.small, modifier = Modifier.width(56.dp))
+        Text(label, style = Type.small, modifier = Modifier.widthIn(min = 56.dp).padding(end = 8.dp))
         Text(value, style = Type.mono.copy(color = Tone.textMuted, fontWeight = FontWeight.Normal))
     }
 }

@@ -86,7 +86,7 @@ fun DropSheet(
                         Text(e.file, style = Type.mono.copy(color = Tone.textMuted), maxLines = 1,
                             overflow = TextOverflow.Ellipsis)
                         Text(listOf(e.ip, e.why).filter { it.isNotEmpty() }.joinToString(" · "),
-                            style = Type.mono, maxLines = 1)
+                            style = Type.mono, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -65,7 +66,7 @@ fun LogSheet(open: Boolean, live: Boolean, hosts: suspend () -> List<HostRow>, o
 
     Sheet(open, "Through the relay", "What went where", onClose, scroll = false) {
         Column(Modifier.padding(horizontal = 16.dp)) {
-            Segment(By.entries, by, { it.label }, { by = it }, Modifier.width(220.dp))
+            Segment(By.entries, by, { it.label }, { by = it }, Modifier.widthIn(max = 320.dp))
             Spacer(Modifier.height(12.dp))
             Divider()
         }
