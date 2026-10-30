@@ -336,11 +336,11 @@
     <div class="rig__edge"></div>
     <div class="rig__main" id="searchMain">
       <input class="rig__in" id="search" type="text"
-             autocomplete="off" spellcheck="false" aria-label="Search countries">
+             autocomplete="off" spellcheck="false" aria-label="Search a country or city">
       <!-- The hint is ours rather than the field's, so the fade can be taken
            off the end of the words instead of out of a fixed-width band that
            landed across the middle of them. -->
-      <span class="rig__hint" id="inputMask" aria-hidden="true">Search countries</span>
+      <span class="rig__hint" id="inputMask" aria-hidden="true">Search a country or city</span>
       <span class="rig__spark" id="inputSpark"></span>
       <span class="rig__lens" aria-hidden="true">
         <svg class="ico" aria-hidden="true"><use href="#i-search"/></svg>
@@ -365,46 +365,46 @@
     <!-- Answering-first sits underneath all three: a blocked exit is not a
          good answer to "sort by name" either. -->
     <div class="pair pair--sort" id="sortBy" role="tablist">
-      <!-- Icons, because three words beside a fourth control made a row of
-           four things that all looked like buttons doing the same kind of
-           job. Each keeps its word as a tooltip and as its label for anyone
-           not reading by eye. -->
+      <!-- The phone's chips: each one an icon and the word, so a sort always
+           says what it is. -->
       <button class="pair__opt" type="button" data-sort="ping" role="tab"
               aria-selected="true" aria-label="Fastest first" title="Fastest first">
-        <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg>
+        <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg><span>Ping</span>
       </button>
       <button class="pair__opt" type="button" data-sort="load" role="tab"
               aria-selected="false" aria-label="Emptiest first" title="Emptiest first">
-        <svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg>
+        <svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg><span>Load</span>
       </button>
       <button class="pair__opt" type="button" data-sort="name" role="tab"
               aria-selected="false" aria-label="By name" title="By name">
-        <svg class="ico" aria-hidden="true"><use href="#i-az"/></svg>
+        <svg class="ico" aria-hidden="true"><use href="#i-az"/></svg><span>A–Z</span>
       </button>
       <i class="pair__slide" aria-hidden="true"></i>
     </div>
+    <!-- Where the exits come from, as a chip at the end of the sorts - the
+         phone's "Everything". The count is the list's first line now. -->
+    <button class="listhead listhead--pick" id="sourcePick" type="button"
+            aria-haspopup="dialog">
+      <span id="sourceName">All locations</span>
+      <svg class="listhead__chev ico ico--sm" aria-hidden="true"><use href="#i-chev-down"/></svg>
+    </button>
     <!-- One exit per country, six at a time: a time on every row, so that
-         Fastest first is about what was measured. Stop while it runs. -->
+         Fastest first is about what was measured. Stop while it runs. A bolt
+         at the end of the chips rather than a line of its own: that line was
+         40px of a list that showed three countries. The word stays, for a
+         screen reader and for paintTesting(), out of sight. -->
     <button class="reach__all" id="testAll" type="button"
-            title="Time one exit in every country">
+            title="Test all: time one exit in every country. Times are from the last test.">
       <svg class="ico ico--sm" aria-hidden="true"><use href="#i-bolt"/></svg>
-      <span id="testAllLabel">Test all</span>
+      <span class="sr" id="testAllLabel">Test all</span>
     </button>
     <i class="reach__bar" id="reachBar" aria-hidden="true"></i>
   </div>
-  <p class="note reach__said" id="reachSaid">Times are from the last test.</p>
-
-  <!-- The line that was already counting the list now says what the list is
-       drawn from as well. Two facts about one thing, on the line that was
-       there for the first of them - rather than a row of chips under the
-       search box, which is a permanent piece of furniture for a setting
-       almost nobody changes twice. -->
-  <button class="listhead listhead--pick" id="sourcePick" type="button"
-          aria-haspopup="dialog">
-    <span id="sourceName">All locations</span>
-    <svg class="listhead__chev ico ico--sm" aria-hidden="true"><use href="#i-chev-down"/></svg>
-    <span class="listhead__n" id="listCount">—</span>
-  </button>
+  <!-- How a test is going, and what it found. Empty, and gone, until there
+       is something to say. -->
+  <div class="reach__line">
+    <p class="note reach__said" id="reachSaid"></p>
+  </div>
   <div class="sheet__list" id="list"></div>
 </dialog>
 

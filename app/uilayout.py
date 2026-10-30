@@ -494,9 +494,12 @@ def run(window, only=None, verbose=False):
     time.sleep(2.5)
     try:
         import ctypes
-        handle = ctypes.windll.user32.FindWindowW(None, 'Relay')
-        ctypes.windll.user32.SetForegroundWindow(handle)
-        time.sleep(0.4)
+        import vdesk
+        # Not on another desktop: forward there takes the person with it.
+        if not vdesk.wanted():
+            handle = ctypes.windll.user32.FindWindowW(None, 'Relay')
+            ctypes.windll.user32.SetForegroundWindow(handle)
+            time.sleep(0.4)
     except Exception:
         pass
 

@@ -4454,6 +4454,31 @@ canvas.blob__body {
 .row__ping[data-level="mid"] { color: var(--work, #d9a441); }
 .row__ping[data-level="high"] { color: var(--fail); }
 
+/* A city in two lines, as on the phone: the name and its time on top, whose
+   relays, 10G, P2P and the count under them, and the buttons down the right
+   of both. Beside the name, the time and three buttons had left it 109px
+   in the default 400px window. */
+.row--city {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "dot name ping rail" "dot meta meta rail";
+  column-gap: 10px;
+  row-gap: 3px;
+  align-items: center;
+}
+.row--city > .flag { grid-area: dot; }
+.row--city .row__copy,
+.row--city .row__marks { display: contents; }
+.row--city .row__name { grid-area: name; min-width: 0; }
+.row--city .row__meta {
+  grid-area: meta; min-width: 0;
+  display: flex; align-items: center; gap: 7px;
+}
+.row--city .row__meta .row__tag { width: 16px; height: 16px; flex: none; }
+.row--city .row__count { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row--city .row__ping { grid-area: ping; justify-self: end; }
+.row--city > .rail { grid-area: rail; margin-left: 0; }
+
 /* The word alone, like the provider's mark beside it - three boxed things
    in a row read as buttons. */
 .mark {
@@ -5724,3 +5749,269 @@ canvas.blob__body {
 .quick__cap { flex: 1; display: grid; gap: 2px; font-size: 12px; color: var(--text); }
 .quick__sub { font-size: 10.5px; color: var(--text-off); }
 #prefQuick .note:empty { display: none; }
+
+/* ------------------------------------------------- a window made wide */
+
+/* Maximised, or dragged out, the window keeps the column the app is drawn
+   for, in the middle, rather than stretching every row until a name and
+   its buttons are a screen apart. The title bars stay full width, so the
+   window's own buttons stay in its corner. */
+@media (min-width: 720px) {
+  .app > :not(.bar),
+  dialog.sheet > :not(.winbar):not(.floor) {
+    width: 100%;
+    max-width: 640px;
+    margin-inline: auto;
+  }
+}
+
+/* -------------------------------------------- the exit list, as on the phone */
+
+/* The Android app's picker, brought back to the window it came from: each
+   country a card of its own, its time and its place under the name, a line
+   of who and what under that, and its cities in a panel inside the card
+   when it is open. Kept here, at the end, because the rows above have been
+   restyled in layers and this has to be the last word on them. */
+
+/* The sorts as chips, each with its word, and where the list comes from as
+   a chip after them. */
+#reach { flex-wrap: wrap; gap: 6px; padding: 4px 16px 8px; }
+#sortBy.pair--sort {
+  display: flex; gap: 6px; flex: none;
+  padding: 0; border: 0; background: none; box-shadow: none;
+}
+#sortBy .pair__slide { display: none; }
+#sortBy .pair__opt {
+  display: inline-flex; align-items: center; gap: 5px;
+  width: auto; height: 30px; padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid var(--divider);
+  background: rgb(var(--wash) / 0.035);
+  color: var(--text-muted);
+  font: inherit; font-size: 12px; font-weight: 500;
+  white-space: nowrap;
+}
+#sortBy .pair__opt .ico { width: 13px; height: 13px; color: var(--text-off); }
+#sortBy .pair__opt[aria-selected="true"] {
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+  color: var(--text); font-weight: 600;
+}
+#sortBy .pair__opt[aria-selected="true"] .ico { color: var(--ok); }
+#reach #sourcePick {
+  width: auto; margin-left: auto;
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 30px; padding: 0 9px 0 11px;
+  border: 1px solid var(--divider); border-radius: 999px;
+  font-size: 12px; font-weight: 600; letter-spacing: 0; text-transform: none;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+#reach #sourcePick[data-narrow='1'] {
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+  color: var(--ok);
+}
+.reach__line {
+  display: flex; align-items: center; gap: 10px;
+  padding: 2px 16px 8px;
+}
+/* Nothing to say, no line: the room goes to the list. */
+.reach__line:has(.reach__said:empty) { display: none; }
+.reach__line .reach__said { flex: 1; min-width: 0; padding: 0; font-size: 12px; }
+/* Test all as a round chip after the others, the bolt alone. */
+#reach .reach__all {
+  flex: none; justify-content: center;
+  width: 30px; height: 30px; padding: 0; margin-left: 0;
+  border-radius: 999px;
+}
+#reach .reach__all .ico { width: 14px; height: 14px; }
+
+/* The list's own heading, with the count: FASTEST FIRST 72. */
+.listsplit--top { margin: 10px 6px 2px; }
+
+/* Fastest available: the one featured card. */
+#list .row--auto {
+  height: auto; margin: 4px 0;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent, #a196ff) 25%, transparent);
+  border-radius: 18px;
+  background: linear-gradient(120deg,
+    color-mix(in srgb, var(--accent, #a196ff) 16%, transparent),
+    color-mix(in srgb, var(--ok) 6%, transparent));
+}
+#list .row--auto.is-picked {
+  border: 1.5px solid color-mix(in srgb, var(--ok) 70%, transparent);
+}
+#list .row--auto::before, #list .row--auto::after { display: none; }
+#list .row--auto .row__auto-icon { width: 40px; height: 40px; border-radius: 13px; }
+#list .row--auto .row__name { font-size: 15px; font-weight: 650; }
+#list .row--auto .row__sub { font-size: 12px; white-space: normal; }
+
+/* A country: the card is the group, the row inside it is bare. */
+/* Tighter than the phone's card - padding, flag and the gaps between lines
+   all a step down - so a 740px window shows five countries rather than
+   three and a bit. The same three lines, the same order. */
+#list .group {
+  margin: 3px 0;
+  border: 1px solid var(--divider);
+  border-radius: 18px;
+  background: rgb(var(--wash) / 0.028);
+  overflow: hidden;
+  transition: border-color 160ms var(--ease), background 160ms var(--ease);
+}
+#list .group:hover { border-color: rgb(var(--wash) / 0.16); }
+#list .group.is-in {
+  border: 1.5px solid color-mix(in srgb, var(--ok) 60%, transparent);
+  background: color-mix(in srgb, var(--ok) 7%, transparent);
+}
+#list .group > .row {
+  height: auto;
+  margin: 0;
+  padding: 9px 4px 9px 10px;
+  gap: 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  align-items: center;
+}
+#list .group > .row::before,
+#list .group > .row::after { display: none; }
+#list .group > .row:active { transform: none; }
+#list .group > .row > .flag { width: 38px; height: 38px; }
+/* A card not yet drawn holds a card's height, not an old flat row's 46px:
+   content-visibility skips it, and the three lines inside spilled out of
+   the 46px it was holding. */
+#list .group > .row { contain-intrinsic-size: auto 77px; }
+/* The lines' own margins space them; the grid's gap on top was 4px more. */
+#list .group > .row .row__copy { gap: 0; }
+#list .group > .row .row__name {
+  font-size: 15px; line-height: 20px; font-weight: 650;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#list .group > .row .row__meta {
+  margin-top: 2px;
+  font-family: inherit; font-size: 12px; letter-spacing: 0;
+  color: var(--text-off);
+  /* Two lines at most, wrapping between words like a sentence - the phone's
+     maxLines = 2 - rather than losing the relay count off the end. */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; white-space: normal;
+}
+#list .group > .row .row__meta b { color: var(--text); font-weight: 600; }
+.row__dot {
+  display: inline-block; width: 6px; height: 6px; margin: 0 5px 1px 0;
+  border-radius: 50%; background: var(--ok); vertical-align: middle;
+}
+.row__dot[data-level="mid"] { background: var(--work); }
+.row__dot[data-level="high"] { background: var(--fail); }
+.row__lead[data-level="high"] { color: var(--fail); }
+.row__badges {
+  display: flex; align-items: center; gap: 7px;
+  margin-top: 5px; min-height: 18px;
+}
+.row__badges .row__tag { width: 18px; height: 18px; }
+.row__badges .row__tag .row__mark { width: 17px; height: 17px; }
+.mark[data-kind] {
+  padding: 0; border: 0; background: none;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.12em;
+  line-height: 18px;
+}
+.mark[data-kind="fast"] { color: var(--accent, #a196ff); }
+.mark[data-kind="p2p"] { color: var(--ok); }
+
+/* The bolt, the star and the chevron, without the track. */
+#list .group .rail {
+  background: none; box-shadow: none; border: 0; padding: 0; gap: 0;
+}
+#list .group .rail .rowtest,
+#list .group .rail .star,
+#list .group .rail .expand { width: 36px; height: 36px; }
+/* The phone's IconButton: an 18dp glyph in a 36dp seat, in the quiet ink
+   at full strength - not a 14px glyph at 62%, which on the card read as a
+   control that was switched off. */
+#list .group .rail .ico { width: 18px; height: 18px; }
+#list .group .rail .rowtest:not([data-idle="true"]),
+#list .group .rail .star { opacity: 1; }
+/* A city inside the card: the phone's 32dp seats. */
+#list .group__in .rail .rowtest,
+#list .group__in .rail .star,
+#list .group__in .rail .expand { width: 32px; height: 32px; }
+
+/* The chevron turns over when its row is open. */
+.expand__chev {
+  fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.expand .expand__ico { transition: transform 220ms var(--ease); }
+.expand[data-on="true"] .expand__ico { transform: rotate(180deg); }
+
+/* Its cities, and a one-city country's servers, in a panel inside it. */
+#list .group__in,
+#list .group > .exits {
+  margin: 0 12px 12px;
+  border-radius: 14px;
+  background: rgb(var(--deep) / 0.5);
+  overflow: hidden;
+}
+#list .group__in > .row--city {
+  height: auto; min-height: 56px;
+  margin: 0;
+  padding: 9px 4px 9px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--divider);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#list .group__in > .row--city:last-of-type { border-bottom: 0; }
+#list .group__in > .row--city::before,
+#list .group__in > .row--city::after { display: none; }
+#list .group__in > .row--city:hover { background: rgb(var(--wash) / 0.035); }
+#list .group__in > .row--city.is-picked { background: color-mix(in srgb, var(--ok) 7%, transparent); }
+#list .group__in .row--city .row__name { font-size: 13.5px; font-weight: 650; }
+#list .group__in .row--city .row__meta { font-family: inherit; font-size: 11.5px; letter-spacing: 0; }
+#list .group__in .row--city > .flag--dot { width: 14px; }
+
+/* A one-city country's servers, inside its card: the column may shrink, so
+   a long address gives way instead of pushing the row past the window. */
+#list .group > .exits { grid-template-columns: minmax(0, 1fr); padding: 4px; }
+#list .group > .exits .exit { min-width: 0; }
+#list .group > .exits .exit__meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Narrow, and only really narrow - the phone's narrow layout: the bolt and
+   the star go down to the badge line, so the name and the line under it have
+   the card's width rather than losing their ends to three buttons. The
+   chevron stays at the right of the whole card. The default 400px window
+   has room for the line beside all three, so it gets the phone's wide card:
+   the three in one row, centred on the card. */
+@media (max-width: 340px) {
+  #list .group > .row:not(.row--via):not(.row--heads) {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+    grid-template-areas:
+      "flag name   name name chev"
+      "flag meta   meta meta chev"
+      "flag badges test star chev";
+    column-gap: 10px;
+    row-gap: 0;
+  }
+  #list .group > .row > .flag { grid-area: flag; width: 36px; height: 36px; }
+  #list .group > .row .row__copy,
+  #list .group > .row > .rail { display: contents; }
+  #list .group > .row .row__name { grid-area: name; }
+  #list .group > .row .row__meta { grid-area: meta; }
+  #list .group > .row .row__badges { grid-area: badges; margin-top: 4px; }
+  #list .group > .row > .rail .rowtest { grid-area: test; margin-top: 4px; }
+  #list .group > .row > .rail .star { grid-area: star; margin-top: 4px; }
+  #list .group > .row > .rail .expand { grid-area: chev; }
+}
+/* The red mark of a server that failed is an icon's width in the card,
+   not the 118px column it held beside the times - which left the server's
+   own name 66px. */
+#list .group .exit__why { width: 28px; height: 28px; justify-content: center; }
+/* The names in the theme's own ink: an older rule writes them in a fixed
+   light grey, which on the White theme was white on white. */
+#list .group .row__name,
+#list .row--auto .row__name { color: var(--text); }
+#list .row--auto .row__sub { color: var(--text-off); }

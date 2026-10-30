@@ -12,25 +12,25 @@ changes a feature updates its row.
 |---|---|---|---|
 | Provider accounts (Surfshark, Windscribe) | yes | yes | |
 | Fetch servers and pin them to real addresses | yes | yes | |
-| Automatic fetch and pin right after sign-in | no | yes | Windows: a button in Settings |
+| Automatic fetch and pin right after sign-in | yes | yes | |
 | Pin from the account cards | part | yes | Windows: on the provider cards only |
 | Race the provider's exits, first to answer wins | yes | yes | |
 | Own server, and server + exit | yes | yes | |
 | Traffic meter, counted as bytes flow | yes | yes | |
 | What-is-using-the-connection list | yes | yes | |
-| Welcome page when nothing is set up | no | yes | |
+| Welcome page when nothing is set up | yes | yes | |
 | No way in without an account or server | part | yes | Windows opens Settings |
-| First-run intro slides, logo drawn in | no | yes | |
-| Orb logo (disc, open ring, bead) | no | yes | Windows: the old R |
-| Name in the header, no always-on PRIVATE badge | no | yes | |
-| DISCONNECTED in red | no | yes | |
-| Traffic-light orb colours, with a setting | no | yes | |
-| Click the orb to connect, hold to reconnect | no | yes | |
-| PRESS TO CONNECT label | no | yes | |
-| Colour themes, including a light one | no | yes | Android: nine |
-| (i) buttons instead of inline help | no | yes | |
-| Long addresses shrink to fit | no | yes | |
-| Live connection timer | no | yes | Android: in the notification |
+| First-run intro slides, logo drawn in | yes | yes | |
+| Orb logo (disc, open ring, bead) | yes | yes | |
+| Name in the header, no always-on PRIVATE badge | yes | yes | |
+| DISCONNECTED in red | yes | yes | |
+| Traffic-light orb colours, with a setting | yes | yes | |
+| Click the orb to connect, hold to reconnect | yes | yes | |
+| PRESS TO CONNECT label | yes | yes | |
+| Colour themes, including a light one | yes | yes | nine on both |
+| (i) buttons instead of inline help | yes | yes | |
+| Long addresses shrink to fit | yes | yes | |
+| Live connection timer | yes | yes | Android: in the notification too |
 | Version in About | no | yes | |
 | Tray / quick-settings tile, one-press connect | part | yes | Windows: tray menu |
 | Accounts screen, one card per provider, one account each | yes | yes | |
@@ -38,6 +38,11 @@ changes a feature updates its row.
 | Untimed countries listed apart under Fastest first | yes | yes | |
 | Failed exit: red mark, reason on hover / tap | yes | yes | |
 | Connection-type strip only when more than one works | yes | yes | |
+| City rows: time on the right, star and test of their own | yes | yes | |
+| Exit list as cards: time and place under the name, badges line, cities inside | yes | yes | |
+| Sort chips with words, source chip, Fastest available card | yes | yes | |
+| Narrow screens: rows fold to two lines instead of cutting text | yes | yes | Android also for a large font |
+| Wide screens: content in a centred column | yes | yes | Windows from 720px, Android tablets |
 | Window size, single instance | yes | n/a | |
 
 ## Releases

@@ -385,14 +385,24 @@ function drawList(query) {
     copy.className = 'row__copy';
     const name = document.createElement('span');
     name.className = 'row__name';
-    name.textContent = 'Whichever answers first';
+    name.textContent = 'Fastest available';
     const sub = document.createElement('span');
     sub.className = 'row__sub';
-    sub.textContent = 'Races every location, takes the first to reply';
+    sub.textContent = 'Races every location, takes the first to answer';
     copy.append(name, sub);
     auto.append(autoIcon, copy);
     list.append(auto);
   }
+  // What the list is and how many, as the first line of it - the phone's
+  // "FASTEST FIRST 72". The count keeps its id: it is what the drive reads.
+  const head = document.createElement('p');
+  head.className = 'listsplit listsplit--top';
+  head.textContent = q ? 'Matches ' : (state.sortBy || 'ping') === 'ping'
+    ? 'Fastest first ' : 'All locations ';
+  const tally = document.createElement('b');
+  tally.id = 'listCount';
+  head.append(tally);
+  list.append(head);
 
   let found = sortCountries(
     q ? state.fuse.search(q).map((r) => r.item) : state.countries);
@@ -419,6 +429,7 @@ function drawList(query) {
     }
   }
   if (!found.length) {
+    $('listCount').textContent = '0';
     const e = document.createElement('p');
     e.className = 'empty';
     e.textContent = `No country matches “${q}”.`;
@@ -438,11 +449,6 @@ function drawList(query) {
      "whichever answers" - which is what most people want most of the time.
      The rows under it are for when it is not. */
 
-  /* The sign columns, worked out once for the whole list and from every
-     country in it rather than from the ones a search left on screen - a
-     column that appears and disappears as you type is worse than one that
-     is sometimes empty. */
-  const tagCols = tagColumns();
 
   const buildGroup = (c, i) => {
     const head = [];
@@ -453,7 +459,26 @@ function drawList(query) {
       split.querySelector('b').textContent = String(found.length - untimedAt);
       head.push(split);
     }
-    return head.concat(groupOf(c));
+    return head.concat(card(c));
+  };
+
+  /* The country as a card, the way the phone draws it: the row, and when it
+     is open its cities in a panel inside the same card. Lit when the pick is
+     anywhere in it - a city or one server as much as the country - so the
+     list says where you are without a tick. */
+  const card = (c) => {
+    const box = document.createElement('div');
+    box.className = 'group' + (pickIsIn(c) ? ' is-in' : '');
+    const [row, ...cities] = groupOf(c);
+    box.append(row);
+    if (cities.length) {
+      box.classList.add('is-open');
+      const inner = document.createElement('div');
+      inner.className = 'group__in';
+      inner.append(...cities);
+      box.append(inner);
+    }
+    return [box];
   };
 
   const groupOf = (c) => {
@@ -551,67 +576,61 @@ function drawList(query) {
       meta.textContent = meta.textContent + (said_ || ' · any');
       row.dataset.state = reachState(c);
     } else {
-      // What the last test found, after the count: a time when it answered,
-      // and that it did not when it did not. Nothing at all before it has
-      // been asked, because "untested" and "blocked" must not look alike.
-      meta.textContent = meta.textContent + reachSaid(c);
+      // The phone's line: the time first, with a dot in its colour, then
+      // where and how many. Nothing in front before it has been asked,
+      // because "untested" and "blocked" must not look alike.
       row.dataset.state = reachState(c);
       const cities = c.cityList || [];
-      for (const [has, word, why] of [
-        [cities.some((x) => x.gbps === 10), '10G', '10 Gbps link'],
-        [cities.some((x) => x.p2p), 'P2P', 'P2P allowed'],
+      const places = cities.length > 1 ? `${cities.length} cities`
+        : (cities[0] && cities[0].name) || '';
+      meta.textContent = '';
+      if (c.tested && !c.ok && c.tested >= c.count) {
+        const lead = document.createElement('span');
+        lead.className = 'row__lead';
+        lead.dataset.level = 'high';
+        lead.textContent = 'Blocked here';
+        meta.append(lead);
+      } else if (c.tested && c.ok && c.ping !== null && c.ping !== undefined) {
+        const dot = document.createElement('i');
+        dot.className = 'row__dot';
+        dot.dataset.level = pingLevel(c.ping);
+        const ms = document.createElement('b');
+        ms.textContent = msSaid(c.ping);
+        meta.append(dot, ms);
+      }
+      // "11 relays" breaks before the number, never inside it, when the
+      // line has to wrap.
+      const rest = [places, `${c.count} relay${c.count === 1 ? '' : 's'}`]
+        .filter(Boolean).map((s) => s.replace(/ /g, '\u00a0')).join(' \u00b7 ');
+      meta.append((meta.childNodes.length ? ' \u00b7 ' : '') + rest);
+      // Who runs these exits and what they offer, on a line of their own:
+      // the provider's mark, then 10G and P2P in their colours.
+      const badges = document.createElement('span');
+      badges.className = 'row__badges';
+      const by = c.by || {};
+      for (const k of Object.keys(by).filter((k) => by[k] > 0).sort()) {
+        badges.append(providerTag(k, by[k], (c.byTested || {})[k] || 0,
+                                  (c.byOk || {})[k] || 0, (c.byPing || {})[k]));
+      }
+      for (const [has, word, why, kind] of [
+        [cities.some((x) => x.gbps === 10), '10G', '10 Gbps link', 'fast'],
+        [cities.some((x) => x.p2p), 'P2P', 'P2P allowed', 'p2p'],
       ]) {
         if (!has) continue;
         const m = document.createElement('span');
         m.className = 'mark';
+        m.dataset.kind = kind;
         m.textContent = word;
         m.title = why;
-        // Beside the name rather than on the meta line, which is already
-        // full with the count and the time - the time is what got cut.
-        name.append(m);
+        badges.append(m);
       }
+      copy.append(name, meta, badges);
     }
-    copy.append(name, meta);
-    // Which provider the exits behind this country actually come from.
-    // Worth a tag rather than a number: with both switched on, "12 relays"
-    // says nothing about which credential is about to open one, and the two
-    // behave differently enough on this line to be worth telling apart.
-    // Only on a plain row. Under a group the provider is the row's own name
-    // and a tag repeating it is noise; on the group's head, tags would claim
-    // one exit of each, which is what the rows below it say properly.
-    let tagsFor = null;
-    const by = c.by || {};
-    if (tagCols.length && !via && !heads) {
-      /* One slot per provider, always in the same order, and an empty one
-         where a country has nobody.
-
-         Packed tight, the signs said the wrong thing down the list: a
-         country only Surfshark reaches put its S where every other row has
-         its W, so the eye reading the column saw Windscribe, Windscribe,
-         Windscribe and one of them was not. A row with one sign also
-         dragged the star and the plus left by the width of the sign it did
-         not have, which is the wobble in the first rows of the list.
-
-         So the signs get columns, the way the star and the plus already do.
-         An absent provider is a hole in its own column rather than an
-         absence that moves everything after it. */
-      const tags = document.createElement('span');
-      tags.className = 'row__tags';
-      for (const key of tagCols) {
-        tags.append((by[key] || 0) > 0
-          ? providerTag(key, by[key], (c.byTested || {})[key] || 0,
-                        (c.byOk || {})[key] || 0, (c.byPing || {})[key])
-          : tagGap());
-      }
-      row.dataset.tags = '1';
-      tagsFor = tags;
-    }
-    // No tick. The chosen row is outlined instead - see .row.is-picked.
+    // A provider or group row: its name and its line, nothing more.
+    if (!copy.childNodes.length) copy.append(name, meta);
+    // No tick. The chosen row's card is outlined instead - see .group.is-in.
     row.append(copy);
-    if (tagsFor) row.append(tagsFor);
-    // A plus rather than a chevron, and inside the row rather than under it:
-    // it is the same control Windscribe puts there, and a row that opens is
-    // more obviously openable with a + on it than with a line beneath.
+    // The phone's chevron, inside the row at its right-hand end.
     if (!via) {
       const many = (c.cityList || []).length > 1;
       // A country with cities opens into them; one without opens straight
@@ -4510,6 +4529,24 @@ function reachSaid(c) {
   return c.ping === null ? '' : ` · ${msSaid(c.ping)}`;
 }
 
+/* A time's colour, the phone's thresholds: under 150 ms is good, under 300
+   is fair, the rest is slow. */
+function pingLevel(ms) {
+  return ms >= 300 ? 'high' : ms >= 150 ? 'mid' : 'low';
+}
+
+/* Whether the pick is anywhere inside this country: the country itself, a
+   city in it, one provider's share of it, or one of its servers. */
+function pickIsIn(c) {
+  const p = state.picked || '';
+  if (!p || p === 'auto') return false;
+  if (p.startsWith('file:')) {
+    const stem = p.slice(5).replace(/^\d+\.\d+s-/, '').slice(0, 2).toLowerCase();
+    return stem === c.code || (stem === 'gb' && c.code === 'uk');
+  }
+  return p.split(':')[0].split('/')[0] === c.code;
+}
+
 function reachState(c) {
   if (!c || !c.tested) return 'untested';
   if (!c.ok) return c.tested >= c.count ? 'blocked' : 'some';
@@ -4604,6 +4641,9 @@ function paintTesting() {
   all.dataset.running = quick ? '1' : '0';
   all.disabled = !!state.testing && !quick;
   $('testAllLabel').textContent = quick ? 'Stop' : 'Test all';
+  // The word is out of sight now, so the tooltip says it as well.
+  all.title = quick ? 'Stop'
+    : 'Test all: time one exit in every country. Times are from the last test.';
   paintQuick();
 }
 
@@ -4795,7 +4835,14 @@ function failReason(why) {
 async function toggleExits(code, after) {
   const open = state.openExits === code;
   state.openExits = open ? null : code;
-  for (const el of document.querySelectorAll('.exits')) el.remove();
+  for (const el of document.querySelectorAll('.exits')) {
+    const group = el.parentElement;
+    el.remove();
+    // A card shut again when its servers go, unless its cities are open.
+    if (group && group.classList.contains('group') && !group.querySelector('.group__in')) {
+      group.classList.remove('is-open');
+    }
+  }
   for (const b of document.querySelectorAll('[data-exits]')) {
     // The attribute and nothing else. The sign is two paths now and CSS
     // folds one of them away; writing a character in here emptied the svg
@@ -4888,6 +4935,9 @@ async function toggleExits(code, after) {
     box.append(row);
   }
   after.insertAdjacentElement('afterend', box);
+  const group = after.parentElement && after.parentElement.classList.contains('group')
+    ? after.parentElement : null;
+  if (group) group.classList.add('is-open');
 }
 
 
@@ -4972,34 +5022,6 @@ function providerTag(key, count, tested, ok, ping) {
       : `none of ${tested} answered`;
   t.title = `${name} · ${count} relay${count === 1 ? '' : 's'} · ${said_}`;
   return t;
-}
-
-/* Which providers this list has signs for, in the order they are always
-   drawn in. Only the ones that actually back something: a column standing
-   empty down the whole list is 18px of nothing on every row. */
-function tagColumns() {
-  const seen = new Set();
-  for (const c of state.countries || []) {
-    const by = c.by || {};
-    for (const key of Object.keys(by)) if (by[key] > 0) seen.add(key);
-  }
-  const known = Object.keys(PROVIDER_NAMES).filter((k) => seen.has(k));
-  const rest = [...seen].filter((k) => !(k in PROVIDER_NAMES)).sort();
-  return known.concat(rest);
-}
-
-/* A provider's column, where this country has no such provider. It holds the
-   space and says nothing - the row__tag--none rule takes the box away and
-   leaves the width.
-
-   Empty and unmarked rather than aria-hidden: a span with no text and no
-   role is not announced anyway, and hiding it would take it out of the
-   layout audit as well, which is the one thing that can tell us these
-   columns have stopped lining up. */
-function tagGap() {
-  const el = document.createElement('span');
-  el.className = 'row__tag row__tag--none';
-  return el;
 }
 
 function isFavourite(code) {
@@ -5095,12 +5117,11 @@ function expander(kind, code, on) {
   svg.setAttribute('class', 'ico expand__ico');
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('aria-hidden', 'true');
-  for (const [cls, d] of [['expand__h', 'M5 12h14'], ['expand__v', 'M12 5v14']]) {
-    const path = document.createElementNS(NS, 'path');
-    path.setAttribute('class', cls);
-    path.setAttribute('d', d);
-    svg.append(path);
-  }
+  // A chevron that turns over when the row is open, as on the phone.
+  const path = document.createElementNS(NS, 'path');
+  path.setAttribute('class', 'expand__chev');
+  path.setAttribute('d', 'M6 9l6 6 6-6');
+  svg.append(path);
   el.append(svg);
   return el;
 }
@@ -5153,11 +5174,11 @@ function buildCity(c, city, via) {
   // Windscribe names every one of its cities - Paris is Seine, Dallas is
   // Ranch, South Bend is Hawkins - and it is the only part of their list
   // that is theirs rather than a fact about geography. Worth keeping.
+  let nick = null;
   if (city.nick) {
-    const nick = document.createElement('i');
+    nick = document.createElement('i');
     nick.className = 'row__nick';
     nick.textContent = city.nick;
-    name.append(' ', nick);
   }
 
   const meta = document.createElement('span');
@@ -5179,37 +5200,37 @@ function buildCity(c, city, via) {
     const ping = document.createElement('span');
     ping.className = 'row__ping';
     ping.textContent = blocked ? 'blocked' : msSaid(city.ping);
-    ping.dataset.level = blocked || city.ping >= 300 ? 'high' : city.ping >= 150 ? 'mid' : 'low';
+    ping.dataset.level = blocked ? 'high' : pingLevel(city.ping);
     marks.append(ping);
   }
-  // 10G and P2P beside the name, as the country's row has them: on the
-  // right they pushed the meta line until its load was cut off.
-  if (city.gbps === 10) {
-    const fast = document.createElement('span');
-    fast.className = 'mark';
-    fast.textContent = '10G';
-    fast.title = '10 Gbps link';
-    name.append(fast);
-  }
-  if (city.p2p) {
-    const p2p = document.createElement('span');
-    p2p.className = 'mark';
-    p2p.textContent = 'P2P';
-    p2p.title = 'P2P allowed here';
-    name.append(p2p);
-  }
+  // The nickname after the name, where it is the part of the line that can
+  // go without anyone missing it.
+  if (nick) name.append(' ', nick);
 
-  const from = Object.keys(city.by || {}).filter((k) => city.by[k] > 0).sort();
-  if (from.length) {
-    const tags = document.createElement('span');
-    tags.className = 'row__tags';
-    for (const key of from) {
-      // A city's own numbers are not split per provider, so the sign says
-      // how many are there and leaves the verdict to the country's.
-      tags.append(providerTag(key, city.by[key], 0, 0, null));
-    }
-    marks.append(tags);
+  // The phone's second line: whose relays, 10G and P2P, then the count and
+  // the load - so the name line keeps its room for the name and the time.
+  const lead = [];
+  for (const key of Object.keys(city.by || {}).filter((k) => city.by[k] > 0).sort()) {
+    // A city's own numbers are not split per provider, so the sign says
+    // how many are there and leaves the verdict to the country's.
+    lead.push(providerTag(key, city.by[key], 0, 0, null));
   }
+  for (const [has, word, why, kind] of [
+    [city.gbps === 10, '10G', '10 Gbps link', 'fast'],
+    [city.p2p, 'P2P', 'P2P allowed here', 'p2p'],
+  ]) {
+    if (!has) continue;
+    const m = document.createElement('span');
+    m.className = 'mark';
+    m.dataset.kind = kind;
+    m.textContent = word;
+    m.title = why;
+    lead.push(m);
+  }
+  const count = document.createElement('span');
+  count.className = 'row__count';
+  count.textContent = meta.textContent;
+  meta.replaceChildren(...lead, count);
   row.append(copy, marks,
              railFor(code, 'exits', state.openExits === code));
   return row;

@@ -153,6 +153,7 @@ SETTINGS = os.path.join(paths.STATE_DIR, 'settings.json')
 WINDOW_W = 400
 WINDOW_H = 740
 WINDOW_SHARE = 0.85          # of the work area's height
+SW_SHOWNOACTIVATE = 4
 WINDOW_MIN = (380, 640)      # unless the screen itself is smaller
 
 # The window's own switches, in the tray menu and in Settings alike. What
@@ -423,6 +424,7 @@ import winwindow                                             # noqa: E402
 import accounts                                              # noqa: E402
 import countries                                             # noqa: E402
 import uishot                                                # noqa: E402
+import vdesk                                                 # noqa: E402
 import surfshark                                             # noqa: E402
 import windscribe                                            # noqa: E402
 from engine import Engine                                    # noqa: E402
@@ -2363,13 +2365,17 @@ class Api:
 
         label = 'your server'
         if mode == 'multi':
-            user, password = self._engine.credentials()
             if country in (None, '', 'auto'):
                 # No country asked for, so leave the server on whatever it
                 # was last set to rather than picking one on its behalf.
                 label = 'chosen exit'
             else:
                 server, ip, _host = self._engine.address_for(country)
+                # The chosen exit's own provider, asked after it is chosen.
+                # This used to be the Surfshark credential whatever the exit,
+                # so a Windscribe country here was refused by its own exit -
+                # and the server answered 503 for every connection after.
+                user, password = self._engine.credentials_for(server)
                 client.set_exit(ip, user, password, name=country)
                 label = country
 
@@ -2982,12 +2988,15 @@ def ui_check(window):
     try:
         time.sleep(2.5)
         # In front, or the picture is of whatever is sitting on top of us.
-        try:
-            handle = ctypes.windll.user32.FindWindowW(None, APP_NAME)
-            ctypes.windll.user32.SetForegroundWindow(handle)
-            time.sleep(0.5)
-        except Exception:
-            pass
+        # Not when it is running on another desktop: bringing it forward
+        # there would take the person with it.
+        if not vdesk.wanted():
+            try:
+                handle = ctypes.windll.user32.FindWindowW(None, APP_NAME)
+                ctypes.windll.user32.SetForegroundWindow(handle)
+                time.sleep(0.5)
+            except Exception:
+                pass
 
         said['probe'] = window.evaluate_js('window.__probe && window.__probe()')
         said['errors'] = window.evaluate_js('window.__errs')
@@ -4015,6 +4024,19 @@ def main():
         placed, WINDOW_W / WINDOW_H, WINDOW_SHARE, WINDOW_MIN) \
         or ((WINDOW_W, WINDOW_H), WINDOW_MIN)
 
+    # A check asked to run on another virtual desktop (vdesk.py) opens
+    # minimised, so it never shows on this one, and is moved over there
+    # once it has a handle. Chromium stops drawing a window it thinks is
+    # out of sight, and one on another desktop is - so for a check it is
+    # told not to work that out, or every picture would be of a blank page.
+    elsewhere = vdesk.wanted() if any(
+        flag in sys.argv for flag in ('--ui-check', '--ui-drive',
+                                      '--ui-layout', '--ui-perf')) else None
+    if elsewhere:
+        os.environ['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'] = (
+            os.environ.get('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS', '')
+            + ' --disable-features=CalculateNativeWinOcclusion').strip()
+
     window = webview.create_window(
         APP_NAME,
         os.path.join(paths.UI_DIR, 'index.html'),
@@ -4033,6 +4055,7 @@ def main():
         resizable=False,
         text_select=False,
         zoomable=False,
+        minimized=bool(elsewhere),
     )
     api._window = window
 
@@ -4062,6 +4085,15 @@ def main():
             except Exception:
                 traceback.print_exc()
         api._apply_window()
+        if elsewhere:
+            try:
+                handle = api._hwnd()
+                print(f'{APP_NAME}: {vdesk.move(handle, elsewhere)}', flush=True)
+                # Restored where it now is, without being made the active
+                # window - activating it would take the person there too.
+                ctypes.windll.user32.ShowWindow(handle, SW_SHOWNOACTIVATE)
+            except Exception:
+                traceback.print_exc()
 
     def maximised():
         # There is no maximise button, but Win+Up and a few other ways in
