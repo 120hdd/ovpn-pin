@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -36,6 +37,11 @@ type ServerConfig struct {
 	// lying about this particular name, and is what the first run does before
 	// anything has been measured.
 	Edges string
+
+	// Pin is the SHA-256 of the certificate a server reached by IP serves,
+	// in hex. Empty until the first Test or connect has seen it; then kept,
+	// and a server showing anything else is refused.
+	Pin string
 }
 
 func NewServerConfig() *ServerConfig { return &ServerConfig{Mode: "single"} }
@@ -85,9 +91,55 @@ func TestServer(cfg *ServerConfig, timeoutMs int) (string, error) {
 	}
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 
-	srv := core.NewTunnelServer(cfg.Domain, cfg.Password, cfg.edges(),
-		core.TunnelMode(cfg.Mode))
+	srv := cfg.server()
 	defer srv.Close()
 
-	return core.SeenAsThrough(srv, timeout)
+	out, err := core.SeenAsThrough(srv, timeout)
+	return withPin(out, srv.SeenPin()), err
+}
+
+// server is the client this config describes, pin and all.
+func (c *ServerConfig) server() *core.TunnelServer {
+	srv := core.NewTunnelServer(c.Domain, c.Password, c.edges(), core.TunnelMode(c.Mode))
+	srv.Pin = c.Pin
+	return srv
+}
+
+// withPin adds the certificate the server showed to a seen-as answer, so the
+// window can keep it after the first Test - the pin is learnt, not typed.
+func withPin(seenAs, pin string) string {
+	if pin == "" {
+		return seenAs
+	}
+	var m map[string]any
+	if json.Unmarshal([]byte(seenAs), &m) != nil || m == nil {
+		m = map[string]any{}
+	}
+	m["pin"] = pin
+	out, _ := json.Marshal(m)
+	return string(out)
+}
+
+// SetServerExit points the server's multi-IP mode at one provider exit,
+// with that exit's own provider credential - what server + exit does before
+// it connects, so the location picked is the one traffic leaves by.
+func SetServerExit(cfg *ServerConfig, apiPassword, exitIP, user, password, name string, timeoutMs int) error {
+	if cfg == nil || cfg.Domain == "" {
+		return errors.New("no server configured")
+	}
+	return core.SetExit(cfg.Domain, apiPassword, cfg.Pin, exitIP, user, password, name,
+		time.Duration(timeoutMs)*time.Millisecond)
+}
+
+// SeenAsLiveJSON is where the running tunnel comes out, asked through
+// whatever is carrying it. What the window asks for the user's own server:
+// SeenAsJSON rebuilds a provider exit from an address and a credential, and a
+// server has neither of those to give it.
+func SeenAsLiveJSON(timeoutMs int) string {
+	w := core.LiveWay()
+	if w == nil {
+		return "{}"
+	}
+	out, _ := core.SeenAsThrough(w, time.Duration(timeoutMs)*time.Millisecond)
+	return out
 }

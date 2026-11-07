@@ -1,4 +1,7 @@
 pinned/
+# A one-off listing of what pinned/ held, written by hand. Same contents and
+# the same reason for staying out of git as the folder itself.
+pinned.txt
 success/
 sitetest/
 proxy-ok/

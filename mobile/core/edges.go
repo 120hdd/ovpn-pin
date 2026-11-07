@@ -196,6 +196,11 @@ func EdgeScan(ctx context.Context, domain string, timeout time.Duration, width i
 
 // EdgesFor is EdgeScan cut to the number that goes into the client.
 func EdgesFor(ctx context.Context, domain string, timeout time.Duration) ([]string, string, error) {
+	// A server reached by address is not behind Cloudflare, so there are no
+	// edges to look for: the address is the one way in.
+	if net.ParseIP(domain) != nil {
+		return []string{domain}, "an address, dialled directly", nil
+	}
 	live, tally := EdgeScan(ctx, domain, timeout, 0)
 	if len(live) > EdgeKeep {
 		live = live[:EdgeKeep]

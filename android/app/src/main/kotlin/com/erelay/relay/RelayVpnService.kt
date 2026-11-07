@@ -107,6 +107,10 @@ class RelayVpnService : VpnService() {
         const val EXTRA_DOMAIN = "domain"
         const val EXTRA_TUNNEL_PASSWORD = "tunnelPassword"
         const val EXTRA_EDGES = "edges"
+        // A server reached by IP: the certificate it must show, and the API
+        // password server + exit sets the exit with.
+        const val EXTRA_PIN = "pin"
+        const val EXTRA_API_PASSWORD = "apiPassword"
 
         private const val CHANNEL = "relay.tunnel"
         private const val NOTIFICATION = 1
@@ -253,13 +257,16 @@ class RelayVpnService : VpnService() {
         val domain = intent?.getStringExtra(EXTRA_DOMAIN).orEmpty()
         val tunnelPassword = intent?.getStringExtra(EXTRA_TUNNEL_PASSWORD).orEmpty()
         val edges = intent?.getStringExtra(EXTRA_EDGES).orEmpty()
+        val pin = intent?.getStringExtra(EXTRA_PIN).orEmpty()
+        val apiPassword = intent?.getStringExtra(EXTRA_API_PASSWORD).orEmpty()
 
         scope.launch {
             stopTunnel()
             if (provider == "surfshark") {
                 connect(user, password, wsUser, wsPassword, configDir, country, only)
             } else {
-                connectServer(provider, domain, tunnelPassword, edges)
+                connectServer(provider, domain, tunnelPassword, edges, pin,
+                    ServerExit(country, apiPassword, user, password, wsUser, wsPassword))
             }
         }
         return START_STICKY
@@ -325,7 +332,14 @@ class RelayVpnService : VpnService() {
      * stack and the DNS above are the same ones the provider path uses,
      * because the core is written not to know which is underneath.
      */
-    private fun connectServer(mode: String, domain: String, password: String, edges: String) {
+    /** What server + exit needs to point the server at the picked location. */
+    private class ServerExit(
+        val country: String, val apiPassword: String,
+        val ssUser: String, val ssPassword: String, val wsUser: String, val wsPassword: String,
+    )
+
+    private fun connectServer(mode: String, domain: String, password: String, edges: String,
+                              pin: String, exit: ServerExit) {
         try {
             Relay.setProtector(object : Protector {
                 override fun protect(fd: Long): Boolean =
@@ -350,6 +364,7 @@ class RelayVpnService : VpnService() {
             cfg.password = password
             cfg.mode = mode
             cfg.edges = edges
+            cfg.pin = pin
 
             // Measured here rather than carried over from the desktop: which
             // Cloudflare addresses are filtered is a fact about this line, and
@@ -385,6 +400,29 @@ class RelayVpnService : VpnService() {
                 return
             }
 
+            // Server + exit: the server is told which exit to leave by - the
+            // picked location's first, with that exit's own provider's
+            // account - before anything goes through it.
+            var exitPlace = ""
+            if (mode == "multi") {
+                say("checking the server answers")
+                val pick = Relay.newClient(exit.ssUser, exit.ssPassword)
+                try {
+                    pick.load()
+                    // From a server in Iran, upload is throttled per foreign
+                    // exit: most in a city carry next to nothing up. Each is
+                    // set and asked to carry an upload, and the first that
+                    // does is kept - the location stays the one picked.
+                    say("finding an exit that uploads")
+                    val at = pick.bestServerExit(cfg, exit.apiPassword, exit.country.ifEmpty { "auto" },
+                        exit.ssUser, exit.ssPassword, exit.wsUser, exit.wsPassword, 6L, 4000L)
+                    exitPlace = at.name + if (at.tookMs > 0) ", ${at.tookMs} KB/s up" else ", upload throttled"
+                } catch (e: Exception) {
+                    fail("$domain did not take the exit: " + (e.message ?: e.toString()).take(140))
+                    return
+                }
+            }
+
             // One real request through the server before the tunnel goes up.
             // Without it the interface came up for any domain at all - a
             // server that did not exist showed as connected, with every app's
@@ -392,7 +430,15 @@ class RelayVpnService : VpnService() {
             // "connected" that is true.
             say("checking the server answers")
             try {
-                Relay.testServer(cfg, 20000L)
+                val seen = org.json.JSONObject(Relay.testServer(cfg, 20000L))
+                // A server by address, met for the first time: its
+                // certificate is kept, and required from then on.
+                val seenPin = seen.optString("pin")
+                if (cfg.pin.isEmpty() && seenPin.isNotEmpty()) {
+                    cfg.pin = seenPin
+                    getSharedPreferences("relay", MODE_PRIVATE)
+                        .edit().putString("tunnelPin", seenPin).apply()
+                }
             } catch (e: Exception) {
                 fail("$domain did not carry a request: " + (e.message ?: e.toString()).take(140))
                 return
@@ -420,7 +466,7 @@ class RelayVpnService : VpnService() {
             exitFile = ""
             exitProvider = ""
             exitName = when (mode) {
-                "multi" -> "$domain (server + exit)"
+                "multi" -> "$domain (server + exit${if (exitPlace.isNotEmpty()) ", $exitPlace" else ""})"
                 "bulk" -> "$domain (bulk)"
                 else -> "$domain (your server)"
             }

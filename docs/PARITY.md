@@ -15,7 +15,7 @@ changes a feature updates its row.
 | Automatic fetch and pin right after sign-in | yes | yes | |
 | Pin from the account cards | part | yes | Windows: on the provider cards only |
 | Race the provider's exits, first to answer wins | yes | yes | |
-| Own server, and server + exit | yes | yes | |
+| Own server, and server + exit | yes | yes | by IP (self-signed, pinned on first Test) or domain; one install command from Settings with the app's own passwords; server + exit sends the picked location and its provider's account |
 | Traffic meter, counted as bytes flow | yes | yes | |
 | What-is-using-the-connection list | yes | yes | |
 | Welcome page when nothing is set up | yes | yes | |

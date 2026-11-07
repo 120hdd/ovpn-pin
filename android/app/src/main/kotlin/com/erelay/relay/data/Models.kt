@@ -164,8 +164,13 @@ data class TunnelPlan(
     val hasPassword: Boolean = false,
     val hasApiPassword: Boolean = false,
     val edges: List<String> = emptyList(),
+    /** The certificate a server reached by IP serves, SHA-256 hex; learnt on the first Test. */
+    val pin: String = "",
 ) {
     val ready get() = domain.isNotEmpty() && hasPassword
+
+    /** Reached by IP address rather than by a domain. */
+    val isAddress get() = domain.matches(Regex("""\d{1,3}(\.\d{1,3}){3}"""))
 }
 
 data class DeadRow(

@@ -460,8 +460,7 @@ func (c *Client) StartServerTunnel(fd int, mtu int, cfg *ServerConfig) error {
 		return errTunnelUp
 	}
 
-	srv := core.NewTunnelServer(cfg.Domain, cfg.Password, cfg.edges(),
-		core.TunnelMode(cfg.Mode))
+	srv := cfg.server()
 	t, err := core.StartTunnel(fd, mtu, srv)
 	if err != nil {
 		srv.Close()

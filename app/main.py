@@ -32,6 +32,7 @@ import ctypes
 import ctypes.wintypes
 import json
 import os
+import secrets
 import signal
 import sys
 import threading
@@ -1689,6 +1690,15 @@ class Api:
             return {'ok': False,
                     'error': f'Nothing waiting in {folder}.'}
         self._settings['pinFolder'] = folder
+        # Nobody has named a port, so the default is a guess, and the setup
+        # sheet has no port field to correct it from. Happ listens on 10808
+        # and wants a password there; its HTTP port is 10809. Whichever port
+        # really carries a lookup is kept, where Settings shows it.
+        if (self._settings.get('pinRoute', 'proxy') == 'proxy'
+                and 'pinPort' not in self._settings):
+            found = pin.find_port()
+            if found:
+                self._settings['pinPort'] = found
         save_settings(self._settings)
         return {'ok': True, **self.pinPlan()}
 
@@ -2129,37 +2139,77 @@ class Api:
             'hasClient': bool(paths.gost_exe()),
             'running': bool(client and client.listening()),
             'edges': client.edges() if client else [],
+            'isAddress': tunnel.is_address(st.get('tunnelDomain', '')),
+            'pin': client.pin() if client else '',
         }
 
-    def installCommand(self, domain=None, user=None, password=None):
-        """One line that puts the installer on the server and runs it.
+    def _ensure_tunnel_passwords(self):
+        """The two passwords, made here when there are none yet. The install
+        command carries them to the server, so this window already holds what
+        the server will ask for and nothing has to be copied back."""
+        changed = False
+        for key in ('tunnelPassword', 'tunnelApiPassword'):
+            if not self._settings.get(key):
+                self._settings[key] = secrets.token_urlsafe(15)
+                changed = True
+        if changed:
+            save_settings(self._settings)
+            self._tunnel = None
 
-        The pane used to show `./install-server.sh …`, which quietly assumed
-        the script was already there - and it never is. Nothing hosts it, so
-        the script travels inside the command: base64 in a single line, which
-        an SSH session takes as one paste and a phone can manage.
+    def installCommand(self, domain=None):
+        """The lines to paste on the server: install, status and uninstall.
 
-        The Surfshark credentials are left as placeholders rather than filled
-        in. They would otherwise sit in a clipboard and, on most machines, in
-        a shell history file on a server, to save the person two words.
+        Install is one line that carries the installer inside itself - base64,
+        because nothing hosts it - and runs it with this window's own
+        passwords, made now if there are none. Once it has run there is only
+        Test left to press. A leading space keeps it out of the server's shell
+        history (Ubuntu's bash ignores lines that start with one).
+
+        No provider account goes in it. Server + exit sends the picked
+        location's own credential through the API each time it connects.
         """
         try:
             with open(paths.INSTALLER, 'rb') as f:
                 blob = base64.b64encode(f.read()).decode()
         except OSError as e:
             return {'ok': False, 'error': f'the installer is missing: {e}'}
-        host = (domain or '').strip() or 'yourdomain.com'
-        return {'ok': True, 'command':
-                "mkdir -p /opt/relay && echo '" + blob + "' | base64 -d "
-                "> /opt/relay/install-server.sh && bash "
-                f"/opt/relay/install-server.sh {host} "
-                f"{user or '<surfshark-user>'} {password or '<surfshark-pass>'}"}
+        host = (domain or self._settings.get('tunnelDomain') or '').strip()
+        if not host:
+            return {'ok': False, 'error': "type the server's IP or domain first"}
+        if host != self._settings.get('tunnelDomain'):
+            self.saveTunnel(domain=host)
+        self._ensure_tunnel_passwords()
+        pw = self._settings['tunnelPassword']
+        api = self._settings['tunnelApiPassword']
+        return {'ok': True,
+                'command': " mkdir -p /opt/relay && echo '" + blob + "' | base64 -d "
+                           "> /opt/relay/install-server.sh && bash "
+                           f"/opt/relay/install-server.sh {host} "
+                           f"--password '{pw}' --api-password '{api}'",
+                'status': "systemctl --no-pager --lines=0 status gost sing-box nginx"
+                          " | grep -E '^. |Active:'; ss -lnt | grep -E "
+                          "':443 |127.0.0.1:(1000[0-3]|18080) '",
+                'uninstall': "systemctl disable --now gost sing-box;"
+                             " rm -f /etc/systemd/system/gost.service"
+                             " /etc/systemd/system/sing-box.service"
+                             " /usr/local/bin/gost /usr/local/bin/sing-box"
+                             f" /etc/nginx/sites-enabled/relay-{host}.conf"
+                             f" /etc/nginx/sites-available/relay-{host}.conf;"
+                             " rm -rf /etc/gost /etc/sing-box /etc/relay /opt/relay;"
+                             " systemctl daemon-reload; systemctl reload nginx"}
 
     def saveTunnel(self, domain=None, password=None, apiPassword=None):
         """Keep what was typed. Blank means unchanged, not cleared: the page
         never sends the passwords back, so treating empty as "erase" would
         wipe them every time the domain was edited."""
         if domain is not None:
+            if domain.strip() != self._settings.get('tunnelDomain', ''):
+                # A new server: the certificate kept for the old one is not
+                # this one's, and would only make it refuse.
+                try:
+                    self._tunnel_client().forget_cert()
+                except RuntimeError:
+                    pass
             self._settings['tunnelDomain'] = domain.strip()
         if password:
             self._settings['tunnelPassword'] = password.strip()
@@ -2202,6 +2252,18 @@ class Api:
         """
         try:
             client = self._tunnel_client()
+            by_address = tunnel.is_address(client.domain)
+            if by_address:
+                # Taken the first time, then required: a server showing
+                # another certificate is refused here, before gost is.
+                try:
+                    client.ensure_cert()
+                    client.check_cert()
+                except tunnel.PinChanged as e:
+                    return {'ok': False, 'error': str(e), 'verdict': 'pin-changed'}
+                except OSError as e:
+                    return {'ok': False, 'verdict': 'unreachable',
+                            'error': f'{client.domain} did not answer on 443: {e}'}
             client.start()
             seen, restarted, found = None, False, []
             try:
@@ -2211,7 +2273,13 @@ class Api:
                 try:
                     client.restart()
                     seen = client.probe()
-                except Exception:
+                except Exception as e:
+                    if by_address:
+                        # No edges to look for: the address is the one way in.
+                        return {'ok': False, 'restarted': True,
+                                'error': f'{client.domain} answered but carried '
+                                         f'nothing: {str(e)[:160]}',
+                                'running': client.listening()}
                     verdict, why = client.diagnose()
                     if verdict not in ('edges-blocked', 'wrong-zone'):
                         return {'ok': False, 'error': why, 'verdict': verdict,
@@ -2321,7 +2389,8 @@ class Api:
                         where, lambda p: self._emit('Progress', p),
                         provider=want, only=only, city=city)
                 else:
-                    result = self._through_tunnel(where, mode)
+                    result = self._through_tunnel(where, mode, provider=want,
+                                                  only=only, city=city)
                 self._since = time.time()
                 self._retray('on')
                 if isinstance(result, dict):
@@ -2333,6 +2402,21 @@ class Api:
                 self._confirm()
             except Exception as e:
                 kind = str(e).split(':')[0] if str(e) else e.__class__.__name__
+                # Written down, because the window shows one sentence and a
+                # failure nobody can read afterwards is a failure nobody can
+                # fix. Kept short: the last few, not a history.
+                try:
+                    path = os.path.join(paths.STATE_DIR, 'connect-errors.log')
+                    with open(path, 'a', encoding='utf-8') as f:
+                        f.write(time.strftime('%Y-%m-%d %H:%M:%S ')
+                                + f'{mode} {country!r}\n' + traceback.format_exc() + '\n')
+                    if os.path.getsize(path) > 64_000:
+                        with open(path, encoding='utf-8') as f:
+                            tail = f.read()[-32_000:]
+                        with open(path, 'w', encoding='utf-8') as f:
+                            f.write(tail)
+                except OSError:
+                    pass
                 try:
                     self._engine.disconnect(quiet=True)
                 except Exception:
@@ -2349,7 +2433,7 @@ class Api:
         threading.Thread(target=work, daemon=True).start()
         return {'ok': True}
 
-    def _through_tunnel(self, country, mode):
+    def _through_tunnel(self, country, mode, provider=None, only=None, city=None):
         """Connect by way of the user's own server.
 
         Multi-IP mode is the only one with a choice to make, and it makes it
@@ -2365,19 +2449,53 @@ class Api:
 
         label = 'your server'
         if mode == 'multi':
-            if country in (None, '', 'auto'):
-                # No country asked for, so leave the server on whatever it
+            if country in (None, '', 'auto') and not (only or city or provider):
+                # No place asked for, so leave the server on whatever it
                 # was last set to rather than picking one on its behalf.
                 label = 'chosen exit'
             else:
-                server, ip, _host = self._engine.address_for(country)
-                # The chosen exit's own provider, asked after it is chosen.
-                # This used to be the Surfshark credential whatever the exit,
-                # so a Windscribe country here was refused by its own exit -
-                # and the server answered 503 for every connection after.
-                user, password = self._engine.credentials_for(server)
-                client.set_exit(ip, user, password, name=country)
-                label = country
+                # The pick as the list made it: a country, a city in one, one
+                # provider's share, or one server. A single server used to
+                # reach here as no country at all, and the server stayed on
+                # whatever exit it had last - a Swiss pick came out in Turkey.
+                ordered = self._engine.candidates(
+                    None if country in (None, '', 'auto') else country,
+                    provider=provider, only=only, city=city)
+                if not ordered:
+                    raise RuntimeError('no-servers')
+                # From a server in Iran, upload is throttled per foreign exit
+                # IP: most in a city carry next to nothing up while
+                # downloading at megabytes. So each is set in turn and asked
+                # to carry an upload end to end, and the first that does is
+                # kept - the location stays the one picked. A single server
+                # was picked by hand and is used as it is.
+                tries = 1 if only else 6
+                best, last = None, None
+                for server in ordered[:tries]:
+                    ip, _host = engine.px.read_config(server.path)
+                    # The chosen exit's own provider, asked after it is
+                    # chosen. This used to be the Surfshark credential
+                    # whatever the exit, so a Windscribe country here was
+                    # refused by its own exit - and the server answered 503
+                    # for every connection after.
+                    user, password = self._engine.credentials_for(server)
+                    client.set_exit(ip, user, password, name=server.file)
+                    last = server.file
+                    if tries == 1:
+                        best = (server, ip, user, password, 0)
+                        break
+                    progress({'phase': 'starting', 'country': server.country,
+                              'city': f'testing upload via {server.file.split("_")[0]}'})
+                    rate = client.upload_rate('multi')
+                    if best is None or rate > best[4]:
+                        best = (server, ip, user, password, rate)
+                    if rate >= 64 << 10:
+                        break
+                server, ip, user, password, rate = best
+                if server.file != last:
+                    # The fastest was not the last one tried: put it back.
+                    client.set_exit(ip, user, password, name=server.file)
+                label = server.country
 
         return self._engine.connect_tunnel(
             client.address('multi' if mode == 'multi' else 'single'),

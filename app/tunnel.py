@@ -21,9 +21,11 @@ paths, the ports, the bypass list - is written from here.
 """
 
 import base64
+import hashlib
 import json
 import os
 import socket
+import ssl
 import subprocess
 import time
 import urllib.error
@@ -53,6 +55,11 @@ edge_cache_save = px.edge_cache_save
 diagnose = px.tunnel_diagnose
 mirror = px.tunnel_mirror
 EDGE_KEEP = px.EDGE_KEEP
+is_address = px.is_address
+
+
+class PinChanged(RuntimeError):
+    """A server by address showing a certificate other than the one kept."""
 
 
 class Tunnel:
@@ -83,13 +90,64 @@ class Tunnel:
         os.makedirs(self.dir, exist_ok=True)
         if edges is None:
             edges = edges_for(self.dir, self.domain, quiet=True)
-        text = config_text(self.domain, self.password, edges)
+        ca = self.ensure_cert() if is_address(self.domain) else None
+        text = config_text(self.domain, self.password, edges, ca_file=ca)
         with open(self.config_path, 'w', encoding='utf-8') as f:
             f.write(text)
         # And into any other client folder this machine has been told about,
         # so the copy in Startup is not left dialling last month's addresses.
         mirror(text)
         return self.config_path
+
+    # -- a server by address, and its own certificate ---------------------
+    #
+    # No CA vouches for an address, so the installer makes the server its own
+    # certificate. It is taken the first time it is seen and kept beside the
+    # client's configuration; from then on gost and the API trust that one
+    # certificate and nothing else - SSH's rule for a host met for the first
+    # time.
+
+    @property
+    def cert_path(self):
+        return os.path.join(self.dir, f'server-{self.domain}.pem')
+
+    def pin(self):
+        """The kept certificate's SHA-256, in hex, or '' before first contact."""
+        try:
+            with open(self.cert_path, encoding='ascii') as f:
+                der = ssl.PEM_cert_to_DER_cert(f.read())
+        except (OSError, ValueError):
+            return ''
+        return hashlib.sha256(der).hexdigest()
+
+    def ensure_cert(self, timeout=15):
+        """The kept certificate's path, fetching it on first contact."""
+        if not os.path.exists(self.cert_path):
+            pem = ssl.get_server_certificate((self.domain, 443), timeout=timeout)
+            os.makedirs(self.dir, exist_ok=True)
+            with open(self.cert_path, 'w', encoding='ascii') as f:
+                f.write(pem)
+        return self.cert_path
+
+    def check_cert(self, timeout=15):
+        """Whether the server still shows the kept certificate."""
+        if not is_address(self.domain) or not os.path.exists(self.cert_path):
+            return True
+        pem = ssl.get_server_certificate((self.domain, 443), timeout=timeout)
+        got = hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest()
+        if got != self.pin():
+            raise PinChanged(
+                f'{self.domain} is showing a different certificate than the '
+                f'one kept the first time (sha256 {got[:16]}…, kept '
+                f'{self.pin()[:16]}…). If you reinstalled the server, save '
+                'its address again to forget the old one.')
+        return True
+
+    def forget_cert(self):
+        try:
+            os.remove(self.cert_path)
+        except OSError:
+            pass
 
     def edges(self):
         """The addresses this client is dialling, as the file has them."""
@@ -210,6 +268,31 @@ class Tunnel:
                                      headers={'User-Agent': 'Relay'})
         return opener.open(req, timeout=timeout).read().decode().strip()
 
+    def upload_rate(self, mode='multi', size=256 << 10, timeout=4):
+        """How fast that mode carries an upload, in bytes a second; 0 if not
+        at all within timeout.
+
+        From a server in Iran, upload is throttled per foreign exit IP: most
+        exits carry 10-20 KB/s up while downloading at megabytes, and a few in
+        the same city carry the full rate. Timed to Cloudflare's answer, which
+        only comes once every byte has arrived, so buffers on the way cannot
+        flatter a slow exit.
+        """
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler(
+            {'https': f'http://127.0.0.1:{PORTS[mode]}'}))
+        req = urllib.request.Request('https://speed.cloudflare.com/__up',
+                                     data=os.urandom(size), method='POST',
+                                     headers={'User-Agent': 'Relay',
+                                              'Content-Type': 'application/octet-stream'})
+        start = time.monotonic()
+        try:
+            with opener.open(req, timeout=timeout) as r:
+                r.read(4096)
+        except Exception:
+            return 0
+        took = time.monotonic() - start
+        return size / took if took < timeout else 0
+
     def address(self, mode='single'):
         """What to hand the worker as --tunnel."""
         return f'127.0.0.1:{PORTS[mode]}'
@@ -233,8 +316,21 @@ class Tunnel:
         req.add_header('User-Agent', 'Relay (ovpn-pin desktop)')
         if data:
             req.add_header('Content-Type', 'application/json')
+        ctx = None
+        if is_address(self.domain):
+            # The kept certificate, and only it: Python checks an address
+            # against the certificate's IP entry the way it checks a name.
+            ctx = ssl.create_default_context(cafile=self.ensure_cert())
+        # Straight to the server, never through a proxy. urlopen follows the
+        # Windows proxy setting, which on this machine is often some other
+        # client's (v2rayN on 10809) - or this app's own port, when it is
+        # routing Windows and the exit is being changed while connected - and
+        # the API answered through either, slowly or not at all.
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPSHandler(context=ctx) if ctx else urllib.request.HTTPSHandler())
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with opener.open(req, timeout=timeout) as r:
                 body = r.read()
             return json.loads(body) if body else {}
         except urllib.error.HTTPError as e:

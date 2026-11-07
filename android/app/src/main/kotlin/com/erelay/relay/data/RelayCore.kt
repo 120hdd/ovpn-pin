@@ -337,7 +337,10 @@ class RelayCore(private val app: Application) {
         _seenFailed.value = false
         scope.launch {
             val json = try {
-                if (creds == null) "{}"
+                // The user's own server: asked through the tunnel that is up,
+                // because a server is not a provider exit to rebuild.
+                if (RelayVpnService.exitProvider.isEmpty()) Relay.seenAsLiveJSON(20000L)
+                else if (creds == null) "{}"
                 else Relay.seenAsJSON(addr, name, creds.first, creds.second, 20000L)
             } catch (e: Exception) {
                 "{}"
@@ -647,6 +650,24 @@ class RelayCore(private val app: Application) {
                 .putExtra(RelayVpnService.EXTRA_DOMAIN, domain)
                 .putExtra(RelayVpnService.EXTRA_TUNNEL_PASSWORD, password)
                 .putExtra(RelayVpnService.EXTRA_EDGES, prefs.getString("tunnelEdges", "").orEmpty())
+                .putExtra(RelayVpnService.EXTRA_PIN, prefs.getString("tunnelPin", "").orEmpty())
+            if (way == Way.SERVER_EXIT) {
+                // The location picked, and every provider account on file:
+                // the server leaves by that place's exit, opened with that
+                // exit's own provider's credential, sent as it connects.
+                intent
+                    .putExtra(RelayVpnService.EXTRA_COUNTRY, code)
+                    .putExtra(RelayVpnService.EXTRA_API_PASSWORD,
+                        prefs.getString("tunnelApiPassword", "").orEmpty())
+                credentials(Accounts.SURFSHARK)?.let { (user, password) ->
+                    intent.putExtra(RelayVpnService.EXTRA_USER, user)
+                        .putExtra(RelayVpnService.EXTRA_PASSWORD, password)
+                }
+                credentials(Accounts.WINDSCRIBE)?.let { (user, password) ->
+                    intent.putExtra(RelayVpnService.EXTRA_WS_USER, user)
+                        .putExtra(RelayVpnService.EXTRA_WS_PASSWORD, password)
+                }
+            }
         }
         connecting = true
         _conn.update { it.copy(mode = Mode.BUSY, failure = null, asked = 0, total = 0) }
@@ -981,6 +1002,7 @@ class RelayCore(private val app: Application) {
         hasPassword = !prefs.getString("tunnelPassword", "").isNullOrEmpty(),
         hasApiPassword = !prefs.getString("tunnelApiPassword", "").isNullOrEmpty(),
         edges = edgeList(),
+        pin = prefs.getString("tunnelPin", "").orEmpty(),
     )
 
     /**
@@ -994,7 +1016,25 @@ class RelayCore(private val app: Application) {
             putString("tunnelDomain", domain.trim())
             if (password.isNotEmpty()) putString("tunnelPassword", password)
             if (apiPassword.isNotEmpty()) putString("tunnelApiPassword", apiPassword)
-            if (domain.trim() != was) remove("tunnelEdges")
+            // A new server: its edges and its certificate were the old one's.
+            if (domain.trim() != was) { remove("tunnelEdges"); remove("tunnelPin") }
+        }.apply()
+        _tunnel.value = readTunnel()
+    }
+
+    /**
+     * The two passwords, made here when there are none yet. The install
+     * command carries them to the server, so the app already holds what the
+     * server will ask for and nothing has to be copied back.
+     */
+    private fun ensurePasswords() {
+        fun make(): String {
+            val bytes = ByteArray(15).also { java.security.SecureRandom().nextBytes(it) }
+            return Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        }
+        prefs.edit().apply {
+            if (prefs.getString("tunnelPassword", "").isNullOrEmpty()) putString("tunnelPassword", make())
+            if (prefs.getString("tunnelApiPassword", "").isNullOrEmpty()) putString("tunnelApiPassword", make())
         }.apply()
         _tunnel.value = readTunnel()
     }
@@ -1043,6 +1083,7 @@ class RelayCore(private val app: Application) {
         cfg.password = password
         cfg.mode = mode
         cfg.edges = prefs.getString("tunnelEdges", "").orEmpty()
+        cfg.pin = prefs.getString("tunnelPin", "").orEmpty()
         try {
             ask(cfg)
         } catch (first: Exception) {
@@ -1066,15 +1107,28 @@ class RelayCore(private val app: Application) {
 
     private fun ask(cfg: relay.ServerConfig): Said {
         val seen = JSONObject(Relay.testServer(cfg, 20000L))
+        // A server by address: its certificate, kept the first time it is
+        // seen and required from then on.
+        val pin = seen.optString("pin")
+        if (pin.isNotEmpty() && cfg.pin.isEmpty()) {
+            prefs.edit().putString("tunnelPin", pin).apply()
+            _tunnel.value = readTunnel()
+        }
         return Said(true, "Carrying traffic - it comes out at ${seen.optString("ip")}.")
     }
 
     /**
-     * One line that puts the installer on the server and runs it. The script
-     * travels inside the command, because nothing hosts it. The provider
-     * credentials stay placeholders rather than land in a shell history.
+     * One line that puts the installer on the server and runs it, with the
+     * passwords this app holds - made now if there are none - so that once it
+     * has run there is nothing left to do here but Test. The script travels
+     * inside the command, because nothing hosts it.
+     *
+     * The leading space keeps it out of the server's shell history (Ubuntu's
+     * bash ignores lines that start with one), passwords and all. No provider
+     * account goes in it: server + exit sends the picked location's own
+     * credential each time it connects.
      */
-    fun installCommand(domain: String): String? {
+    fun installCommand(host: String): String? {
         val blob = try {
             app.assets.open("install-server.sh").use {
                 Base64.encodeToString(it.readBytes(), Base64.NO_WRAP)
@@ -1082,9 +1136,30 @@ class RelayCore(private val app: Application) {
         } catch (e: Exception) {
             return null
         }
-        val host = domain.trim().ifEmpty { "yourdomain.com" }
-        return "mkdir -p /opt/relay && echo '$blob' | base64 -d > /opt/relay/install-server.sh" +
-            " && bash /opt/relay/install-server.sh $host <surfshark-user> <surfshark-pass>"
+        val server = host.trim()
+        if (server.isEmpty()) return null
+        if (server != prefs.getString("tunnelDomain", "")) saveTunnel(server, "", "")
+        ensurePasswords()
+        val pw = prefs.getString("tunnelPassword", "").orEmpty()
+        val api = prefs.getString("tunnelApiPassword", "").orEmpty()
+        return " mkdir -p /opt/relay && echo '$blob' | base64 -d > /opt/relay/install-server.sh" +
+            " && bash /opt/relay/install-server.sh $server --password '$pw' --api-password '$api'"
+    }
+
+    /** What is running on the server, and whether it answers. */
+    fun statusCommand(): String =
+        "systemctl --no-pager --lines=0 status gost sing-box nginx | grep -E '^. |Active:';" +
+            " ss -lnt | grep -E ':443 |127.0.0.1:(1000[0-3]|18080) '"
+
+    /** Takes the tunnel off the server again, leaving anything else there alone. */
+    fun uninstallCommand(): String {
+        val host = prefs.getString("tunnelDomain", "").orEmpty().ifEmpty { "SERVER" }
+        return "systemctl disable --now gost sing-box;" +
+            " rm -f /etc/systemd/system/gost.service /etc/systemd/system/sing-box.service" +
+            " /usr/local/bin/gost /usr/local/bin/sing-box" +
+            " /etc/nginx/sites-enabled/relay-$host.conf /etc/nginx/sites-available/relay-$host.conf;" +
+            " rm -rf /etc/gost /etc/sing-box /etc/relay /opt/relay;" +
+            " systemctl daemon-reload; systemctl reload nginx"
     }
 
     fun copy(text: String) {

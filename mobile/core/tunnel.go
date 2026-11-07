@@ -416,7 +416,7 @@ func (h *handler) NewPacketConnectionEx(_ context.Context, conn N.PacketConn, _ 
 // The wire format is passed straight through - RFC 8484 POST takes the same
 // bytes the phone put on the wire and gives back the same bytes it expects,
 // so nothing here has to know what a DNS record is.
-func (h *handler) NewDNSPacket(payload []byte, _ M.Socksaddr, _ M.Socksaddr, writer N.PacketWriter) {
+func (h *handler) NewDNSPacket(payload []byte, _ M.Socksaddr, destination M.Socksaddr, writer N.PacketWriter) {
 	query := make([]byte, len(payload))
 	copy(query, payload)
 
@@ -446,7 +446,9 @@ func (h *handler) NewDNSPacket(payload []byte, _ M.Socksaddr, _ M.Socksaddr, wri
 		// name to an address, and this is the only place on the phone that
 		// sees both halves.
 		h.names.learn(answer)
-		_ = writePacket(writer, answer)
+		if err := writePacket(writer, answer, destination); err != nil {
+			log.Printf("relay: dns answer not written back: %v", err)
+		}
 	}()
 }
 

@@ -414,21 +414,23 @@ private fun Connection(core: RelayCore, tunnel: TunnelPlan, allowLan: Boolean) {
     var busy by remember { mutableStateOf(false) }
 
     Pane(icon = Glyph.tower, title = "Your own tunnel",
-        help = "A server of your own behind Cloudflare. The phone speaks the tunnel itself - " +
-            "there is no client to install here. The tunnel password opens it; the API " +
-            "password is for the server's own settings.",
+        help = "A server of your own, by its IP address - or a domain, behind Cloudflare or " +
+            "not. Type the address and copy the install command: it carries passwords this " +
+            "app made, so once it has run on the server there is only Test left to press. " +
+            "The tunnel password opens the tunnel; the API password is how server + exit " +
+            "tells the server which location to leave by.",
         pill = when {
             busy -> "asking"
             tunnel.ready -> "ready"
             else -> "not set"
         }, pillGood = tunnel.ready) {
-        Field(domain, { domain = it }, "yourdomain.com", mono = true)
+        Field(domain, { domain = it }, "Server IP or domain", mono = true)
         Spacer(Modifier.height(8.dp))
         Field(password, { password = it },
-            if (tunnel.hasPassword) "Tunnel password (saved)" else "Tunnel password", secret = true)
+            if (tunnel.hasPassword) "Tunnel password (saved)" else "Tunnel password (made for you)", secret = true)
         Spacer(Modifier.height(8.dp))
         Field(api, { api = it },
-            if (tunnel.hasApiPassword) "API password (saved)" else "API password", secret = true)
+            if (tunnel.hasApiPassword) "API password (saved)" else "API password (made for you)", secret = true)
         ButtonRow {
             Btn("Save", {
                 core.saveTunnel(domain, password, api)
@@ -442,14 +444,19 @@ private fun Connection(core: RelayCore, tunnel: TunnelPlan, allowLan: Boolean) {
                 scope.launch { said = core.testTunnel(); busy = false }
             }, enabled = !busy && tunnel.ready)
         }
-        ButtonRow {
+        // An address has no other way in: it is not behind Cloudflare.
+        if (!tunnel.isAddress) ButtonRow {
             Btn("Find another way in", {
                 busy = true
                 said = null
                 scope.launch { said = core.rescanEdges(); busy = false }
             }, enabled = !busy && tunnel.domain.isNotEmpty(), icon = Glyph.refresh)
         }
-        if (tunnel.edges.isNotEmpty()) {
+        if (tunnel.pin.isNotEmpty()) {
+            Text("Certificate: sha256 ${tunnel.pin.take(16)}…", style = Type.mono,
+                modifier = Modifier.padding(top = 10.dp))
+        }
+        if (tunnel.edges.isNotEmpty() && !tunnel.isAddress) {
             Text("Way in: ${tunnel.edges[0]}" + if (tunnel.edges.size > 1) "  (+${tunnel.edges.size - 1})" else "",
                 style = Type.mono, modifier = Modifier.padding(top = 10.dp))
         }
@@ -460,16 +467,26 @@ private fun Connection(core: RelayCore, tunnel: TunnelPlan, allowLan: Boolean) {
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Setting up the server", style = Type.strong.copy(fontSize = 14.sp))
-            InfoTip("One line to paste into an SSH session on the server: it carries the " +
-                "installer inside itself and runs it. The provider account stays as " +
-                "placeholders, so it never lands in a shell history.")
+            InfoTip("Paste these into an SSH session on the server, as root. Install sets up " +
+                "everything in one go, with this app's passwords - run it again any time to " +
+                "repair or update. Status shows what is running; Uninstall takes the tunnel " +
+                "off and leaves everything else on the server alone.")
         }
         ButtonRow {
             Btn("Copy the install command", {
                 val cmd = core.installCommand(domain)
-                said = if (cmd == null) Said(false, "The installer is missing from this build.")
-                else { core.copy(cmd); Said(true, "Copied. Paste it on the server.") }
-            }, icon = Glyph.copy)
+                said = when {
+                    domain.isBlank() -> Said(false, "Type the server's IP or domain first.")
+                    cmd == null -> Said(false, "The installer is missing from this build.")
+                    else -> { core.copy(cmd); Said(true, "Copied. Paste it on the server, then press Test.") }
+                }
+            }, strong = !tunnel.ready, icon = Glyph.copy)
+        }
+        ButtonRow {
+            Btn("Copy status", { core.copy(core.statusCommand()); said = Said(true, "Copied the status command.") },
+                icon = Glyph.copy)
+            Btn("Copy uninstall", { core.copy(core.uninstallCommand()); said = Said(true, "Copied the uninstall command.") },
+                icon = Glyph.copy, danger = true)
         }
     }
 }

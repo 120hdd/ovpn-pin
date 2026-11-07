@@ -848,7 +848,12 @@ window.onFailed = (err) => {
     // never answered, so there is nothing up and the sheet has the detail.
     'moved-and-died': 'The port changed, but the connection did not come back up on it. Connect again.',
   };
-  setHint(say[err.kind] || 'Could not connect. Try once more.', err.kind !== 'cancelled');
+  // A failure without its own sentence says what it was, rather than
+  // "try once more" over a reason nobody gets to read.
+  const why = (err.detail || '').trim();
+  setHint(say[err.kind]
+    || (why ? `Could not connect: ${why.slice(0, 160)}` : 'Could not connect. Try once more.'),
+  err.kind !== 'cancelled');
   render();
 };
 
@@ -1732,16 +1737,26 @@ function paintTunnel(plan) {
   }
   // Set, but never shown. The page is given whether there is one, not what
   // it is, so the placeholder is the only thing that can say so.
-  $('tunnelPass').placeholder = t.hasPassword ? 'saved' : 'not set';
-  $('tunnelApi').placeholder = t.hasApiPassword ? 'saved' : 'not set';
-  paintWayIn(t.edges);
+  $('tunnelPass').placeholder = t.hasPassword ? 'saved' : 'made for you';
+  $('tunnelApi').placeholder = t.hasApiPassword ? 'saved' : 'made for you';
+  paintWayIn(t.edges, t);
+  // An address is not behind Cloudflare: there is no other way in to find.
+  $('tunnelScan').hidden = !!t.isAddress;
 }
 
 /* Which address the client is dialling, which is normally nobody's business
    and is the whole story on the day it stops working. Hidden until there is
    one, so the pane does not grow a line saying nothing. */
-function paintWayIn(edges) {
+function paintWayIn(edges, t) {
   const line = $('tunnelWayIn');
+  // A server by address: the certificate kept the first time it was met is
+  // the one it has to show from then on, and this is how to check it.
+  if (t && t.isAddress) {
+    line.textContent = t.pin ? `Certificate sha256 ${t.pin.slice(0, 16)}…, kept from the first Test.`
+      : 'Its certificate is kept the first time Test reaches it.';
+    line.hidden = false;
+    return;
+  }
   if (!edges || !edges.length) { line.hidden = true; return; }
   const spare = edges.length - 1;
   line.textContent = `Dialling ${edges[0]}`
@@ -2990,8 +3005,19 @@ $('tunnelCopy').addEventListener('click', async (e) => {
   const r = await window.pywebview.api.installCommand($('tunnelDomain').value.trim());
   if (!r || !r.ok) { said($('tunnelSaid'), (r && r.error) || 'nothing to copy', 'bad'); return; }
   await copyText(e.currentTarget, r.command);
-  said($('tunnelSaid'), 'Copied — paste it into SSH as root.', 'good');
+  // The passwords may have just been made, and the address saved with them.
+  paintTunnel(await window.pywebview.api.tunnelPlan());
+  said($('tunnelSaid'), 'Copied — paste it into SSH as root, then press Test.', 'good');
 });
+for (const [id, key, what] of [['tunnelCopyStatus', 'status', 'status'],
+                               ['tunnelCopyUninstall', 'uninstall', 'uninstall']]) {
+  $(id).addEventListener('click', async (e) => {
+    const r = await window.pywebview.api.installCommand($('tunnelDomain').value.trim());
+    if (!r || !r.ok) { said($('tunnelSaid'), (r && r.error) || 'nothing to copy', 'bad'); return; }
+    await copyText(e.currentTarget, r[key]);
+    said($('tunnelSaid'), `Copied the ${what} command.`, 'good');
+  });
+}
 
 /* The picker is a Windows dialog and it is its own feedback while it is up.
    What these are for is the part after it closes - reading a folder of two
