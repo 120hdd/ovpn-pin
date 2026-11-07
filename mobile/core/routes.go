@@ -32,30 +32,31 @@ import (
 // happens to run while the VPN is up goes through it. On Android that is not
 // automatic: the app excludes itself from its own tunnel, which is right for
 // the socket that dials the exit and wrong for everything else.
-var live atomic.Value // Way
+var live atomic.Pointer[liveBox]
+
+// liveBox holds the Way. An atomic.Value refuses a second concrete type, and
+// a way out is an Exit one moment and a TunnelServer the next - storing the
+// typed nil an Exit-shaped Value expected, on disconnecting from the user's
+// own server, panicked and took the app down.
+type liveBox struct{ w Way }
 
 // SetLive says what is carrying traffic now. Called when a tunnel opens and
 // again with nil when it closes.
 func SetLive(w Way) {
 	if w == nil {
-		live.Store((*Exit)(nil))
+		live.Store(nil)
 		return
 	}
-	live.Store(w)
+	live.Store(&liveBox{w})
 }
 
 // LiveWay is what is carrying, or nil.
 func LiveWay() Way {
-	w, ok := live.Load().(Way)
-	if !ok || w == nil {
+	b := live.Load()
+	if b == nil {
 		return nil
 	}
-	// A typed nil stored above reads as a non-nil interface here, which is
-	// the one Go footgun this pattern always steps on.
-	if e, isExit := w.(*Exit); isExit && e == nil {
-		return nil
-	}
-	return w
+	return b.w
 }
 
 // Route is one way of asking, and a name for it that can go in a log line.
