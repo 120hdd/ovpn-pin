@@ -1,4 +1,7 @@
 pinned/
+# A one-off listing of what pinned/ held, written by hand. Same contents and
+# the same reason for staying out of git as the folder itself.
+pinned.txt
 success/
 sitetest/
 proxy-ok/
@@ -41,6 +44,8 @@ windscribe.md
 # which is already ignored below.
 .windscribe-auth
 .windscribe-auth.*
+# Cloudflare API token and account id, for deploying worker/relay.js.
+cl_api.txt
 
 # pid, log and what-is-connected, written while a tunnel is up.
 .state/

@@ -61,11 +61,14 @@ when nothing is reachable.
 ```
 
 Out comes `relay.aar`: the Go engine compiled for `arm64-v8a`, `armeabi-v7a`,
-`x86` and `x86_64`, and four Java classes — `Client`, `Progress`, `Result`,
-`Relay`. It is 22 MB and gitignored; any checkout rebuilds it in a minute.
+`x86` and `x86_64`, with `Relay` carrying the package-level calls and
+`Client`, `Result`, `ServerConfig`, `PinOptions` and the four callback
+interfaces — `Progress`, `ReachProgress`, `PinProgress`, `Namer`, `Protector`
+— beside it. It is gitignored, and the script copies it into
+`../android/app/libs/`, which is where Gradle reads it from.
 
-The script pins its toolchain rather than trusting `PATH`, because each of
-these fails in a way that reads like a code error:
+The script prefers a named toolchain, then one it can find, and only then
+`PATH`, because each of these fails in a way that reads like a code error:
 
 - **Go 1.26+** — `golang.org/x/mobile` requires it. A 1.25 that tries to fetch
   the newer toolchain over a censored line dies with `unexpected EOF` halfway
@@ -132,50 +135,100 @@ where it lands, which is after the socket exists and before it connects.
 
 ## The app
 
+The app is [`android/`](../android) at the repo root: its own Gradle project,
+Jetpack Compose, no web view. It used to be Flutter showing the desktop's
+page in a WebView, and that was slow in the way a whole desktop UI booting
+inside a browser on a phone is slow; it is gone.
+
 ```
-app/                        Flutter, one screen
-  lib/
-    main.dart               the screen
-    orb.dart                the status, drawn rather than written
-    relay.dart              the Dart end of the bridge
-    theme.dart              app/ui/app.css, moved across
-  android/app/src/main/kotlin/com/erelay/relay/
-    RelayVpnService.kt      the tunnel's whole lifetime
-    MainActivity.kt         the Kotlin end of the bridge
+android/app/src/main/kotlin/com/erelay/relay/
+  data/RelayCore.kt         everything the window knows and can do, as flows
+  data/Models.kt            the core's JSON, parsed once into Kotlin
+  ui/                       the screens, in Compose
+  orb/                      the desktop's sphere shader, on OpenGL ES 3
+  RelayVpnService.kt        the tunnel's whole lifetime
+  RelayTile.kt              the quick-settings tile: one press to connect
+  AppFiles.kt               the one writable directory, and what is under it
+  Accounts.kt               the roster, and which credential is in use
+  Secrets.kt                passwords, in the keystore rather than in prefs
+  Providers.kt              signing in, and fetching a published fleet
+  Pin.kt                    which inbox a pin run reads
+  Import.kt                 a picked folder, copied in
+  Routes.kt                 0.0.0.0/0 minus the local network, for API < 33
+  AppNamer.kt               which application opened this connection
 ```
 
-**Two channels, not one.** `relay/control` is asked and answered — connect,
-disconnect, where are the files. `relay/status` is pushed — the race counting
-up, the exit that won, the failure. Collapsing them would mean Dart polling
-for progress, and progress that arrives eight times a second is the one thing
-polling is worst at.
+**The orb is the desktop's own shader**, not a drawing of it. WebGL2 is GLSL
+ES 3.00 and so is OpenGL ES 3.0, so `sphere.js`'s shaders compile here as they
+are - which is why it is GLES rather than AGSL, which is fragment-only and
+this is a displaced mesh with a depth buffer. It draws on a `TextureView`, so
+the sheets that rise over it composite like anything else.
 
-**The orb is the status display.** A person glancing at a VPN client wants one
-answer, and a colour crossing a room reads faster than a word. Still and dim
-is idle, turning and amber is racing, still and mint with a glow is connected.
-It animates only while something is happening — a phone holding a tunnel open
-all evening should not also be repainting sixty times a second to say so.
+**The palette is the desktop's**, name for name, so a colour changed in
+`app/ui/app.css` can be found here by searching for the same word.
 
-**The palette is the desktop's**, name for name, from `app/ui/app.css`. A
-colour changed there should be findable here by searching for the same word.
+## Building it
 
 ```sh
-./build-android.sh                        # relay.aar, the Go core
-cd app && flutter build apk --debug
-adb install -r build/app/outputs/flutter-apk/app-debug.apk
+./build-android.sh                                # relay.aar, into android/app/libs
+cd ../android && ./gradlew :app:assembleDebug     # the APK
+cd ../android && ./gradlew :app:assembleFast      # the same, at release speed
 ```
 
-Configs and credentials are read from the app's own external files directory,
-because this build is meant to be pushed at:
+`fast` is the release build - R8, not debuggable - under the debug build's id
+and key, so it installs over a phone set up with the debug build and keeps
+its accounts. Judge how the app feels on that one: Compose in a debuggable
+build recomposes several times slower, and on a phone that was the
+difference between a smooth connect and a stuttering one.
+
+Or take one that was built for you. Every push builds an APK
+([.github/workflows/android.yml](../.github/workflows/android.yml)) and a `v*`
+tag attaches it to a release, which is a URL a phone can open.
+
+Building here needs Google's Maven and the Android SDK, which refuse this
+line's own exits as a sanctioned region. Gradle and the SDK manager both
+take a proxy; through an exit Google does not count as one, they download.
+
+## Setting one up
+
+Nothing here needs a cable.
+
+Open Settings, add an account, and press Get servers — or Browse, and point it
+at a folder of configs, which are copied in rather than read where they stand,
+because a picked folder is a content URI and the core has to be handed a path.
+Then Pin them, and the list fills.
+
+A cable still works, and is quicker when there is one to hand:
 
 ```sh
-D=/sdcard/Android/data/com.erelay.relay.debug/files
-adb push pinned/. $D/pinned/
-adb push .ovpn-auth $D/auth
+./setup-phone.sh                          # app, configs, credentials
+./setup-phone.sh --tunnel DOMAIN PW       # and your own server
 ```
 
-When they are missing the window prints those two paths rather than "no
-configs", because the path is the only part a person can act on.
+Everything lives in the app's own external files directory, which a file
+manager can see:
+
+```
+Android/data/com.erelay.relay.debug/files/
+  pinned/            the exits the app races
+  configs/           Surfshark's inbox, waiting to be pinned
+  windscribe/        Windscribe's inbox
+  dropped/           set aside by hand, one shelf per folder
+  .state/            what was measured, and the roster
+  auth               the Surfshark service credential, two lines
+  auth-windscribe    the Windscribe proxy credential
+```
+
+Passwords are not in there. They are in the keystore, because this build is
+debuggable — which is what makes setup-phone.sh's `run-as` trick work, and
+what would otherwise make `shared_prefs` readable by anyone with a cable.
+
+**Uninstalling takes all of it.** `Android/data` goes with the app, and so
+does a folder of four hundred pinned exits.
+
+**The release build is signed with the debug key.** Android asks twice before
+installing it, and an upgrade over a differently-signed copy has to be
+uninstalled first. A real signing config is the next thing this needs.
 
 ## What it did on a phone
 
@@ -302,8 +355,15 @@ always on the line the desktop was.
 
 ## Not here yet
 
-The Flutter window, and iOS. The core is already built for both — `gomobile
-bind -target=ios` produces the same API as an `.xcframework`, and
+**iOS.** The core is already built for it — `gomobile bind -target=ios`
+produces the same API as an `.xcframework`, and
 [core/tunnel.go](core/tunnel.go) carries a `darwin` build tag for the same
-reason. What iOS still needs is a `PacketTunnelProvider` to hand over the
+reason. What it still needs is a `PacketTunnelProvider` to hand over the
 descriptor, and an Apple developer account that can carry a VPN entitlement.
+
+**Sweeping**, and it is not coming. Working out which exits are worth having
+is hours of connections; a phone should be handed the answer rather than made
+to find it. The reachability test is here because it is one country and four
+seconds, which is a different thing.
+
+**A release signing key**, so an update can be installed over the last one.

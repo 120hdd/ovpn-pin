@@ -1,95 +1,78 @@
 """Draw the Relay application icon.
 
 A multi-size .ico, not one image scaled down. Windows picks 16px for the
-taskbar and Alt-Tab, 32 for the title bar, 256 for large views, and anything
+taskbar and Alt-Tab, 32 for small views, 256 for large ones, and anything
 drawn once at 256 and resampled turns to grey mush at 16 - which is exactly
 the size the user sees most often.
 
-The mark is a custom, forward-leaning R. Its broad strokes and hard cuts keep
-the motorsport silhouette legible even in the 16px Windows title bar.
+The mark is the one the Android app has: a disc, the ring around it open
+across the upper right, and the bead that has left through the opening.
+Drawn here on the same 256 grid as android/.../res/drawable/ic_launcher_fg.xml
+and ui/Logo.kt, so the two apps' icons are one drawing, not two that drift.
 """
 
+import math
 import os
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, 'assets', 'app.ico')
-UI_PNG = os.path.join(HERE, 'ui', 'app-logo.png')
+PNG = os.path.join(HERE, 'assets', 'app.png')
 
-BG = (11, 12, 24, 255)
-INK = (248, 248, 253, 255)
-VIOLET = (116, 99, 255, 255)
-JADE = (74, 229, 195, 255)
-FONT = os.path.join(os.environ.get('WINDIR', r'C:\Windows'),
-                    'Fonts', 'ariblk.ttf')
+DISC = (97, 239, 191, 255)
+RING = (255, 255, 255, 255)
+EDGE = (150, 158, 172, 255)
+
+# The grid. The ring runs clockwise from 10 degrees above three o'clock to
+# 10 degrees right of twelve; the bead sits on the opening's bisector, a
+# little outside the ring.
+GRID = 256
+DISC_R = 56
+RING_R, RING_W = 100, 20
+RING_FROM, RING_TO = -10, 280
+BEAD_R, BEAD_ANGLE, BEAD_OUT = 16, -45, 132
 
 SIZES = (16, 24, 32, 48, 64, 128, 256)
 
 
-def mark(image, s, colour, offset=(0, 0), outline=None):
-    """Draw a heavy, forward-leaning display R with an optional keyline."""
-    ox, oy = offset
-    mask = Image.new('L', (s, s), 0)
-    font = ImageFont.truetype(FONT, int(s * 0.88))
-    left, top, right, bottom = font.getbbox('R')
-    x = (s - (right - left)) / 2 - left - s * 0.035 + ox
-    y = s * 0.18 - top + oy
-    ImageDraw.Draw(mask).text((x, y), 'R', font=font, fill=255)
+def mark(d, s, inset):
+    """The mark, in a square of side s, `inset` in from each edge."""
+    k = (s - 2 * inset) / GRID
+    cx = cy = s / 2
 
-    # Shear the top farther forward than the foot for the racing-wordmark
-    # posture without making the small icon look off-centre.
-    mask = mask.transform(
-        (s, s), Image.AFFINE,
-        (1, 0.12, -s * 0.12, 0, 1, 0),
-        resample=Image.Resampling.BICUBIC,
-    )
+    def at(angle, radius):
+        a = math.radians(angle)
+        return cx + radius * k * math.cos(a), cy + radius * k * math.sin(a)
 
-    if outline:
-        keyline = max(3, int(s * 0.031) | 1)
-        outer = mask.filter(ImageFilter.MaxFilter(keyline))
-        image.paste(Image.new('RGBA', (s, s), outline), (0, 0), outer)
+    def dot(x, y, r, fill):
+        d.ellipse([x - r, y - r, x + r, y + r], fill=fill)
 
-    ink = Image.new('RGBA', (s, s), colour)
-    image.paste(ink, (0, 0), mask)
+    dot(cx, cy, DISC_R * k, DISC)
+
+    def ring_and_bead(colour, grow):
+        r, w = RING_R * k, RING_W * k + 2 * grow
+        d.arc([cx - r - w / 2, cy - r - w / 2, cx + r + w / 2, cy + r + w / 2],
+              RING_FROM, RING_TO, fill=colour, width=max(1, round(w)))
+        # PIL's arc has square ends; the mark's are round.
+        for end in (RING_FROM, RING_TO):
+            dot(*at(end, RING_R), w / 2, colour)
+        dot(*at(BEAD_ANGLE, BEAD_OUT), BEAD_R * k + grow, colour)
+
+    # The white ring and bead drawn over a slightly wider grey one: with no
+    # panel behind it, white on a light taskbar is not there at all.
+    ring_and_bead(EDGE, max(1, 4 * k))
+    ring_and_bead(RING, 0)
 
 
 def draw(size):
-    # 4x supersampling, then one clean resize. Each ICO size is still drawn
-    # independently so the title-bar frame is not a scaled-down 256px blur.
+    # 4x supersampling, then one clean resize, each size on its own.
+    # The mark on its own, with nothing behind it: Windows shows icons on
+    # the taskbar's own colour, and a dark square there is a tile nobody
+    # asked for. The square is the Android launcher's, which needs a shape.
     s = size * 4
     img = Image.new('RGBA', (s, s), (0, 0, 0, 0))
-
-    inset = int(s * 0.035)
-    bounds = [inset, inset, s - inset - 1, s - inset - 1]
-    radius = int(s * 0.235)
-    mask = Image.new('L', (s, s), 0)
-    ImageDraw.Draw(mask).rounded_rectangle(bounds, radius=radius, fill=255)
-
-    panel = Image.new('RGBA', (s, s), BG)
-    glow = Image.new('RGBA', (s, s), (0, 0, 0, 0))
-    glow_draw = ImageDraw.Draw(glow)
-    glow_draw.ellipse([-s * 0.28, -s * 0.32, s * 0.83, s * 0.79],
-                      fill=VIOLET[:-1] + (220,))
-    glow_draw.ellipse([s * 0.40, s * 0.38, s * 1.22, s * 1.18],
-                      fill=JADE[:-1] + (145,))
-    glow = glow.filter(ImageFilter.GaussianBlur(s * 0.17))
-    panel = Image.alpha_composite(panel, glow)
-    panel.putalpha(mask)
-    img.alpha_composite(panel)
-
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle(bounds, radius=radius,
-                        outline=(173, 163, 255, 105),
-                        width=max(1, int(s * 0.012)))
-
-    shadow = Image.new('RGBA', (s, s), (0, 0, 0, 0))
-    mark(shadow, s, (3, 5, 17, 165), offset=(0, s * 0.018))
-    shadow = shadow.filter(ImageFilter.GaussianBlur(s * 0.018))
-    img.alpha_composite(shadow)
-
-    mark(img, s, INK, outline=(7, 8, 17, 235))
-
+    mark(ImageDraw.Draw(img), s, inset=s * 0.03)
     return img.resize((size, size), Image.LANCZOS)
 
 
@@ -103,13 +86,9 @@ def main():
     frames[-1].save(OUT, format='ICO',
                     sizes=[(n, n) for n in SIZES],
                     append_images=frames[:-1])
-    png = os.path.join(HERE, 'assets', 'app.png')
-    preview = draw(256)
-    preview.save(png)
-    preview.save(UI_PNG)
+    draw(256).save(PNG)
     print(f'{OUT}  ({os.path.getsize(OUT)} bytes, sizes {SIZES})')
-    print(f'{png}')
-    print(f'{UI_PNG}')
+    print(PNG)
 
 
 if __name__ == '__main__':

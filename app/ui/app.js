@@ -174,12 +174,31 @@ function initConnectionCore() {
 function setIp(el, value, fresh) {
   if (el.textContent === value) return;
   el.textContent = value;
+  fitText(el);
   if (fresh) {
     el.classList.remove('fresh');
     void el.offsetWidth;
     el.classList.add('fresh');
   }
 }
+
+/* An address too long for its box steps down in size until it fits, rather
+   than losing its end to an ellipsis - an IPv6 address cut short is a
+   different address. Half a pixel at a time, never below 9px. */
+function fitText(el, floor = 9) {
+  el.style.fontSize = '';
+  let size = parseFloat(getComputedStyle(el).fontSize);
+  while (el.scrollWidth > el.clientWidth + 0.5 && size > floor) {
+    size -= 0.5;
+    el.style.fontSize = `${size}px`;
+  }
+}
+
+let refitting = 0;
+window.addEventListener('resize', () => {
+  clearTimeout(refitting);
+  refitting = setTimeout(() => ['realIp', 'exitIp'].forEach((id) => fitText($(id))), 120);
+});
 
 function setStatus(word, kind, where, host) {
   const s = $('status');
@@ -244,9 +263,16 @@ function render() {
   $('card').dataset.busy = String(state.mode === 'busy');
   $('card').dataset.state = visualState;
   $('hero').dataset.state = visualState;
+  $('hero').dataset.scheme = state.orbColors || 'signal';
+  const orb = $('orb');
+  orb.setAttribute('aria-disabled', String(!state.hasCredentials));
+  orb.setAttribute('aria-label', ({
+    off: 'Connect', fail: 'Connect', busy: 'Cancel', on: 'Disconnect',
+  })[visualState]);
   $('swap').dataset.state = visualState;
   $('routeLabel').textContent = ({
-    off: 'READY TO RELAY',
+    // Said when there is something to press: the orb is the button.
+    off: state.hasCredentials ? 'PRESS TO CONNECT' : 'READY TO RELAY',
     busy: 'NEGOTIATING ROUTE',
     on: 'PRIVATE ROUTE ACTIVE',
     fail: 'ROUTE UNAVAILABLE',
@@ -279,6 +305,9 @@ function render() {
 
 function openPicker() {
   const began = performance.now();
+  state.freeze = null;
+  $('list').dataset.key = '';
+  maybeQuick();
   $('search').value = '';
   $('searchMain').classList.remove('is-typed');
   state.cursor = 0;
@@ -356,18 +385,51 @@ function drawList(query) {
     copy.className = 'row__copy';
     const name = document.createElement('span');
     name.className = 'row__name';
-    name.textContent = 'Whichever answers first';
+    name.textContent = 'Fastest available';
     const sub = document.createElement('span');
     sub.className = 'row__sub';
-    sub.textContent = 'Races every location, takes the first to reply';
+    sub.textContent = 'Races every location, takes the first to answer';
     copy.append(name, sub);
     auto.append(autoIcon, copy);
     list.append(auto);
   }
+  // What the list is and how many, as the first line of it - the phone's
+  // "FASTEST FIRST 72". The count keeps its id: it is what the drive reads.
+  const head = document.createElement('p');
+  head.className = 'listsplit listsplit--top';
+  head.textContent = q ? 'Matches ' : (state.sortBy || 'ping') === 'ping'
+    ? 'Fastest first ' : 'All locations ';
+  const tally = document.createElement('b');
+  tally.id = 'listCount';
+  head.append(tally);
+  list.append(head);
 
-  const found = sortCountries(
+  let found = sortCountries(
     q ? state.fuse.search(q).map((r) => r.item) : state.countries);
+  // The order a quick run found the list in, held while its results land:
+  // rows that move out from under the pointer are worse than numbers that
+  // are briefly out of order. Fastest first puts them in place.
+  if (!q && state.freeze) {
+    const at = new Map(state.freeze.order.map((code, i) => [code, i]));
+    const pos = (c) => (at.has(c.code) ? at.get(c.code) : 1e9);
+    found = found.slice().sort((a, b) => pos(a) - pos(b));
+  }
+  // Fastest first is only honest about the countries that were timed; the
+  // rest go below their own heading, in alphabetical order.
+  let untimedAt = -1;
+  if (!q && (state.sortBy || 'ping') === 'ping') {
+    const timed = (c) => (state.freeze ? state.freeze.tested.has(c.code) : !!c.tested);
+    const fav = (c) => (starredIn(c) ? 0 : 1);
+    const yes = found.filter(timed);
+    const no = found.filter((c) => !timed(c))
+      .sort((a, b) => fav(a) - fav(b) || a.name.localeCompare(b.name));
+    if (no.length) {
+      untimedAt = yes.length;
+      found = yes.concat(no);
+    }
+  }
   if (!found.length) {
+    $('listCount').textContent = '0';
     const e = document.createElement('p');
     e.className = 'empty';
     e.textContent = `No country matches “${q}”.`;
@@ -387,13 +449,39 @@ function drawList(query) {
      "whichever answers" - which is what most people want most of the time.
      The rows under it are for when it is not. */
 
-  /* The sign columns, worked out once for the whole list and from every
-     country in it rather than from the ones a search left on screen - a
-     column that appears and disappears as you type is worse than one that
-     is sometimes empty. */
-  const tagCols = tagColumns();
 
-  const buildGroup = (c) => {
+  const buildGroup = (c, i) => {
+    const head = [];
+    if (i === untimedAt) {
+      const split = document.createElement('p');
+      split.className = 'listsplit';
+      split.innerHTML = 'Not tested yet <b></b>';
+      split.querySelector('b').textContent = String(found.length - untimedAt);
+      head.push(split);
+    }
+    return head.concat(card(c));
+  };
+
+  /* The country as a card, the way the phone draws it: the row, and when it
+     is open its cities in a panel inside the same card. Lit when the pick is
+     anywhere in it - a city or one server as much as the country - so the
+     list says where you are without a tick. */
+  const card = (c) => {
+    const box = document.createElement('div');
+    box.className = 'group' + (pickIsIn(c) ? ' is-in' : '');
+    const [row, ...cities] = groupOf(c);
+    box.append(row);
+    if (cities.length) {
+      box.classList.add('is-open');
+      const inner = document.createElement('div');
+      inner.className = 'group__in';
+      inner.append(...cities);
+      box.append(inner);
+    }
+    return [box];
+  };
+
+  const groupOf = (c) => {
     /* One row per place, and a sign for who backs it.
 
        A country reached by both used to split into a row per provider, and
@@ -415,7 +503,9 @@ function drawList(query) {
     const cityList = c.cityList || [];
     if (cityList.length > 1 && state.openCities.has(c.code)) {
       let at = 0;
-      for (const city of cityList) {
+      // Starred cities first; the rest keep the order the core gave.
+      const starred = (x) => (isFavourite(`${c.code}/${x.code}`) ? 0 : 1);
+      for (const city of cityList.slice().sort((a, b) => starred(a) - starred(b))) {
         // Both providers in one city is two ways into one place, the same
         // as it is for a country - so it splits the same way rather than
         // merging into a row that cannot say which you would get.
@@ -454,7 +544,10 @@ function drawList(query) {
     // How many addresses a country has is what decides whether picking it
     // will work, so that is the number shown rather than a speed nobody can
     // act on.
-    meta.textContent = `${c.code.toUpperCase()} \u00b7 ${c.count} relay${c.count === 1 ? '' : 's'}`;
+    // The count and the time, without the country's code in front: the name
+    // above already says which country, and the code was what pushed the
+    // time off the end of the line in a 400px window.
+    meta.textContent = `${c.count} relay${c.count === 1 ? '' : 's'}`;
     if (via) {
       // The provider is the name here, because the country is already said
       // by the row directly above it.
@@ -483,53 +576,61 @@ function drawList(query) {
       meta.textContent = meta.textContent + (said_ || ' · any');
       row.dataset.state = reachState(c);
     } else {
-      // What the last test found, after the count: a time when it answered,
-      // and that it did not when it did not. Nothing at all before it has
-      // been asked, because "untested" and "blocked" must not look alike.
-      meta.textContent = meta.textContent + reachSaid(c);
+      // The phone's line: the time first, with a dot in its colour, then
+      // where and how many. Nothing in front before it has been asked,
+      // because "untested" and "blocked" must not look alike.
       row.dataset.state = reachState(c);
-    }
-    copy.append(name, meta);
-    // Which provider the exits behind this country actually come from.
-    // Worth a tag rather than a number: with both switched on, "12 relays"
-    // says nothing about which credential is about to open one, and the two
-    // behave differently enough on this line to be worth telling apart.
-    // Only on a plain row. Under a group the provider is the row's own name
-    // and a tag repeating it is noise; on the group's head, tags would claim
-    // one exit of each, which is what the rows below it say properly.
-    let tagsFor = null;
-    const by = c.by || {};
-    if (tagCols.length && !via && !heads) {
-      /* One slot per provider, always in the same order, and an empty one
-         where a country has nobody.
-
-         Packed tight, the signs said the wrong thing down the list: a
-         country only Surfshark reaches put its S where every other row has
-         its W, so the eye reading the column saw Windscribe, Windscribe,
-         Windscribe and one of them was not. A row with one sign also
-         dragged the star and the plus left by the width of the sign it did
-         not have, which is the wobble in the first rows of the list.
-
-         So the signs get columns, the way the star and the plus already do.
-         An absent provider is a hole in its own column rather than an
-         absence that moves everything after it. */
-      const tags = document.createElement('span');
-      tags.className = 'row__tags';
-      for (const key of tagCols) {
-        tags.append((by[key] || 0) > 0
-          ? providerTag(key, by[key], (c.byTested || {})[key] || 0,
-                        (c.byOk || {})[key] || 0, (c.byPing || {})[key])
-          : tagGap());
+      const cities = c.cityList || [];
+      const places = cities.length > 1 ? `${cities.length} cities`
+        : (cities[0] && cities[0].name) || '';
+      meta.textContent = '';
+      if (c.tested && !c.ok && c.tested >= c.count) {
+        const lead = document.createElement('span');
+        lead.className = 'row__lead';
+        lead.dataset.level = 'high';
+        lead.textContent = 'Blocked here';
+        meta.append(lead);
+      } else if (c.tested && c.ok && c.ping !== null && c.ping !== undefined) {
+        const dot = document.createElement('i');
+        dot.className = 'row__dot';
+        dot.dataset.level = pingLevel(c.ping);
+        const ms = document.createElement('b');
+        ms.textContent = msSaid(c.ping);
+        meta.append(dot, ms);
       }
-      row.dataset.tags = '1';
-      tagsFor = tags;
+      // "11 relays" breaks before the number, never inside it, when the
+      // line has to wrap.
+      const rest = [places, `${c.count} relay${c.count === 1 ? '' : 's'}`]
+        .filter(Boolean).map((s) => s.replace(/ /g, '\u00a0')).join(' \u00b7 ');
+      meta.append((meta.childNodes.length ? ' \u00b7 ' : '') + rest);
+      // Who runs these exits and what they offer, on a line of their own:
+      // the provider's mark, then 10G and P2P in their colours.
+      const badges = document.createElement('span');
+      badges.className = 'row__badges';
+      const by = c.by || {};
+      for (const k of Object.keys(by).filter((k) => by[k] > 0).sort()) {
+        badges.append(providerTag(k, by[k], (c.byTested || {})[k] || 0,
+                                  (c.byOk || {})[k] || 0, (c.byPing || {})[k]));
+      }
+      for (const [has, word, why, kind] of [
+        [cities.some((x) => x.gbps === 10), '10G', '10 Gbps link', 'fast'],
+        [cities.some((x) => x.p2p), 'P2P', 'P2P allowed', 'p2p'],
+      ]) {
+        if (!has) continue;
+        const m = document.createElement('span');
+        m.className = 'mark';
+        m.dataset.kind = kind;
+        m.textContent = word;
+        m.title = why;
+        badges.append(m);
+      }
+      copy.append(name, meta, badges);
     }
-    // No tick. The chosen row is outlined instead - see .row.is-picked.
+    // A provider or group row: its name and its line, nothing more.
+    if (!copy.childNodes.length) copy.append(name, meta);
+    // No tick. The chosen row's card is outlined instead - see .group.is-in.
     row.append(copy);
-    if (tagsFor) row.append(tagsFor);
-    // A plus rather than a chevron, and inside the row rather than under it:
-    // it is the same control Windscribe puts there, and a row that opens is
-    // more obviously openable with a + on it than with a line beneath.
+    // The phone's chevron, inside the row at its right-hand end.
     if (!via) {
       const many = (c.cityList || []).length > 1;
       // A country with cities opens into them; one without opens straight
@@ -554,7 +655,7 @@ function drawList(query) {
   $('listCount').textContent = String(found.length);
 
   const AT_ONCE = 14;
-  for (const c of found.slice(0, AT_ONCE)) list.append(...buildGroup(c));
+  found.slice(0, AT_ONCE).forEach((c, i) => list.append(...buildGroup(c, i)));
   markCursor();
   // Restored after the first batch, and again once the tail lands: the list
   // is not tall enough to hold the old position until the rest of it is
@@ -574,7 +675,8 @@ function drawList(query) {
     // tail was queued would otherwise have the old countries land under it.
     if (list.dataset.key !== key) return;
     const batch = document.createDocumentFragment();
-    for (const c of rest.slice(at, at + AT_ONCE)) batch.append(...buildGroup(c));
+    rest.slice(at, at + AT_ONCE).forEach((c, i) =>
+      batch.append(...buildGroup(c, AT_ONCE + at + i)));
     list.append(batch);
     if (wasAt && list.scrollTop !== wasAt) list.scrollTop = wasAt;
     at += AT_ONCE;
@@ -661,7 +763,13 @@ window.onConnected = (status) => {
   setIp($('exitIp'), confirmed || (e.unconfirmed ? 'unconfirmed' : 'checking…'),
         !!confirmed);
   $('exitPlace').textContent = measured ? place : `${place} (checking)`;
-  setStatus('CONNECTED', 'on', place, e.host || '');
+  // How long it has been up, ticking beside the place - the desktop's
+  // version of the Android notification's timer.
+  state.since = status.since || Date.now() / 1000;
+  setStatus('CONNECTED', 'on',
+            `${place}<span class="status__clock mono" id="statusClock"></span>`,
+            e.host || '');
+  paintClock();
   $('detIn').textContent = `${e.ip || '—'}:443`;
   $('detOut').textContent = confirmed || '—';
   $('detVia').textContent = e.host || '—';
@@ -679,6 +787,20 @@ window.onConnected = (status) => {
   // first of those seconds.
   window.pywebview.api.traffic().then(window.onTraffic, () => {});
 };
+
+function clockText(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  const two = (n) => String(n).padStart(2, '0');
+  const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60;
+  return h ? `${h}:${two(m)}:${two(s % 60)}` : `${m}:${two(s % 60)}`;
+}
+
+function paintClock() {
+  const el = document.getElementById('statusClock');
+  if (!el || state.mode !== 'on' || !state.since) return;
+  el.textContent = clockText(Date.now() / 1000 - state.since);
+}
+setInterval(paintClock, 1000);
 
 window.onFailed = (err) => {
   state.mode = 'fail';
@@ -726,7 +848,12 @@ window.onFailed = (err) => {
     // never answered, so there is nothing up and the sheet has the detail.
     'moved-and-died': 'The port changed, but the connection did not come back up on it. Connect again.',
   };
-  setHint(say[err.kind] || 'Could not connect. Try once more.', err.kind !== 'cancelled');
+  // A failure without its own sentence says what it was, rather than
+  // "try once more" over a reason nobody gets to read.
+  const why = (err.detail || '').trim();
+  setHint(say[err.kind]
+    || (why ? `Could not connect: ${why.slice(0, 160)}` : 'Could not connect. Try once more.'),
+  err.kind !== 'cancelled');
   render();
 };
 
@@ -739,6 +866,86 @@ window.onDisconnected = (info) => {
     ? `Windows is back to normal. Routed for ${info.minutes} minute${info.minutes === 1 ? '' : 's'}.`
     : 'Windows is back to normal.');
   render();
+};
+
+/* The Window screen: the tray menu's switches, plus keeping the connection
+   when the window closes. Each flip is saved at once; the answer repaints
+   the switches, so a refusal cannot leave one showing a lie. */
+function paintWindowOptions(opts) {
+  for (const sw of document.querySelectorAll('.toggle[data-option]')) {
+    sw.setAttribute('aria-checked', String(!!opts[sw.dataset.option]));
+  }
+  paintDrag(!!opts.lockWindow);
+}
+
+/* There is no Windows frame: the header, and each sheet's heading, are what
+   the window is dragged by - unless its position is locked, in which case
+   they are just a header. pywebview looks the regions up on every press, so
+   adding and removing the class is all locking takes. */
+for (const h of document.querySelectorAll('.sheet__heading')) h.classList.add('drag-zone');
+
+/* A sheet covers the whole window, header and all, so each one carries the
+   window's own minimise and close in a strip along its top - the strip is
+   also something to drag the window by. */
+for (const sheet of document.querySelectorAll('dialog.sheet')) {
+  const bar = document.createElement('div');
+  bar.className = 'winbar drag-zone';
+  for (const [label, icon, act, extra] of [
+    ['Minimise', '#i-minus', () => window.pywebview.api.minimizeWindow(), ''],
+    ['Close', '#i-x', closeRequest, ' icon--shut'],
+  ]) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `icon icon--win${extra}`;
+    // Named for the window, so it is never mistaken for the sheet's own
+    // close button by a screen reader or by anything finding buttons by name.
+    b.setAttribute('aria-label', `${label} window`);
+    b.innerHTML = `<svg class="ico" aria-hidden="true"><use href="${icon}"/></svg>`;
+    b.addEventListener('click', act);
+    bar.appendChild(b);
+  }
+  sheet.prepend(bar);
+}
+
+function paintDrag(locked) {
+  for (const el of document.querySelectorAll('.drag-zone')) {
+    el.classList.toggle('pywebview-drag-region', !locked);
+  }
+}
+paintDrag(false);
+
+$('winMin').addEventListener('click', () => window.pywebview.api.minimizeWindow());
+$('winClose').addEventListener('click', () => closeRequest());
+
+window.onWindowOptions = (opts) => paintWindowOptions(opts || {});
+
+for (const sw of document.querySelectorAll('.toggle[data-option]')) {
+  sw.addEventListener('click', async () => {
+    const on = sw.getAttribute('aria-checked') !== 'true';
+    sw.setAttribute('aria-checked', String(on));
+    const r = await window.pywebview.api.setWindowOption(sw.dataset.option, on);
+    if (r && r.window) paintWindowOptions(r.window);
+  });
+}
+
+$('keepOnClose').addEventListener('click', async () => {
+  const sw = $('keepOnClose');
+  const on = sw.getAttribute('aria-checked') !== 'true';
+  sw.setAttribute('aria-checked', String(on));
+  const r = await window.pywebview.api.setKeepOnClose(on);
+  if (r) sw.setAttribute('aria-checked', String(!!r.keepOnClose));
+});
+
+/* The tray menu asks through here instead of calling the API itself, so that
+   connecting from it walks the same steps as the button - the busy state,
+   the stages, switching away from a connection already up - and the window
+   says the same thing afterwards. Off the call stack, because the caller is
+   a synchronous evaluate_js and these are async and take seconds. */
+window.onTray = (ask) => {
+  setTimeout(() => {
+    if (ask.do === 'act') onAct();
+    else if (ask.do === 'pick' && ask.code) choose(ask.code);
+  }, 0);
 };
 
 window.onRealIp = (info) => {
@@ -1453,9 +1660,35 @@ const WAY_SAID = {
 const WAY_NEEDS_TUNNEL = 'Set the domain and passwords under Settings → '
   + 'Your own tunnel first.';
 
+/* Which ways out can work right now. A provider needs an account and its
+   servers, your server needs the tunnel set up, and server + exit needs
+   both - so in practice the strip is either all three or nothing to choose. */
+function waysOpen() {
+  const provider = !!state.hasCredentials && (state.serverCount || 0) > 0;
+  const tunnel = !!state.tunnelReady
+    || !!(state.tunnel && state.tunnel.domain && state.tunnel.hasPassword);
+  return ['surfshark', 'single', 'multi'].filter((w) =>
+    w === 'surfshark' ? provider : w === 'single' ? tunnel : tunnel && provider);
+}
+
 function paintWay() {
   const way = state.way || 'surfshark';
   const ready = way === 'surfshark' || (state.tunnel && state.tunnel.domain);
+
+  // Only once the window knows both halves - before info() lands, nothing
+  // here can tell a tunnel that is not set up from one not yet asked about.
+  if (state.serverCount !== undefined && state.tunnelReady !== undefined) {
+    const open = waysOpen();
+    for (const b of $('way').querySelectorAll('.seg__opt')) {
+      b.hidden = !open.includes(b.dataset.way);
+    }
+    // One way left is nothing to choose, so the strip is not drawn at all.
+    $('wayWrap').querySelector('.way__row').hidden = open.length < 2;
+    if (open.length && !open.includes(way)) {
+      chooseWay(open[0]);
+      return;
+    }
+  }
 
   $('way').dataset.way = way;
   $('wayWrap').dataset.way = way;
@@ -1465,8 +1698,9 @@ function paintWay() {
   // The picker belongs to the two ways that have a country in them.
   document.querySelector('.stack').dataset.way = way;
 
+  $('wayWhy').textContent = WAY_SAID[way];
   const note = $('wayNote');
-  said(note, ready ? WAY_SAID[way] : WAY_NEEDS_TUNNEL, ready ? '' : 'bad');
+  said(note, ready ? '' : WAY_NEEDS_TUNNEL, ready ? '' : 'bad');
   note.classList.remove('is-swapping');
   void note.offsetWidth;                       // restart it, do not queue it
   note.classList.add('is-swapping');
@@ -1503,16 +1737,26 @@ function paintTunnel(plan) {
   }
   // Set, but never shown. The page is given whether there is one, not what
   // it is, so the placeholder is the only thing that can say so.
-  $('tunnelPass').placeholder = t.hasPassword ? 'saved' : 'not set';
-  $('tunnelApi').placeholder = t.hasApiPassword ? 'saved' : 'not set';
-  paintWayIn(t.edges);
+  $('tunnelPass').placeholder = t.hasPassword ? 'saved' : 'made for you';
+  $('tunnelApi').placeholder = t.hasApiPassword ? 'saved' : 'made for you';
+  paintWayIn(t.edges, t);
+  // An address is not behind Cloudflare: there is no other way in to find.
+  $('tunnelScan').hidden = !!t.isAddress;
 }
 
 /* Which address the client is dialling, which is normally nobody's business
    and is the whole story on the day it stops working. Hidden until there is
    one, so the pane does not grow a line saying nothing. */
-function paintWayIn(edges) {
+function paintWayIn(edges, t) {
   const line = $('tunnelWayIn');
+  // A server by address: the certificate kept the first time it was met is
+  // the one it has to show from then on, and this is how to check it.
+  if (t && t.isAddress) {
+    line.textContent = t.pin ? `Certificate sha256 ${t.pin.slice(0, 16)}…, kept from the first Test.`
+      : 'Its certificate is kept the first time Test reaches it.';
+    line.hidden = false;
+    return;
+  }
   if (!edges || !edges.length) { line.hidden = true; return; }
   const spare = edges.length - 1;
   line.textContent = `Dialling ${edges[0]}`
@@ -1612,11 +1856,23 @@ function peek(fieldId, buttonId) {
 
 function paintPrefs(info) {
   $('sysProxy').setAttribute('aria-checked', String(state.systemProxy));
+  if (info.orbColors) state.orbColors = info.orbColors;
+  paintOrbColors();
+  if (info.theme) applyTheme(info.theme);
+  state.onClose = info.onClose || '';
+  paintOnClose();
+  if (info.window) paintWindowOptions(info.window);
+  $('keepOnClose').setAttribute('aria-checked', String(!!info.keepOnClose));
   if (info.port) state.port = info.port;
   paintPort();
   $('folderPath').textContent = info.folder || '—';
   $('folderCount').textContent =
     `${info.serverCount || 0} servers · ${state.countries.length} countries`;
+  state.serverCount = info.serverCount || 0;
+  state.tunnelReady = !!info.tunnelReady;
+  if (info.quickAt !== undefined) state.quickAt = info.quickAt || 0;
+  if (info.autoQuick !== undefined) state.autoQuick = info.autoQuick !== false;
+  paintQuick();
   $('aboutPaths').textContent = info.about || '';
 
   // Whether anything can connect at all. What is signed in as what is the
@@ -1987,7 +2243,6 @@ function drawPin(p) {
   }
 }
 
-window.onPin = drawPin;
 
 /* One chip, and it is a verb: a pinned folder is worth nothing until
    something is reading from it. */
@@ -2469,7 +2724,15 @@ async function refreshSweep(folder) {
 
 /* ---------------------------------------------------------------- start */
 
-async function boot() {
+/* The main screen, which has been waiting behind data-boot (index.html).
+   Called once the first run has been settled - either because there is
+   nothing of it to do, or because the sheet that does it is already up in
+   front. Harmless twice. */
+function ready() {
+  delete document.documentElement.dataset.boot;
+}
+
+async function bootSteps() {
   const info = await window.pywebview.api.boot();
   state.countries = info.countries || [];
   state.picked = info.picked || 'auto';
@@ -2481,27 +2744,26 @@ async function boot() {
   });
   paintPrefs(info);
 
+  // Nothing to connect with, so the welcome goes up now - before the
+  // intro rather than after it. Opened afterwards, it arrived a beat late:
+  // the intro takes a moment to fade and the main screen it uncovered was
+  // on screen for that moment, Connect button and all.
+  const welcome = !info.hasCredentials && !info.tunnelReady;
+  if (welcome) openWelcome();
+  if (!info.introSeen) await runIntro();
+  ready();
+
   if (!info.hasCredentials) {
     setStatus('NOT SET UP', 'fail', 'No sign-in details yet', '');
-    setHint('Put your Surfshark service username and password in Settings, and this can connect.', true);
+    setHint('Add an account, or your own server, and this can connect.', true);
     render();
-    // The sheet is about to be opened without anyone pressing the cog, so
-    // the two things in it that only refreshPrefs ever painted have to be
-    // painted here as well. Left unpainted, "Connect through" showed its
-    // markup defaults - both boxes live and empty - and ticking Surfshark
-    // before there was an account to tick it for got a refusal that then sat
-    // under the roster in red for the rest of the session.
+    // Nothing to connect with: the welcome above asks how it will
+    // connect, rather than opening Settings on a page of options. A copy
+    // with its own server set up already has an answer and carries on to
+    // the main screen.
     paintUse(info);
     acctRefresh().catch(() => {});
-    // Opened rather than pointed at. There is exactly one thing to do from
-    // here and one place to do it, and making somebody find the cog first is
-    // asking them to guess at a step the app already knows.
-    $('prefs').showModal();
-    refreshSweep();
-    refreshPin(true);
-    // Straight at the one thing there is to do from here.
-    setTimeout(() => $('acctAdd').focus(), 60);
-    return;
+    if (welcome) return;
   }
   if (info.recovered) {
     setHint('The app did not close properly last time. Windows proxy settings have been put back.');
@@ -2516,6 +2778,9 @@ async function boot() {
     if (!info.recovered) setHint(`${state.countries.length} countries ready.`);
     render();
   }
+  // Signed in, but an account with no servers yet: get them ready now.
+  const lacking = providersWithoutServers(info);
+  if (lacking.length && s.state !== 'on') prepareServers(lacking[0]);
   // Asked for once the window is already usable: it is a network round trip
   // and nothing on screen depends on it arriving.
   window.pywebview.api.whoami();
@@ -2552,6 +2817,59 @@ for (const sheet of document.querySelectorAll('dialog.sheet')) {
 }
 
 $('act').addEventListener('click', onAct);
+
+/* The orb as a button. A press does what the Connect button does; held for
+   600 ms it reconnects - disconnect, then connect to the same pick - which
+   is the one thing a stuck connection usually needs, without two presses
+   and a wait between them. */
+async function reconnect() {
+  if (state.mode === 'busy') return;
+  if (state.mode === 'on') await onAct();
+  await onAct();
+}
+
+(function () {
+  const orb = $('orb');
+  let timer = 0;
+  let held = false;
+  const lift = () => { clearTimeout(timer); orb.classList.remove('is-pressed'); };
+  orb.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || !state.hasCredentials) return;
+    held = false;
+    orb.classList.add('is-pressed');
+    timer = setTimeout(() => { held = true; lift(); reconnect(); }, 600);
+  });
+  orb.addEventListener('pointerup', lift);
+  orb.addEventListener('pointerleave', lift);
+  orb.addEventListener('click', () => {
+    if (held) { held = false; return; }
+    if (state.hasCredentials) onAct();
+  });
+  orb.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && state.hasCredentials) {
+      e.preventDefault();
+      onAct();
+    }
+  });
+})();
+
+/* The orb's colours: traffic light or the desktop's own. */
+function paintOrbColors() {
+  const seg = $('orbColors');
+  seg.dataset.orb = state.orbColors || 'signal';
+  for (const b of seg.querySelectorAll('.seg__opt')) {
+    b.setAttribute('aria-pressed', String(b.dataset.orb === seg.dataset.orb));
+  }
+}
+
+for (const b of $('orbColors').querySelectorAll('.seg__opt')) {
+  b.addEventListener('click', async () => {
+    state.orbColors = b.dataset.orb;
+    paintOrbColors();
+    render();
+    await window.pywebview.api.setOrbColors(b.dataset.orb);
+  });
+}
 $('pick').addEventListener('click', openPicker);
 $('pickerClose').addEventListener('click', () => shut($('picker')));
 $('search').addEventListener('input', (e) => {
@@ -2687,8 +3005,19 @@ $('tunnelCopy').addEventListener('click', async (e) => {
   const r = await window.pywebview.api.installCommand($('tunnelDomain').value.trim());
   if (!r || !r.ok) { said($('tunnelSaid'), (r && r.error) || 'nothing to copy', 'bad'); return; }
   await copyText(e.currentTarget, r.command);
-  said($('tunnelSaid'), 'Copied — paste it into SSH as root.', 'good');
+  // The passwords may have just been made, and the address saved with them.
+  paintTunnel(await window.pywebview.api.tunnelPlan());
+  said($('tunnelSaid'), 'Copied — paste it into SSH as root, then press Test.', 'good');
 });
+for (const [id, key, what] of [['tunnelCopyStatus', 'status', 'status'],
+                               ['tunnelCopyUninstall', 'uninstall', 'uninstall']]) {
+  $(id).addEventListener('click', async (e) => {
+    const r = await window.pywebview.api.installCommand($('tunnelDomain').value.trim());
+    if (!r || !r.ok) { said($('tunnelSaid'), (r && r.error) || 'nothing to copy', 'bad'); return; }
+    await copyText(e.currentTarget, r[key]);
+    said($('tunnelSaid'), `Copied the ${what} command.`, 'good');
+  });
+}
 
 /* The picker is a Windows dialog and it is its own feedback while it is up.
    What these are for is the part after it closes - reading a folder of two
@@ -2978,6 +3307,16 @@ initConnectionCore();
 // and a settings sheet opened in the first second should already have it.
 wireInfoButtons();
 wireFolds();
+async function boot() {
+  try {
+    await bootSteps();
+  } finally {
+    // Whatever happened - a step that threw, Python not answering - the
+    // window is not left as a header over nothing.
+    ready();
+  }
+}
+
 window.addEventListener('pywebviewready', boot);
 if (window.pywebview && window.pywebview.api) boot();
 
@@ -3272,7 +3611,8 @@ async function wsSubmit() {
   if (r.credentials) {
     said($('acctSaid'), 'Signed in as ' + r.username + '. The proxy credential '
       + 'is on file' + (r.remembered ? ' and the password is remembered' : '')
-      + ' - now press Get servers.', 'good');
+      + '.', 'good');
+    prepareServers('windscribe');
   } else {
     said($('acctSaid'), 'Signed in as ' + r.username + ', but the proxy '
       + 'credential did not come back: ' + r.error, 'bad');
@@ -3476,36 +3816,39 @@ const acct = {
 };
 
 function acctBusy(on) {
-  for (const id of ['acctAdd', 'acctSave', 'acctCancel', 'acctUser',
+  for (const id of ['acctSave', 'acctCancel', 'acctUser',
                     'acctPass', 'acctTwo', 'acctLabel', 'wsRefresh',
                     'useSurfsharkDo', 'useWindscribeDo']) {
     const el = $(id);
     if (el) el.disabled = on;
   }
-  for (const b of document.querySelectorAll('#acctList button')) b.disabled = on;
+  for (const b of document.querySelectorAll('.prov__accts button')) {
+    b.disabled = on;
+  }
 }
 
 function acctPaint() {
-  const list = $('acctList');
-  list.textContent = '';
-
-  if (!acct.rows.length) {
-    const none = document.createElement('p');
-    none.className = 'acct__none';
-    none.textContent = 'No accounts yet. Add one and this app has something '
-      + 'to connect with.';
-    list.appendChild(none);
+  // Each provider's accounts live in that provider's card.
+  const lists = {};
+  for (const box of document.querySelectorAll('.prov__accts')) {
+    box.textContent = '';
+    lists[box.dataset.for] = box;
   }
 
   for (const row of acct.rows) {
+    const list = lists[row.provider];
+    if (!list) continue;
     const el = document.createElement('div');
     el.className = 'acct__row';
     el.dataset.provider = row.provider;
     el.dataset.active = row.active ? '1' : '0';
+    el.dataset.ready = row.signedIn ? '1' : '0';
 
+    // An initial in a circle rather than the provider's name in a pill:
+    // the card the row sits in already says which provider it is.
     const tag = document.createElement('span');
     tag.className = 'acct__tag';
-    tag.textContent = row.providerName;
+    tag.textContent = (row.label || row.username || '?').slice(0, 1).toUpperCase();
 
     const who = document.createElement('span');
     who.className = 'acct__who';
@@ -3534,15 +3877,43 @@ function acctPaint() {
       use.addEventListener('click', () => acctUse(row.id, use));
       act.appendChild(use);
     }
+    // Fetch and pin this account's servers from right here, as the Android
+    // app's account cards do - not two screens away.
+    const pinIt = document.createElement('button');
+    pinIt.className = 'acct__icon';
+    pinIt.type = 'button';
+    pinIt.title = 'Get this provider\'s servers and pin them';
+    pinIt.setAttribute('aria-label', pinIt.title);
+    pinIt.append(icon('#i-pin', 'ico ico--sm'));
+    pinIt.addEventListener('click', () => prepareServers(row.provider));
+    act.appendChild(pinIt);
+    // Remove asks once more, in place: the first press arms it, the second
+    // removes, and leaving it alone for a few seconds disarms it.
     const drop = document.createElement('button');
-    drop.className = 'btn btn--quiet btn--auto';
+    drop.className = 'btn btn--quiet btn--auto acct__drop';
     drop.type = 'button';
     drop.textContent = 'Remove';
-    drop.addEventListener('click', () => acctRemove(row.id, row.label, drop));
+    drop.addEventListener('click', () => {
+      if (drop.dataset.sure !== '1') {
+        drop.dataset.sure = '1';
+        drop.textContent = 'Remove?';
+        setTimeout(() => {
+          drop.dataset.sure = '0';
+          drop.textContent = 'Remove';
+        }, 3000);
+        return;
+      }
+      acctRemove(row.id, row.label, drop);
+    });
     act.appendChild(drop);
 
     el.append(tag, who, act);
     list.appendChild(el);
+  }
+
+  for (const card of document.querySelectorAll('.prov')) {
+    const key = card.dataset.provider;
+    card.dataset.account = acctTaken(key) ? '1' : '0';
   }
 
   // The pill counts what is usable, not what is listed - a roster entry with
@@ -3550,7 +3921,9 @@ function acctPaint() {
   const usable = acct.rows.filter((r) => r.signedIn).length;
   const pill = $('acctPill');
   pill.dataset.state = usable ? 'on' : 'off';
-  pill.textContent = usable ? `${usable} ready` : 'none';
+  pill.textContent = usable
+    ? `${usable} account${usable === 1 ? '' : 's'}` : 'no accounts';
+  paintAcctHero();
 
   // The refresh icon lives in the Windscribe card now, and only means
   // anything while there is a Windscribe account for it to be about.
@@ -3558,6 +3931,27 @@ function acctPaint() {
   // never anything to refresh.
   const ws = acct.rows.find((r) => r.provider === 'windscribe' && r.active);
   $('wsRefresh').hidden = !ws;
+}
+
+/* The number across the top of Accounts: how many providers have both an
+   account and pinned servers, which is what it takes to connect through
+   one. Painted from both halves - the roster and the providers' state -
+   because either can change without the other. */
+function paintAcctHero() {
+  const per = state.provState || {};
+  const keys = ['surfshark', 'windscribe'];
+  const ready = keys.filter((k) => (per[k] || {}).usable).length;
+  $('acctReadyN').textContent = String(ready);
+  $('acctReadyN').closest('.accthero').dataset.ready = ready ? '1' : '0';
+  const say = $('acctHeroSay');
+  // The (i) button lives inside the title, so only the words are replaced.
+  const words = say.firstChild && say.firstChild.nodeType === Node.TEXT_NODE
+    ? say.firstChild : say.insertBefore(document.createTextNode(''), say.firstChild);
+  words.textContent = ready ? 'providers ready to connect'
+    : acct.rows.length ? 'ready yet - get the servers and pin them'
+    : 'ready - add an account to connect';
+  const bars = document.querySelectorAll('.accthero__bar i');
+  bars.forEach((b, i) => { b.dataset.on = i < ready ? '1' : '0'; });
 }
 
 async function acctRefresh() {
@@ -3580,34 +3974,56 @@ function acctShowForm(on) {
   $('acctTwo').value = '';
   $('acctLabel').value = '';
   said($('acctNewSaid'), '');
+  // One account per provider: a provider that has its account already
+  // gets the sentence saying so instead of the form.
   acctSetProvider(acct.provider);
+  const taken = acctTaken(acct.provider);
+  $('acctFull').hidden = !taken;
+  $('acctForm').hidden = taken;
   if (!dlg.open) dlg.showModal();
-  $('acctUser').focus();
+  if (!taken) $('acctUser').focus();
 }
+
+/* One account per provider. */
+function acctTaken(provider) {
+  return acct.rows.some((r) => r.provider === provider);
+}
+
+const ACCT_HERO = {
+  surfshark: {
+    mark: '#i-ss',
+    say: 'The service login from Surfshark’s manual-setup page, not your email.',
+    user: 'Service username', hint: 'from the manual-setup page', go: 'Save account',
+  },
+  windscribe: {
+    mark: '#i-ws',
+    say: 'Your Windscribe login. A short puzzle comes next, asked once.',
+    user: 'Username or email', hint: 'your Windscribe login', go: 'Continue to the puzzle',
+  },
+};
 
 function acctSetProvider(which) {
   acct.provider = which;
-  for (const opt of $('acctWhich').querySelectorAll('.pair__opt')) {
-    opt.setAttribute('aria-selected', String(opt.dataset.provider === which));
-  }
+  const spec = ACCT_HERO[which];
+  const name = PROVIDER_NAMES[which];
+  $('acctDlgTitle').textContent = `Add a ${name} account`;
+  $('acctHero').dataset.provider = which;
+  $('acctHeroMark').setAttribute('href', spec.mark);
+  $('acctHeroName').textContent = `Connect ${name}`;
+  $('acctNewSay').textContent = spec.say;
+  $('acctSafeTo').textContent = name;
+  $('acctSave').textContent = spec.go;
   // Surfshark's is a service credential off a web page; Windscribe's is the
   // account you log in with. Saying which is the difference between pasting
   // the right thing and being refused with no idea why.
-  $('acctUserCap').textContent = which === 'windscribe'
-    ? 'Username or email' : 'Service username';
+  $('acctUserCap').textContent = spec.user;
+  $('acctUser').placeholder = spec.hint;
   // Two-factor is a login thing, and only one of these is a login.
   $('acctTwoWrap').hidden = which !== 'windscribe';
-  said($('acctNewSaid'), which === 'windscribe'
-    ? 'Signing in fetches a puzzle to solve. It is asked once.'
-    : 'From the manual-setup page — not the email you log in with.');
+  said($('acctNewSaid'), '');
 }
 
-$('acctWhich').addEventListener('click', (e) => {
-  const opt = e.target.closest('.pair__opt');
-  if (opt) acctSetProvider(opt.dataset.provider);
-});
 
-$('acctAdd').addEventListener('click', () => acctShowForm(true));
 $('acctCancel').addEventListener('click', () => acctShowForm(false));
 $('acctDlgClose').addEventListener('click', () => acctShowForm(false));
 
@@ -3615,6 +4031,11 @@ $('acctSave').addEventListener('click', async () => {
   const user = $('acctUser').value.trim();
   const pass = $('acctPass').value;
   const label = $('acctLabel').value.trim();
+  if (acctTaken(acct.provider)) {
+    said($('acctNewSaid'), `${PROVIDER_NAMES[acct.provider]} already has its account. `
+      + 'Remove it first to add a different one.', 'bad');
+    return;
+  }
   if (!user) { said($('acctNewSaid'), 'Enter the username.', 'bad'); return; }
   if (!pass) { said($('acctNewSaid'), 'Enter the password.', 'bad'); return; }
 
@@ -3638,6 +4059,9 @@ $('acctSave').addEventListener('click', async () => {
     said($('acctSaid'), `Saved and in use: ${r.label}.`, 'good');
     await acctRefresh();
     await refreshPrefs();
+    // An account is not yet something to connect with: get its servers and
+    // pin them now, rather than wait for somebody to find the buttons.
+    prepareServers('surfshark');
     return;
   }
 
@@ -3741,7 +4165,7 @@ async function fetchWindscribe(btn) {
    reading, which is the point - the paragraphs that used to carry this were
    read by nobody who needed them. */
 const PROV_DO = {
-  signin: { label: 'Sign in', lead: true },
+  signin: { label: 'Add an account', lead: true },
   fetch: { label: 'Get servers', lead: true },
   pin: { label: 'Pin them', lead: true },
   update: { label: 'Update servers', lead: false },
@@ -3784,11 +4208,6 @@ async function provDo(key, step, btn) {
 $('useOpts').addEventListener('click', (e) => {
   const btn = e.target.closest('.prov__do');
   if (!btn) return;
-  // Inside a <label>, so a click here would otherwise tick the box behind it
-  // as well - and pressing "Get servers" is not asking to connect through a
-  // provider that has none.
-  e.preventDefault();
-  e.stopPropagation();
   provDo(btn.closest('.prov').dataset.provider, btn.dataset.step, btn);
 });
 
@@ -3983,6 +4402,7 @@ function paintUse(info) {
   const usable = Object.keys(per).filter((k) => per[k].usable);
   const chosen = (info && info.providers) || usable;
   state.providers = chosen;
+  state.provState = per;
 
   for (const key of ['surfshark', 'windscribe']) {
     const cap = key[0].toUpperCase() + key.slice(1);
@@ -4015,7 +4435,18 @@ function paintUse(info) {
     go.dataset.lead = spec.lead ? '1' : '0';
     go.textContent = step === 'pin' ? `Pin ${has.waiting}` : spec.label;
     go.hidden = false;
+
+    // Account, servers, pinned - ticked off in the card as each is done.
+    const done = {
+      account: has.account,
+      servers: has.servers > 0 || has.waiting > 0,
+      pinned: has.servers > 0,
+    };
+    for (const li of $('use' + cap + 'Steps').children) {
+      li.dataset.done = done[li.dataset.step] ? '1' : '0';
+    }
   }
+  paintAcctHero();
 
   // A refusal that has since been answered. The note under this chooser
   // records which providers it was about, and once they have what they were
@@ -4124,6 +4555,24 @@ function reachSaid(c) {
   return c.ping === null ? '' : ` · ${msSaid(c.ping)}`;
 }
 
+/* A time's colour, the phone's thresholds: under 150 ms is good, under 300
+   is fair, the rest is slow. */
+function pingLevel(ms) {
+  return ms >= 300 ? 'high' : ms >= 150 ? 'mid' : 'low';
+}
+
+/* Whether the pick is anywhere inside this country: the country itself, a
+   city in it, one provider's share of it, or one of its servers. */
+function pickIsIn(c) {
+  const p = state.picked || '';
+  if (!p || p === 'auto') return false;
+  if (p.startsWith('file:')) {
+    const stem = p.slice(5).replace(/^\d+\.\d+s-/, '').slice(0, 2).toLowerCase();
+    return stem === c.code || (stem === 'gb' && c.code === 'uk');
+  }
+  return p.split(':')[0].split('/')[0] === c.code;
+}
+
 function reachState(c) {
   if (!c || !c.tested) return 'untested';
   if (!c.ok) return c.tested >= c.count ? 'blocked' : 'some';
@@ -4147,6 +4596,59 @@ async function startReach(code) {
   said($('reachSaid'), `Asking ${r.total} in ${nameOf(code)}…`);
 }
 
+/* One exit per country, six at a time. By hand from Test all or Settings;
+   on its own when the list opens and the last run is over six hours old -
+   never with the tunnel up, where every time would be the tunnel's. */
+async function startQuick(auto) {
+  if (state.testing) {
+    if (state.testing === 'quick' && !auto) await window.pywebview.api.cancelReach();
+    return;
+  }
+  const r = await window.pywebview.api.quickTest();
+  if (!r.ok) {
+    if (!auto) {
+      said($('reachSaid'), r.error, 'bad');
+      said($('quickSaid'), r.error, 'bad');
+    }
+    return;
+  }
+  state.testing = 'quick';
+  paintTesting();
+  said($('reachSaid'), `Timing ${r.total} countries…`);
+}
+
+function maybeQuick() {
+  const stale = Date.now() / 1000 - (state.quickAt || 0) > 6 * 3600;
+  const up = state.mode === 'on' || state.mode === 'busy';
+  if (state.autoQuick !== false && stale && !state.testing && !up) startQuick(true);
+}
+
+/* Settings' Quick timing: when it last ran, whether it runs on its own. */
+function paintQuick() {
+  const pill = $('quickPill');
+  if (!pill) return;
+  const running = state.testing === 'quick';
+  const at = state.quickAt || 0;
+  const mins = at ? Math.floor((Date.now() / 1000 - at) / 60) : null;
+  pill.textContent = running ? 'timing'
+    : mins === null ? 'never'
+      : mins < 60 ? `${mins}m ago`
+        : mins < 1440 ? `${Math.floor(mins / 60)}h ago` : `${Math.floor(mins / 1440)}d ago`;
+  pill.dataset.state = running || (mins !== null && mins < 360) ? 'on' : 'off';
+  $('autoQuick').setAttribute('aria-checked', String(state.autoQuick !== false));
+  const run = $('quickRun');
+  run.textContent = running ? 'Stop' : 'Time every country';
+  run.disabled = !!state.testing && !running;
+}
+
+$('testAll').addEventListener('click', () => startQuick(false));
+$('quickRun').addEventListener('click', () => startQuick(false));
+$('autoQuick').addEventListener('click', async () => {
+  state.autoQuick = state.autoQuick === false;
+  paintQuick();
+  await window.pywebview.api.setAutoQuick(state.autoQuick);
+});
+
 /* The bolt that is running, marked without rebuilding the list under the
    reader. Every other bolt goes quiet with it: a second press would only
    stop the first, and a row that looks pressable while it is not is worse
@@ -4160,6 +4662,15 @@ function paintTesting() {
       : 'Test the servers here');
     el.title = busy ? 'Stop' : 'Test these';
   }
+  const all = $('testAll');
+  const quick = state.testing === 'quick';
+  all.dataset.running = quick ? '1' : '0';
+  all.disabled = !!state.testing && !quick;
+  $('testAllLabel').textContent = quick ? 'Stop' : 'Test all';
+  // The word is out of sight now, so the tooltip says it as well.
+  all.title = quick ? 'Stop'
+    : 'Test all: time one exit in every country. Times are from the last test.';
+  paintQuick();
 }
 
 /* Each result as it lands, written straight onto the row it belongs to.
@@ -4238,6 +4749,17 @@ window.onReach = (p) => {
 };
 
 window.onReachDone = (r) => {
+  const quick = r.code === 'quick';
+  // A quick run over an open list keeps the list where it is: the order
+  // and which rows count as timed are taken now, before the new answers.
+  if (quick && r.ok && $('picker').open && !$('search').value.trim()) {
+    state.freeze = {
+      order: rows().map((x) => x.dataset.code)
+        .filter((code) => code && code !== 'auto' && !/[/:]/.test(code)),
+      tested: new Set((state.countries || []).filter((c) => c.tested).map((c) => c.code)),
+    };
+  }
+  if (quick && r.quickAt) state.quickAt = r.quickAt;
   state.testing = null;
   paintTesting();
   $('reachBar').style.setProperty('--at', '0%');
@@ -4248,7 +4770,7 @@ window.onReachDone = (r) => {
   // Named, because a run is now about one place and the line under the list
   // is the only thing that says which. "30 of 37 answered" over a list of
   // ninety countries is a sentence about nothing in particular.
-  const where = r.code ? ` in ${nameOf(r.code)}` : '';
+  const where = r.code && !quick ? ` in ${nameOf(r.code)}` : '';
   // A run where the exits turned the account away is not a run about the
   // exits, and "0 of 37 answered" reads as thirty-seven broken servers. The
   // same account is at every one of those addresses, so the count is one
@@ -4282,8 +4804,12 @@ window.onReachDone = (r) => {
         : refused
           ? `${answered} of ${r.tested} answered${where}. `
             + `${refused} turned these credentials away.`
-          : `${answered} of ${r.tested} answered${where}.`,
+          : quick
+            ? `${answered} of ${r.tested} countries answered.`
+              + (state.freeze ? ' New times are in — press Fastest first to put them in order.' : '')
+            : `${answered} of ${r.tested} answered${where}.`,
     answered ? 'good' : 'bad');
+  if (quick) said($('quickSaid'), `${answered} of ${r.tested} countries answered.`);
   // The list is rebuilt rather than patched: every row's order can change,
   // because answering ones sort above blocked ones.
   $('list').dataset.key = '';
@@ -4314,10 +4840,35 @@ window.onReachDone = (r) => {
    individual ones are worth being able to look at - "why is this country
    slow" and "is this one blocked" are questions about a server. */
 
+/* A server's own number out of its host or filename: ar-008.x.com is #008. */
+function serverNumber(host) {
+  const m = /[a-z]{2}-(\d{2,4})(?:\.|_|$)/.exec(String(host || '').toLowerCase());
+  return m ? `#${m[1]}` : '';
+}
+
+/* The engine's word for why an exit failed, said for a person. */
+function failReason(why) {
+  const w = String(why || '');
+  if (!w) return 'It did not answer.';
+  if (/timeout|timed out|deadline/i.test(w)) {
+    return 'It did not answer in time. It may be down, or blocked on this line.';
+  }
+  if (/refused/i.test(w)) return 'It refused the connection.';
+  if (/407|auth/i.test(w)) return 'It turned the account away.';
+  return w.charAt(0).toUpperCase() + w.slice(1);
+}
+
 async function toggleExits(code, after) {
   const open = state.openExits === code;
   state.openExits = open ? null : code;
-  for (const el of document.querySelectorAll('.exits')) el.remove();
+  for (const el of document.querySelectorAll('.exits')) {
+    const group = el.parentElement;
+    el.remove();
+    // A card shut again when its servers go, unless its cities are open.
+    if (group && group.classList.contains('group') && !group.querySelector('.group__in')) {
+      group.classList.remove('is-open');
+    }
+  }
   for (const b of document.querySelectorAll('[data-exits]')) {
     // The attribute and nothing else. The sign is two paths now and CSS
     // folds one of them away; writing a character in here emptied the svg
@@ -4374,24 +4925,45 @@ async function toggleExits(code, after) {
     // "Jakarta - id-jak" eight times over: the city said eight times, and
     // the address - the only thing that differed - crowded to the edge.
     name.textContent = (where && shared) ? where
-      : where && where !== short ? `${where} · ${short}` : short;
+      : where && where !== short ? where : short;
+    // The server's own number tells two exits in one city apart: ar-008.
+    const num = serverNumber(x.host || x.file);
+    if (num && where) {
+      const n = document.createElement('span');
+      n.className = 'exit__num';
+      n.textContent = num;
+      name.append(n);
+    }
     name.title = x.host || '';
 
     const meta = document.createElement('span');
     meta.className = 'exit__meta';
     meta.textContent = x.ip;
 
-    const said_ = document.createElement('span');
+    let said_ = document.createElement('span');
     said_.className = 'exit__ping';
-    said_.textContent = x.ok === true ? msSaid(x.ms)
-      : x.ok === false ? (x.why || 'no answer')
-        : 'not tested';
-    if (x.ok === false) said_.title = x.why || '';
+    said_.textContent = x.ok === true ? msSaid(x.ms) : x.ok === false ? '' : 'not tested';
+    if (x.ok === false) {
+      // A red mark where the time would be; the reason is behind it.
+      said_ = document.createElement('span');
+      said_.className = 'exit__why';
+      said_.tabIndex = 0;
+      said_.setAttribute('aria-label', failReason(x.why));
+      said_.append(icon('#i-alert', 'ico'));
+      const bubble = document.createElement('span');
+      bubble.className = 'info__bubble';
+      bubble.setAttribute('role', 'tooltip');
+      bubble.textContent = failReason(x.why);
+      said_.append(bubble);
+    }
 
     row.append(sign, name, meta, said_);
     box.append(row);
   }
   after.insertAdjacentElement('afterend', box);
+  const group = after.parentElement && after.parentElement.classList.contains('group')
+    ? after.parentElement : null;
+  if (group) group.classList.add('is-open');
 }
 
 
@@ -4478,36 +5050,14 @@ function providerTag(key, count, tested, ok, ping) {
   return t;
 }
 
-/* Which providers this list has signs for, in the order they are always
-   drawn in. Only the ones that actually back something: a column standing
-   empty down the whole list is 18px of nothing on every row. */
-function tagColumns() {
-  const seen = new Set();
-  for (const c of state.countries || []) {
-    const by = c.by || {};
-    for (const key of Object.keys(by)) if (by[key] > 0) seen.add(key);
-  }
-  const known = Object.keys(PROVIDER_NAMES).filter((k) => seen.has(k));
-  const rest = [...seen].filter((k) => !(k in PROVIDER_NAMES)).sort();
-  return known.concat(rest);
-}
-
-/* A provider's column, where this country has no such provider. It holds the
-   space and says nothing - the row__tag--none rule takes the box away and
-   leaves the width.
-
-   Empty and unmarked rather than aria-hidden: a span with no text and no
-   role is not announced anyway, and hiding it would take it out of the
-   layout audit as well, which is the one thing that can tell us these
-   columns have stopped lining up. */
-function tagGap() {
-  const el = document.createElement('span');
-  el.className = 'row__tag row__tag--none';
-  return el;
-}
-
 function isFavourite(code) {
   return (state.favourites || []).includes(code);
+}
+
+/* Starred itself, or one of its cities is: either way it goes to the top. */
+function starredIn(c) {
+  return isFavourite(c.code)
+    || (c.cityList || []).some((x) => isFavourite(`${c.code}/${x.code}`));
 }
 
 async function toggleFavourite(code) {
@@ -4536,7 +5086,7 @@ async function toggleFavourite(code) {
 function sortCountries(list) {
   const kind = state.sortBy || 'ping';
   const dead = (c) => (c.tested && !c.ok ? 1 : 0);
-  const fav = (c) => (isFavourite(c.code) ? 0 : 1);
+  const fav = (c) => (starredIn(c) ? 0 : 1);
   const cmp = {
     ping: (a, b) => (a.ping === null) - (b.ping === null)
       || (a.ping || 0) - (b.ping || 0) || a.name.localeCompare(b.name),
@@ -4593,12 +5143,11 @@ function expander(kind, code, on) {
   svg.setAttribute('class', 'ico expand__ico');
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('aria-hidden', 'true');
-  for (const [cls, d] of [['expand__h', 'M5 12h14'], ['expand__v', 'M12 5v14']]) {
-    const path = document.createElementNS(NS, 'path');
-    path.setAttribute('class', cls);
-    path.setAttribute('d', d);
-    svg.append(path);
-  }
+  // A chevron that turns over when the row is open, as on the phone.
+  const path = document.createElementNS(NS, 'path');
+  path.setAttribute('class', 'expand__chev');
+  path.setAttribute('d', 'M6 9l6 6 6-6');
+  svg.append(path);
   el.append(svg);
   return el;
 }
@@ -4651,62 +5200,63 @@ function buildCity(c, city, via) {
   // Windscribe names every one of its cities - Paris is Seine, Dallas is
   // Ranch, South Bend is Hawkins - and it is the only part of their list
   // that is theirs rather than a fact about geography. Worth keeping.
+  let nick = null;
   if (city.nick) {
-    const nick = document.createElement('i');
+    nick = document.createElement('i');
     nick.className = 'row__nick';
     nick.textContent = city.nick;
-    name.append(' ', nick);
   }
 
   const meta = document.createElement('span');
   meta.className = 'row__meta';
   const n = via ? (city.by || {})[via] || 0 : city.count;
   const bits = [`${n} relay${n === 1 ? '' : 's'}`];
-  if (city.ping !== null && city.ping !== undefined) bits.push(msSaid(city.ping));
-  if (city.tested && !city.ok && city.tested >= city.count) {
-    bits.push('blocked');
-  }
+  // The load down here, the time on the right: the time is what picks a
+  // city, so it is the number that stands out.
+  if (city.load !== null && city.load !== undefined) bits.push(`${loadSaid(city.load)} load`);
   meta.textContent = bits.join(' · ');
   copy.append(name, meta);
 
   const marks = document.createElement('span');
   marks.className = 'row__marks';
-  // Load is the number that decides between two cities that both answer, and
-  // the one that goes stale fastest - it was read when the list was fetched.
-  if (city.load !== null && city.load !== undefined) {
-    const load = document.createElement('span');
-    load.className = 'load';
-    load.dataset.level = city.load >= 60 ? 'high' : city.load >= 25 ? 'mid' : 'low';
-    load.style.setProperty('--at', `${Math.min(100, city.load)}%`);
-    load.title = `${loadSaid(city.load)} loaded when the list was fetched`;
-    marks.append(load);
+  // The city's best time where the load bar was, coloured by how good it
+  // is - or that nothing there answered.
+  const blocked = city.tested && !city.ok && city.tested >= city.count;
+  if (blocked || (city.ping !== null && city.ping !== undefined)) {
+    const ping = document.createElement('span');
+    ping.className = 'row__ping';
+    ping.textContent = blocked ? 'blocked' : msSaid(city.ping);
+    ping.dataset.level = blocked ? 'high' : pingLevel(city.ping);
+    marks.append(ping);
   }
-  if (city.gbps === 10) {
-    const fast = document.createElement('span');
-    fast.className = 'mark';
-    fast.textContent = '10G';
-    fast.title = '10 Gbps link';
-    marks.append(fast);
-  }
-  if (city.p2p) {
-    const p2p = document.createElement('span');
-    p2p.className = 'mark';
-    p2p.textContent = 'P2P';
-    p2p.title = 'P2P allowed here';
-    marks.append(p2p);
-  }
+  // The nickname after the name, where it is the part of the line that can
+  // go without anyone missing it.
+  if (nick) name.append(' ', nick);
 
-  const from = Object.keys(city.by || {}).filter((k) => city.by[k] > 0).sort();
-  if (from.length) {
-    const tags = document.createElement('span');
-    tags.className = 'row__tags';
-    for (const key of from) {
-      // A city's own numbers are not split per provider, so the sign says
-      // how many are there and leaves the verdict to the country's.
-      tags.append(providerTag(key, city.by[key], 0, 0, null));
-    }
-    marks.append(tags);
+  // The phone's second line: whose relays, 10G and P2P, then the count and
+  // the load - so the name line keeps its room for the name and the time.
+  const lead = [];
+  for (const key of Object.keys(city.by || {}).filter((k) => city.by[k] > 0).sort()) {
+    // A city's own numbers are not split per provider, so the sign says
+    // how many are there and leaves the verdict to the country's.
+    lead.push(providerTag(key, city.by[key], 0, 0, null));
   }
+  for (const [has, word, why, kind] of [
+    [city.gbps === 10, '10G', '10 Gbps link', 'fast'],
+    [city.p2p, 'P2P', 'P2P allowed here', 'p2p'],
+  ]) {
+    if (!has) continue;
+    const m = document.createElement('span');
+    m.className = 'mark';
+    m.dataset.kind = kind;
+    m.textContent = word;
+    m.title = why;
+    lead.push(m);
+  }
+  const count = document.createElement('span');
+  count.className = 'row__count';
+  count.textContent = meta.textContent;
+  meta.replaceChildren(...lead, count);
   row.append(copy, marks,
              railFor(code, 'exits', state.openExits === code));
   return row;
@@ -4765,6 +5315,9 @@ $('sortBy').addEventListener('click', async (e) => {
   const opt = e.target.closest('.pair__opt');
   if (!opt) return;
   state.sortBy = opt.dataset.sort;
+  // The list is laid out afresh, so the line asking for it is done with.
+  if (state.freeze) said($('reachSaid'), '');
+  state.freeze = null;
   paintSort();
   $('list').dataset.key = '';
   drawList($('search').value.trim());
@@ -5131,3 +5684,262 @@ $('srcBrowse').addEventListener('click', async (e) => {
   // list and the settings file agreeing about which pool is on.
   await useSource(`folder:${r.folder}`);
 });
+
+
+/* ------------------------------------------------------------ first run */
+
+/* The intro: five slides, the first time this copy opens. Resolves when it
+   is finished with, by Skip or Get started, and says so to Python so it is
+   never shown again. */
+function runIntro() {
+  return new Promise((done) => {
+    const dlg = $('introDlg');
+    const slides = [...dlg.querySelectorAll('.intro__slide')];
+    const dots = [...$('introDots').children];
+    let at = 0;
+    const go = (to) => {
+      at = to;
+      slides.forEach((s, i) => {
+        s.classList.toggle('is-here', i === at);
+        s.classList.toggle('is-gone', i < at);
+        s.style.setProperty('--tint', s.dataset.tint);
+      });
+      dots.forEach((d, i) => d.classList.toggle('is-here', i === at));
+      $('introNext').textContent = at === slides.length - 1 ? 'Get started' : 'Next';
+    };
+    const finish = () => {
+      window.pywebview.api.markIntroSeen();
+      shut(dlg);
+      done();
+    };
+    $('introNext').onclick = () => (at < slides.length - 1 ? go(at + 1) : finish());
+    $('introSkip').onclick = finish;
+    dlg.addEventListener('cancel', (e) => { e.preventDefault(); finish(); }, { once: true });
+    // However it goes away, the rest of boot goes on.
+    dlg.addEventListener('close', () => done(), { once: true });
+    go(0);
+    dlg.showModal();
+  });
+}
+
+/* The welcome: nothing to connect with, so ask how it will connect. Each
+   answer goes straight to the place that sets it up. */
+function openWelcome() {
+  const dlg = $('welcomeDlg');
+  if (!dlg.open) dlg.showModal();
+}
+
+// Not dismissed with Escape: behind it is a Connect button with nothing to
+// connect through. It goes when there is something - an account, a server.
+$('welcomeDlg').addEventListener('cancel', (e) => e.preventDefault());
+
+for (const b of $('welcomeDlg').querySelectorAll('[data-provider]')) {
+  b.addEventListener('click', () => {
+    acctSetProvider(b.dataset.provider);
+    acctShowForm(true);
+  });
+}
+
+$('welcomeServer').addEventListener('click', () => {
+  shut($('welcomeDlg'));
+  $('prefs').showModal();
+  showScreen('connection');
+  refreshPrefs();
+});
+
+/* The setup: an account's servers fetched and then pinned, with each step
+   shown as it happens. What the Android app does on its own after a sign-in
+   - and what this app used to leave to two buttons in Settings. */
+const setup = { provider: null, finish: null };
+
+function setupAt(step, at) {
+  const row = $('setupDlg').querySelector(`.steps__row[data-step="${step}"]`);
+  row.dataset.at = at;
+}
+
+function setupFail(why) {
+  $('setupTitle').textContent = 'Setup did not finish';
+  $('setupError').textContent = why || 'Something went wrong.';
+  $('setupError').hidden = false;
+  $('setupAgain').hidden = false;
+  $('setupDlg').querySelector('.logo-mark').classList.remove('logo-mark--spin');
+  setup.finish = null;
+}
+
+async function prepareServers(provider) {
+  const dlg = $('setupDlg');
+  const name = provider === 'windscribe' ? 'Windscribe' : 'Surfshark';
+  setup.provider = provider;
+  $('setupTitle').textContent = 'Getting your servers ready';
+  $('setupSigned').textContent = `Signed in to ${name}`;
+  $('setupServers').textContent = `Getting ${name}'s server list`;
+  $('setupError').hidden = true;
+  $('setupAgain').hidden = true;
+  $('setupDetail').textContent = '';
+  $('setupBar').style.width = '2%';
+  dlg.querySelector('.logo-mark').classList.add('logo-mark--spin');
+  setupAt('servers', 'now');
+  setupAt('pinning', 'todo');
+  shut($('welcomeDlg'));
+  if (!dlg.open) dlg.showModal();
+
+  const got = await (provider === 'windscribe'
+    ? window.pywebview.api.windscribeServers()
+    : window.pywebview.api.surfsharkServers());
+  if (!got || !got.ok) { setupFail(got && got.error); return false; }
+  setupAt('servers', 'done');
+  setupAt('pinning', 'now');
+
+  const aimed = await window.pywebview.api.pinForProvider(provider);
+  if (!aimed || !aimed.ok) { setupFail(aimed && aimed.error); return false; }
+  const finished = new Promise((resolve) => { setup.finish = resolve; });
+  const started = await window.pywebview.api.startPin();
+  if (!started || !started.ok) { setupFail(started && started.error); return false; }
+  const p = await finished;
+
+  await refreshPrefs();
+  if (p.error) { setupFail(p.error); return false; }
+  if (!p.written) { setupFail('No server answered. Try again in a moment.'); return false; }
+  setupAt('pinning', 'done');
+  $('setupTitle').textContent = 'Ready';
+  $('setupDetail').textContent = `${p.written} servers pinned`;
+  dlg.querySelector('.logo-mark').classList.remove('logo-mark--spin');
+  if (state.mode === 'off') {
+    setStatus('DISCONNECTED', 'off', '', '');
+    setHint(`${state.countries.length} countries ready.`);
+  }
+  render();
+  setTimeout(() => shut(dlg), 1200);
+  return true;
+}
+
+/* Pin progress goes where it always went - the Servers screen - and, while
+   a setup is waiting on it, to the setup sheet too. */
+window.onPin = (p) => {
+  drawPin(p);
+  if (!setup.finish || !p) return;
+  if (p.phase === 'result' && p.total) {
+    $('setupBar').style.width = `${Math.max(2, Math.round((p.done / p.total) * 100))}%`;
+    $('setupDetail').textContent = `${p.done} of ${p.total}`;
+  } else if (p.phase === 'finished') {
+    const finish = setup.finish;
+    setup.finish = null;
+    finish(p);
+  }
+};
+
+$('setupRetry').addEventListener('click', () => prepareServers(setup.provider));
+$('setupClose').addEventListener('click', () => shut($('setupDlg')));
+
+/* Which signed-in providers have nothing to connect through yet. */
+function providersWithoutServers(info) {
+  const ps = (info && info.providerState) || {};
+  return Object.keys(ps).filter((k) => ps[k].account && !ps[k].servers);
+}
+
+
+/* ---------------------------------------------------------------- themes */
+
+/* The Android app's nine, with the page and card colour each swatch draws. */
+const THEMES = [
+  ['midnight', 'Midnight', '#09090e', '#17171f'],
+  ['graphite', 'Graphite', '#111113', '#18191b'],
+  ['black', 'Black', '#000000', '#0e0e12'],
+  ['ocean', 'Ocean', '#060b16', '#0f1828'],
+  ['forest', 'Forest', '#060e0b', '#0f1a16'],
+  ['plum', 'Plum', '#0e0812', '#1b1222'],
+  ['ember', 'Ember', '#110a08', '#1e1512'],
+  ['slate', 'Slate', '#0c0f13', '#161b21'],
+  ['white', 'White', '#f4f5f8', '#ffffff'],
+];
+
+function applyTheme(key) {
+  const theme = THEMES.some((t) => t[0] === key) ? key : 'midnight';
+  state.theme = theme;
+  if (theme === 'midnight') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  // For the next start, so it opens in this theme rather than changing to it.
+  try { localStorage.setItem('relay.theme', theme); } catch (e) { /* private window */ }
+  for (const b of document.querySelectorAll('.theme')) {
+    b.setAttribute('aria-checked', String(b.dataset.theme === theme));
+  }
+}
+
+(function () {
+  const box = $('themes');
+  for (const [key, name, page, card] of THEMES) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'theme';
+    b.dataset.theme = key;
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-checked', 'false');
+    b.style.setProperty('--page', page);
+    b.style.setProperty('--card', card);
+    const pic = document.createElement('span');
+    pic.className = 'theme__page';
+    pic.append(document.createElement('i'), document.createElement('b'));
+    const label = document.createElement('span');
+    label.textContent = name;
+    b.append(pic, label);
+    b.addEventListener('click', () => {
+      applyTheme(key);
+      window.pywebview.api.setTheme(key);
+    });
+    box.appendChild(b);
+  }
+})();
+
+
+/* ------------------------------------------------------- closing the window */
+
+/* The X asks Python what it means now - put away, quit, or ask - so that it
+   and Alt+F4 answer the same way. Nothing closes until that is settled. */
+async function closeRequest() {
+  const r = await window.pywebview.api.closeRequest();
+  if (r && r.do === 'exit') return window.pywebview.api.quitApp();
+  if (r && r.do === 'tray') return window.pywebview.api.hideWindow();
+  return askClose();
+}
+
+function askClose() {
+  const d = $('askClose');
+  $('askRemember').checked = true;
+  if (!d.open) d.showModal();
+}
+
+/* Alt+F4, or anything else that closed the window from underneath us. */
+window.onAskClose = askClose;
+
+async function answerClose(kind) {
+  $('askClose').close();
+  if ($('askRemember').checked) {
+    state.onClose = kind;
+    paintOnClose();
+    await window.pywebview.api.setOnClose(kind);
+  }
+  if (kind === 'tray') window.pywebview.api.hideWindow();
+  else window.pywebview.api.quitApp();
+}
+
+$('askTray').addEventListener('click', () => answerClose('tray'));
+$('askQuit').addEventListener('click', () => answerClose('exit'));
+// Escape leaves the window as it was, which is the one answer that is not a
+// decision - so it is neither remembered nor acted on.
+$('askClose').addEventListener('cancel', () => $('askClose').close());
+
+function paintOnClose() {
+  const seg = $('onClose');
+  seg.dataset.close = state.onClose || '';
+  for (const b of seg.querySelectorAll('.seg__opt')) {
+    b.setAttribute('aria-pressed', String((b.dataset.close || '') === seg.dataset.close));
+  }
+}
+
+for (const b of $('onClose').querySelectorAll('.seg__opt')) {
+  b.addEventListener('click', async () => {
+    state.onClose = b.dataset.close || '';
+    paintOnClose();
+    await window.pywebview.api.setOnClose(state.onClose);
+  });
+}

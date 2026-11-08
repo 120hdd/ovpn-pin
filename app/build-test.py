@@ -59,6 +59,9 @@ def test_version_file():
             assert "filevers=(2, 7, 3, 1)" in text
             assert "StringStruct('ProductName', 'Relay')" in text
             assert "StringStruct('ProductVersion', '2.7.3-beta.1')" in text
+            # A release tag names the app: desktop-v1.4.0 is version 1.4.0.
+            os.environ['RELAY_VERSION'] = 'desktop-v1.4.0'
+            assert build.version_string() == '1.4.0'
     finally:
         build.WORK = old_work
         if old is None:

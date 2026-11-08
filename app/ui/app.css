@@ -212,7 +212,9 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   color: var(--text);
 }
 .status[data-state='on']   { color: var(--ok); }
-.status[data-state='off']  { color: var(--text-muted); }
+/* Not connected is said in red, as the Android app says it: the one state
+   where traffic is going out unprotected should not read as neutral. */
+.status[data-state='off']  { color: var(--fail); }
 .status[data-state='fail'] { color: var(--fail); }
 .status.fresh { animation: pop 180ms var(--ease); }
 
@@ -270,7 +272,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   width: 20px; height: 15px; flex: none;
   border-radius: 2px;
   background-size: cover; background-position: center;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.14);
   display: none;
 }
 .pick__flag[style*='url'] { display: block; }
@@ -329,7 +331,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   animation: sink 130ms cubic-bezier(0.4, 0, 1, 1) forwards;
 }
 .sheet[open][data-closing="1"]::backdrop { animation: dim 130ms linear forwards; }
-.sheet::backdrop { background: rgba(0, 0, 0, 0.45); }
+.sheet::backdrop { background: rgb(0 0 0 / calc(0.45 * var(--shade))); }
 @keyframes rise {
   from { transform: translateY(12px); opacity: 0; }
   to   { transform: none; opacity: 1; }
@@ -472,7 +474,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   box-shadow: inset 0 0 0 1px transparent;
   transition: background var(--fade), box-shadow var(--fade);
 }
-.scope__row:hover { background: rgba(255, 255, 255, 0.035); }
+.scope__row:hover { background: rgb(var(--wash) / 0.035); }
 .scope__row:disabled { opacity: 0.4; cursor: default; }
 .scope__row:disabled:hover { background: transparent; }
 /* Every position is stated. An item with a definite grid-row is placed before
@@ -495,8 +497,8 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 }
 
 .scope__row[aria-pressed='true'] {
-  background: rgba(255, 255, 255, 0.05);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09),
+  background: rgb(var(--wash) / 0.05);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.09),
               inset 2px 0 0 var(--ok);
 }
 .scope__row[aria-pressed='true'] .scope__name { color: var(--text); }
@@ -538,7 +540,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   display: flex; gap: 10px; align-items: baseline;
   padding: 5px 2px;
   font-size: 11px; line-height: 15px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgb(var(--wash) / 0.04);
 }
 .tally li:last-child { border-bottom: 0; }
 .tally__name {
@@ -606,8 +608,8 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   --control: #20212b;
   --control-hover: #292b37;
   --control-active: #313440;
-  --divider: rgba(255, 255, 255, 0.09);
-  --border: rgba(255, 255, 255, 0.13);
+  --divider: rgb(var(--wash) / 0.09);
+  --border: rgb(var(--wash) / 0.13);
   --text: #f5f5f8;
   --text-muted: #b9bac6;
   --text-off: #777987;
@@ -619,6 +621,25 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   --focus: #74e4c2;
   --r-card: 20px;
   --r-ctl: 12px;
+
+  /* What a theme turns over. --wash lights a dark page and darkens a light
+     one; --deep and the --raise steps are the dark surfaces cards and
+     controls are made of; the rest is the page and its light. */
+  --wash: 255 255 255;
+  --deep: 10 10 16;
+  --raise-top: 54 55 69;
+  --raise-hi: 47 48 61;
+  --raise-mid: 34 35 46;
+  --raise-lo: 30 31 40;
+  --bg-top: #0d0d14;
+  --bg-end: #07070b;
+  --glow: rgba(108, 92, 231, 0.17);
+  --glow-2: rgba(50, 196, 189, 0.07);
+  --disc: #ffffff;
+  /* How dark a shadow or a darkening layer is: full on a dark page, a
+     quarter on a light one, where the same black would read as a stain. */
+  --shade: 1;
+  --raise-base: 18 18 25;
 
   /* Said out loud, because WebView2 draws its own furniture - scrollbars, the
      spin buttons on a number field, the ring inside a text one - and with
@@ -632,9 +653,9 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 body {
   position: relative;
   background:
-    radial-gradient(circle at 78% -15%, rgba(108, 92, 231, 0.17), transparent 42%),
-    radial-gradient(circle at 8% 48%, rgba(50, 196, 189, 0.07), transparent 38%),
-    linear-gradient(165deg, #0d0d14 0%, var(--bg) 56%, #07070b 100%);
+    radial-gradient(circle at 78% -15%, var(--glow), transparent 42%),
+    radial-gradient(circle at 8% 48%, var(--glow-2), transparent 38%),
+    linear-gradient(165deg, var(--bg-top) 0%, var(--bg) 56%, var(--bg-end) 100%);
   font-family: 'IBM Plex Sans Relay', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
   letter-spacing: 0;
 }
@@ -646,8 +667,8 @@ body::before {
   pointer-events: none;
   opacity: 0.18;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.014) 1px, transparent 1px);
+    linear-gradient(rgb(var(--wash) / 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(var(--wash) / 0.014) 1px, transparent 1px);
   background-size: 28px 28px;
   -webkit-mask-image: linear-gradient(to bottom, #000, transparent 72%);
   mask-image: linear-gradient(to bottom, #000, transparent 72%);
@@ -679,42 +700,47 @@ body::before {
 .bar__mark { gap: 9px; }
 .bar__tools { gap: 8px; }
 
-.bar__logo {
-  width: 32px;
-  height: 32px;
-  display: block;
-  flex: 0 0 32px;
-  object-fit: contain;
+/* The empty middle of the header, there to be dragged. */
+.bar__drag { flex: 1; align-self: stretch; min-width: 12px; }
+
+/* Minimise and close: the window's own buttons, set off from the app's by a
+   hairline, and close turning red the way Windows' does. */
+.bar__win {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 2px;
+  padding-left: 8px;
+  border-left: 1px solid rgb(var(--wash) / 0.08);
 }
+.icon--win .ico { width: 14px; height: 14px; }
+.icon--shut:hover { background: #e5484d; color: #fff; }
+
+/* The Window screen is four switches in a row, each with an (i). Following
+   their titles, the (i)s zigzagged with the titles' lengths; at the end of
+   the line they make a column beside the switches instead. */
+.screen[data-screen='window'] .pane__title { display: flex; align-items: center; }
+.screen[data-screen='window'] .pane__title .info { margin-left: auto; margin-right: 10px; }
+/* So close to the edge that the bubble always opens leftwards - even hidden,
+   a centred one would stick out and give the sheet a sideways scroll. */
+.screen[data-screen='window'] .info__bubble { left: auto; right: 0; transform: none; }
+
+.bar__logo {
+  width: 26px;
+  height: 26px;
+  display: block;
+  flex: 0 0 26px;
+  overflow: visible;
+}
+.bar__disc { fill: var(--ok); }
+.bar__ring { fill: none; stroke: var(--disc); stroke-width: 20; stroke-linecap: round; }
+.bar__bead { fill: var(--disc); }
 
 .bar__name {
   color: var(--text);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.19em;
-}
-
-.privacy {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 23px;
-  padding: 0 8px;
-  color: #9294a2;
-  border: 1px solid rgba(255, 255, 255, 0.075);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.025);
-  font-size: 8px;
-  font-weight: 600;
-  letter-spacing: 0.13em;
-}
-
-.privacy i {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--ok);
-  box-shadow: 0 0 9px rgba(97, 239, 191, 0.75);
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 .icon {
@@ -723,8 +749,8 @@ body::before {
 }
 
 .icon:hover {
-  border-color: rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.055);
+  border-color: rgb(var(--wash) / 0.08);
+  background: rgb(var(--wash) / 0.055);
 }
 
 .icon[hidden] { display: none; }
@@ -769,6 +795,43 @@ body::before {
   --state-accent: var(--fail);
 }
 
+/* The traffic light, the Android app's default: silver at rest - not
+   connected is the ordinary state, not an alarm - yellow working, green up,
+   and red kept for a connection that failed, so it still means something.
+   Connected is the same green in both. */
+.hero[data-scheme='signal'][data-state='off'] {
+  --blob-a: #dde1e8;
+  --blob-b: #9aa1ae;
+  --blob-c: #454b58;
+  --blob-glow: rgba(170, 178, 192, 0.30);
+  --state-accent: #b4bbc7;
+}
+.hero[data-scheme='signal'][data-state='busy'] {
+  --blob-a: #ffe27a;
+  --blob-b: #ffc24b;
+  --blob-c: #b9791a;
+  --blob-glow: rgba(255, 200, 70, 0.42);
+  --state-accent: #ffd261;
+}
+.hero[data-scheme='signal'][data-state='fail'] {
+  --blob-a: #ff4d7a;
+  --blob-b: #c2185b;
+  --blob-c: #4e0a26;
+  --blob-glow: rgba(220, 40, 90, 0.42);
+  --state-accent: #ff4d7a;
+}
+
+/* The orb is pressed like a button: it gives a little under the pointer. */
+.blob__float {
+  pointer-events: auto;
+  cursor: pointer;
+  border-radius: 50%;
+  transition: scale 160ms ease;
+}
+.blob__float.is-pressed { scale: 0.94; }
+.blob__float[aria-disabled='true'] { cursor: default; }
+.blob__float:focus-visible { outline: 2px solid var(--state-accent); outline-offset: 6px; }
+
 .blob-stage {
   position: absolute;
   top: 1px;
@@ -800,7 +863,7 @@ body::before {
 }
 
 .blob__orbit {
-  border: 1px solid rgba(255, 255, 255, 0.105);
+  border: 1px solid rgb(var(--wash) / 0.105);
   border-radius: 49% 51% 53% 47% / 45% 52% 48% 55%;
   animation: orbit-spin 18s linear infinite;
 }
@@ -836,7 +899,7 @@ body::before {
   width: 145px;
   height: 145px;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid rgb(var(--wash) / 0.16);
   animation: halo-pulse 4.2s ease-out infinite;
 }
 
@@ -855,7 +918,7 @@ body::before {
   isolation: isolate;
   border-radius: 50%;
   background:
-    radial-gradient(circle at 34% 27%, rgba(255, 255, 255, 0.12), transparent 15%),
+    radial-gradient(circle at 34% 27%, rgb(var(--wash) / 0.12), transparent 15%),
     radial-gradient(circle at 55% 54%, color-mix(in srgb, var(--blob-b), transparent 91%), transparent 68%);
   box-shadow:
     inset 0 0 28px color-mix(in srgb, var(--blob-c), transparent 86%),
@@ -939,11 +1002,11 @@ canvas.blob__body {
   border: 0.5px solid rgba(236, 250, 255, 0.42);
   border-radius: 50%;
   background:
-    radial-gradient(circle at 27% 22%, rgba(255, 255, 255, 0.98) 0 11%, rgba(255, 255, 255, 0.42) 22%, transparent 38%),
+    radial-gradient(circle at 27% 22%, rgb(var(--wash) / 0.98) 0 11%, rgb(var(--wash) / 0.42) 22%, transparent 38%),
     radial-gradient(circle at 52% 58%, var(--dot-color) 0 44%, color-mix(in srgb, var(--dot-color), #071124 42%) 100%);
   box-shadow:
-    inset -0.7px -0.9px 1.6px rgba(1, 8, 24, 0.5),
-    inset 0.6px 0.7px 1px rgba(255, 255, 255, 0.36),
+    inset -0.7px -0.9px 1.6px rgb(var(--deep) / 0.5),
+    inset 0.6px 0.7px 1px rgb(var(--wash) / 0.36),
     0 0 var(--glow) color-mix(in srgb, var(--dot-color), transparent 32%);
   opacity: var(--o);
   filter: blur(var(--blur));
@@ -954,10 +1017,10 @@ canvas.blob__body {
 }
 
 .blob__body i:nth-child(11n + 3) {
-  border-color: rgba(255, 255, 255, 0.72);
+  border-color: rgb(var(--wash) / 0.72);
   box-shadow:
-    inset -0.7px -0.9px 1.6px rgba(1, 8, 24, 0.46),
-    inset 0.6px 0.7px 1px rgba(255, 255, 255, 0.5),
+    inset -0.7px -0.9px 1.6px rgb(var(--deep) / 0.46),
+    inset 0.6px 0.7px 1px rgb(var(--wash) / 0.5),
     0 0 calc(var(--glow) + 2px) color-mix(in srgb, var(--blob-a), transparent 18%);
 }
 
@@ -1050,10 +1113,10 @@ canvas.blob__body {
 
 .side {
   padding: 9px 10px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.085);
+  border: 1px solid rgb(var(--wash) / 0.085);
   border-radius: 14px;
-  background: linear-gradient(145deg, rgba(35, 35, 47, 0.72), rgba(18, 18, 25, 0.82));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 10px 28px rgba(0, 0, 0, 0.2);
+  background: linear-gradient(145deg, rgb(var(--raise-mid) / 0.72), rgb(var(--raise-base) / 0.82));
+  box-shadow: inset 0 1px 0 rgb(var(--wash) / 0.045), 0 10px 28px rgb(0 0 0 / calc(0.2 * var(--shade)));
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
 }
@@ -1099,7 +1162,7 @@ canvas.blob__body {
 .arrow {
   display: grid;
   place-items: center;
-  color: rgba(255, 255, 255, 0.24);
+  color: rgb(var(--wash) / 0.24);
 }
 
 .swap[data-state='fail'] .arrow { color: var(--fail); }
@@ -1254,8 +1317,30 @@ canvas.blob__body {
 /* The core lifts as the meter opens under it. One movement, two things
    moving in it, and the room the meter needs is made by the thing that was
    already in the way rather than found somewhere else. */
-.blob-stage { transition: top 460ms var(--ease); }
-.hero[data-state='on'] .blob-stage { top: -12px; }
+.blob-stage {
+  /* Centred in the room it actually has: the label ends 29px down (9px of
+     offset and 20px of line), the foot - meter and addresses - is 67px and
+     sits at the bottom, and the stage itself is 210px. Half of what is left
+     goes above the orb and half below, so it is never crowded against the
+     label with room going spare underneath. */
+  --stage-room: calc(100% - 29px - var(--foot) - 210px);
+  --stage-top: calc(29px + var(--stage-room) / 2);
+  /* The shrink is about the stage's centre, so the centring above holds at
+     any size; only the floor has to know the top edge has moved in. */
+  top: max(calc(29px - 105px * (1 - var(--orb-k))), var(--stage-top));
+  transform: translateX(-50%) scale(var(--orb-k));
+  transition: top 460ms var(--ease), transform 900ms var(--ease);
+}
+/* What stands between the orb and the bottom of the hero: the addresses,
+   and the meter as well once it opens - 48px of it and 8px under it. Read
+   from the meter itself rather than from the connection's state, because
+   the meter opens when a reading arrives and not before.
+
+   The orb gives up some of its size to it as well, as it does on Android.
+   Scaled rather than resized: the canvas keeps its buffers, and the shrink
+   is slow and soft because it is part of the moment the tunnel comes up. */
+.hero { --foot: 67px; --orb-k: 1; }
+.hero:has(.flux[data-live='true']) { --foot: 123px; --orb-k: 0.82; }
 
 /* The satellites answer the line. Both dots swell and burn a little harder
    the harder the connection is working - which is the only bit of chrome in
@@ -1345,7 +1430,7 @@ canvas.blob__body {
   display: flex;
   padding: 2px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.045);
+  background: rgb(var(--wash) / 0.045);
 }
 
 .pair__opt {
@@ -1372,7 +1457,7 @@ canvas.blob__body {
   left: 2px;
   border-radius: 6px;
   background: var(--control-active);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 1px 0 rgb(var(--wash) / 0.07);
   transition: transform 260ms var(--ease), width 260ms var(--ease);
 }
 
@@ -1399,7 +1484,7 @@ canvas.blob__body {
   isolation: isolate;
 }
 
-.lrow + .lrow { border-top: 1px solid rgba(255, 255, 255, 0.045); }
+.lrow + .lrow { border-top: 1px solid rgb(var(--wash) / 0.045); }
 
 /* The share of the busiest row, drawn as the row's own ground. Set from JS
    as a width in per cent; the fade on the right is what keeps it from
@@ -1434,9 +1519,23 @@ canvas.blob__body {
 }
 
 /* On while a connection to that name is open. Not a status light for the
-   row - a row with no dot is not broken, it is simply finished. */
+   row - a row with no dot is not broken, it is simply finished.
+
+   In the row's own left padding rather than in front of the name. As a flex
+   item it was 5px wide with a 6px gap after it, so every row that had one
+   started its name 11px right of every row that did not - and in a sheet
+   seventy rows deep the six live ones read as a column that had slipped.
+   Measured on a phone, where the list is long enough to see it: 66 rows at
+   x=25 and six at x=36.
+
+   The gutter is already there and holds nothing, and a marker in a margin is
+   what this always was. `top` centres it on the first line rather than on the
+   row, because a row with a second line is taller and the dot belongs beside
+   the name. */
 .lrow__live {
-  flex: none;
+  position: absolute;
+  left: 5px;
+  top: 14px;
   width: 5px;
   height: 5px;
   border-radius: 50%;
@@ -1524,13 +1623,13 @@ canvas.blob__body {
   --card-accent: #7d7f8b;
   overflow: hidden;
   padding: 16px 16px 15px;
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid rgb(var(--wash) / 0.09);
   border-radius: var(--r-card);
   background:
-    linear-gradient(145deg, rgba(33, 33, 44, 0.94), rgba(17, 17, 24, 0.97));
+    linear-gradient(145deg, rgb(var(--raise-mid) / 0.94), rgb(var(--raise-base) / 0.97));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.055),
-    0 24px 55px rgba(0, 0, 0, 0.34);
+    inset 0 1px 0 rgb(var(--wash) / 0.055),
+    0 24px 55px rgb(0 0 0 / calc(0.34 * var(--shade)));
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
 }
@@ -1576,6 +1675,16 @@ canvas.blob__body {
   background: var(--card-accent);
   box-shadow: 0 0 12px color-mix(in srgb, var(--card-accent), transparent 25%);
   transition: background 250ms ease, box-shadow 250ms ease;
+}
+
+/* The connection's age, after the place it comes out in. */
+.status__clock { margin-left: 8px; color: var(--text-muted); font-size: 0.92em; }
+.status__clock:empty { display: none; }
+
+/* Only the dot - the card's top line stays quiet when nothing is up. */
+.card[data-state='off'] .status-dot {
+  background: var(--fail);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--fail), transparent 25%);
 }
 
 .card[data-state='busy'] .status-dot { animation: status-pulse 1.2s ease-out infinite; }
@@ -1624,7 +1733,7 @@ canvas.blob__body {
 .details {
   margin-top: 10px;
   padding: 10px 2px 0;
-  border-color: rgba(255, 255, 255, 0.075);
+  border-color: rgb(var(--wash) / 0.075);
 }
 
 .stack { gap: 8px; margin-top: 12px; }
@@ -1639,14 +1748,14 @@ canvas.blob__body {
   height: 52px;
   gap: 11px;
   padding: 0 11px;
-  border: 1px solid rgba(255, 255, 255, 0.075);
-  background: linear-gradient(145deg, rgba(47, 48, 61, 0.84), rgba(30, 31, 40, 0.9));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  border: 1px solid rgb(var(--wash) / 0.075);
+  background: linear-gradient(145deg, rgb(var(--raise-hi) / 0.84), rgb(var(--raise-lo) / 0.9));
+  box-shadow: inset 0 1px 0 rgb(var(--wash) / 0.045);
 }
 
 .btn--quiet:hover {
-  border-color: rgba(255, 255, 255, 0.13);
-  background: linear-gradient(145deg, rgba(54, 55, 69, 0.94), rgba(35, 36, 46, 0.96));
+  border-color: rgb(var(--wash) / 0.13);
+  background: linear-gradient(145deg, rgb(var(--raise-top) / 0.94), rgb(var(--raise-mid) / 0.96));
 }
 
 .pick__flag {
@@ -1656,13 +1765,13 @@ canvas.blob__body {
   place-items: center;
   flex: none;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgb(var(--wash) / 0.12);
   border-radius: 8px;
   background-color: rgba(118, 105, 255, 0.11);
   background-size: cover;
   background-position: center;
   color: #9b91ff;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 5px 12px rgba(0, 0, 0, 0.18);
+  box-shadow: inset 0 1px 0 rgb(var(--wash) / 0.08), 0 5px 12px rgb(0 0 0 / calc(0.18 * var(--shade)));
 }
 
 .pick__flag[style*='url'] svg { opacity: 0; }
@@ -1710,11 +1819,11 @@ canvas.blob__body {
 
 .sheet {
   background:
-    radial-gradient(circle at 80% -5%, rgba(112, 95, 240, 0.16), transparent 38%),
-    linear-gradient(165deg, #101017, #09090e 58%);
+    radial-gradient(circle at 80% -5%, var(--glow), transparent 38%),
+    linear-gradient(165deg, var(--bg-top), var(--bg) 58%);
 }
 
-.sheet::backdrop { background: rgba(0, 0, 0, 0.68); }
+.sheet::backdrop { background: rgb(0 0 0 / calc(0.68 * var(--shade))); }
 
 .sheet__top {
   min-height: 63px;
@@ -1760,10 +1869,10 @@ canvas.blob__body {
   margin: 3px 0;
   padding: 8px 11px 8px 14px;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.045);
+  border: 1px solid rgb(var(--wash) / 0.045);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.018);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.018);
+  background: rgb(var(--wash) / 0.018);
+  box-shadow: inset 0 1px 0 rgb(var(--wash) / 0.018);
   transition: background var(--enter), border-color var(--enter),
               box-shadow var(--enter), transform 80ms ease;
 }
@@ -1780,8 +1889,8 @@ canvas.blob__body {
   background-size: cover;
   opacity: 0.42;
   filter: brightness(1) saturate(0.94) contrast(1.04) blur(0.2px);
-  -webkit-mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.2) 31%, #000 68%);
-  mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.2) 31%, #000 68%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, rgb(0 0 0 / calc(0.2 * var(--shade))) 31%, #000 68%);
+  mask-image: linear-gradient(to right, transparent 0%, rgb(0 0 0 / calc(0.2 * var(--shade))) 31%, #000 68%);
   transform: translateX(0);
   transform-origin: right center;
   transition: opacity 240ms ease, transform 420ms cubic-bezier(0.2, 0.8, 0.2, 1),
@@ -1812,10 +1921,10 @@ canvas.blob__body {
   width: auto;
   border-radius: inherit;
   background: linear-gradient(90deg,
-    rgba(10, 10, 16, 0.96) 0%,
-    rgba(10, 10, 16, 0.78) 34%,
-    rgba(10, 10, 16, 0.28) 68%,
-    rgba(10, 10, 16, 0.08) 100%);
+    rgb(var(--deep) / 0.96) 0%,
+    rgb(var(--deep) / 0.78) 34%,
+    rgb(var(--deep) / 0.28) 68%,
+    rgb(var(--deep) / 0.08) 100%);
   pointer-events: none;
   animation: none;
   transition: background 240ms ease;
@@ -1823,10 +1932,10 @@ canvas.blob__body {
 
 .row:hover,
 .row.is-cursor {
-  border-color: rgba(255, 255, 255, 0.105);
-  background: rgba(255, 255, 255, 0.04);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035),
-              0 8px 24px rgba(0, 0, 0, 0.14);
+  border-color: rgb(var(--wash) / 0.105);
+  background: rgb(var(--wash) / 0.04);
+  box-shadow: inset 0 1px 0 rgb(var(--wash) / 0.035),
+              0 8px 24px rgb(0 0 0 / calc(0.14 * var(--shade)));
 }
 
 .row:hover::before,
@@ -1839,15 +1948,15 @@ canvas.blob__body {
 .row:hover::after,
 .row.is-cursor::after {
   background: linear-gradient(90deg,
-    rgba(10, 10, 16, 0.94) 0%,
-    rgba(10, 10, 16, 0.7) 34%,
-    rgba(10, 10, 16, 0.2) 68%,
-    rgba(10, 10, 16, 0.04) 100%);
+    rgb(var(--deep) / 0.94) 0%,
+    rgb(var(--deep) / 0.7) 34%,
+    rgb(var(--deep) / 0.2) 68%,
+    rgb(var(--deep) / 0.04) 100%);
 }
 
 .row:active {
   transform: scale(0.99);
-  background: rgba(255, 255, 255, 0.065);
+  background: rgb(var(--wash) / 0.065);
 }
 
 .row__auto-icon {
@@ -1856,19 +1965,19 @@ canvas.blob__body {
   display: grid;
   place-items: center;
   flex: none;
-  border: 1px solid rgba(255, 255, 255, 0.13);
+  border: 1px solid rgb(var(--wash) / 0.13);
   border-radius: 10px;
   background: linear-gradient(145deg, rgba(137, 120, 255, 0.2), rgba(57, 213, 197, 0.09));
   color: #a196ff;
   font-size: 17px;
-  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  box-shadow: 0 5px 14px rgb(0 0 0 / calc(0.26 * var(--shade))), inset 0 1px 0 rgb(var(--wash) / 0.09);
   transition: transform var(--enter), box-shadow var(--enter);
 }
 
 .row:hover .row__auto-icon,
 .row.is-cursor .row__auto-icon {
   transform: translateY(-1px) scale(1.035);
-  box-shadow: 0 7px 18px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.13);
+  box-shadow: 0 7px 18px rgb(0 0 0 / calc(0.32 * var(--shade))), inset 0 1px 0 rgb(var(--wash) / 0.13);
 }
 
 .row__copy {
@@ -1902,7 +2011,7 @@ canvas.blob__body {
 .row.is-picked .row__name { color: var(--text); }
 .row.is-picked {
   border-color: rgba(74, 229, 195, 0.62);
-  background: linear-gradient(90deg, rgba(97, 239, 191, 0.07), rgba(255, 255, 255, 0.025));
+  background: linear-gradient(90deg, rgba(97, 239, 191, 0.07), rgb(var(--wash) / 0.025));
   box-shadow: inset 2px 0 0 rgba(97, 239, 191, 0.78),
               0 0 0 1px rgba(74, 229, 195, 0.18);
 }
@@ -1924,7 +2033,7 @@ canvas.blob__body {
 
 .empty {
   margin: 8px;
-  border: 1px dashed rgba(255, 255, 255, 0.1);
+  border: 1px dashed rgb(var(--wash) / 0.1);
   border-radius: 13px;
   text-align: center;
 }
@@ -1935,8 +2044,8 @@ canvas.blob__body {
 
 
 .toggle {
-  background: rgba(255, 255, 255, 0.06);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  background: rgb(var(--wash) / 0.06);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.12);
 }
 
 /* Keep the 380x560 minimum useful, including expanded connection details. */
@@ -1944,7 +2053,7 @@ canvas.blob__body {
   .app { padding-top: 10px; padding-bottom: 10px; }
   .bar { height: 31px; }
   .hero { min-height: 174px; margin: 1px 0 8px; }
-  .blob-stage { top: -9px; width: 166px; height: 166px; transform: translateX(-50%) scale(0.82); }
+  .blob-stage { top: -9px; width: 166px; height: 166px; transform: translateX(-50%) scale(calc(0.82 * var(--orb-k))); }
   .route-label { top: 1px; }
   .side { padding-top: 6px; padding-bottom: 5px; }
   .card { padding-top: 12px; padding-bottom: 12px; }
@@ -2014,12 +2123,12 @@ canvas.blob__body {
   color: #08281f;
   background: linear-gradient(110deg, #79f1c4, #4adbad 52%, #4ad7cf);
   box-shadow: 0 9px 24px rgba(47, 214, 165, 0.17),
-              inset 0 1px 0 rgba(255, 255, 255, 0.45);
+              inset 0 1px 0 rgb(var(--wash) / 0.45);
 }
 .go[data-mode='off']:hover {
   background: linear-gradient(110deg, #91f7d0, #5be5ba 52%, #57e3db);
   box-shadow: 0 11px 28px rgba(47, 214, 165, 0.24),
-              inset 0 1px 0 rgba(255, 255, 255, 0.52);
+              inset 0 1px 0 rgb(var(--wash) / 0.52);
 }
 
 /* -- after --------------------------------------------------------------- */
@@ -2378,8 +2487,8 @@ canvas.blob__body {
   position: relative;
   padding: 15px 15px 16px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.022);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.055);
+  background: rgb(var(--wash) / 0.022);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.055);
 }
 .pane + .pane { margin-top: 10px; }
 
@@ -2432,8 +2541,8 @@ canvas.blob__body {
   flex: none;
   border-radius: 8px;
   color: var(--text-off);
-  background: rgba(255, 255, 255, 0.04);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  background: rgb(var(--wash) / 0.04);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
   transition: color 260ms var(--ease), transform 260ms var(--ease),
               background 260ms var(--ease);
 }
@@ -2458,14 +2567,14 @@ canvas.blob__body {
 .pane--stacked .pane__glyph { margin-top: 1px; }
 
 /* Measuring is the long one, and it is allowed to look it. */
-.pane--major { padding: 17px 15px 18px; background: rgba(255, 255, 255, 0.035); }
+.pane--major { padding: 17px 15px 18px; background: rgb(var(--wash) / 0.035); }
 
 /* And the paths are a footnote, which is a different thing from a section. */
 .pane--foot {
   display: flex; align-items: center; gap: 10px;
   padding: 11px 13px;
   background: none;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.04);
 }
 .pane--foot .pane__glyph { width: 23px; height: 23px; }
 .pane--foot .ico { width: 13px; height: 13px; }
@@ -2481,7 +2590,7 @@ canvas.blob__body {
   font-size: 10px; line-height: 15px; letter-spacing: 0.03em;
   white-space: nowrap;
   color: var(--text-off);
-  background: rgba(255, 255, 255, 0.05);
+  background: rgb(var(--wash) / 0.05);
   transition: color 260ms var(--ease), background 260ms var(--ease);
 }
 .pill[data-state='on'] { color: var(--ok); background: rgba(31, 216, 164, 0.11); }
@@ -2497,8 +2606,8 @@ canvas.blob__body {
   border-radius: 9px;
   font-size: 11px; line-height: 15px;
   color: var(--text-muted);
-  background: rgba(0, 0, 0, 0.22);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  background: rgb(0 0 0 / calc(0.22 * var(--shade)));
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.03);
   word-break: break-all;
   user-select: text;
   -webkit-user-select: text;
@@ -2539,8 +2648,8 @@ canvas.blob__body {
   margin-top: 10px;
   padding: 11px 12px 12px;
   border-radius: 11px;
-  background: rgba(0, 0, 0, 0.2);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.042);
+  background: rgb(0 0 0 / calc(0.2 * var(--shade)));
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.042);
 }
 .step:first-child { margin-top: 0; }
 
@@ -2581,8 +2690,8 @@ canvas.blob__body {
   margin-top: 12px;
   padding: 9px 10px 10px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.028);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  background: rgb(var(--wash) / 0.028);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
   font-size: 11px; line-height: 16px;
   color: var(--text-off);
 }
@@ -2637,19 +2746,19 @@ canvas.blob__body {
   padding: 0 11px;
   font: inherit; font-size: 12px;
   color: var(--text);
-  background: rgba(0, 0, 0, 0.24);
+  background: rgb(0 0 0 / calc(0.24 * var(--shade)));
   border: 0;
   border-radius: 9px;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
   user-select: text;
   -webkit-user-select: text;
   transition: box-shadow 200ms var(--ease), background 200ms var(--ease);
 }
 .field__in::placeholder { color: var(--text-off); }
-.field__in:hover { background: rgba(0, 0, 0, 0.3); }
+.field__in:hover { background: rgb(0 0 0 / calc(0.3 * var(--shade))); }
 .field__in:focus {
   outline: 0;
-  background: rgba(0, 0, 0, 0.34);
+  background: rgb(0 0 0 / calc(0.34 * var(--shade)));
   box-shadow: inset 0 0 0 1px rgba(31, 216, 164, 0.55),
               0 0 0 3px rgba(31, 216, 164, 0.08);
 }
@@ -2659,11 +2768,11 @@ canvas.blob__body {
   width: 38px;
   display: grid; place-items: center;
   color: var(--text-off);
-  background: rgba(255, 255, 255, 0.05);
+  background: rgb(var(--wash) / 0.05);
   border-radius: 9px;
   transition: color var(--fade), background var(--fade);
 }
-.field__peek:hover { background: rgba(255, 255, 255, 0.09); color: var(--text-muted); }
+.field__peek:hover { background: rgb(var(--wash) / 0.09); color: var(--text-muted); }
 
 
 /* ------------------------------------------------------- narrowing rows */
@@ -2683,7 +2792,7 @@ canvas.blob__body {
   background: transparent;
   transition: background 200ms var(--ease);
 }
-.scope__row:hover:not(:disabled) { background: rgba(255, 255, 255, 0.04); }
+.scope__row:hover:not(:disabled) { background: rgb(var(--wash) / 0.04); }
 .scope__row:disabled { opacity: 0.38; cursor: default; }
 
 /* The rail grows from nothing rather than appearing, which is what makes the
@@ -2716,7 +2825,7 @@ canvas.blob__body {
   font-variant-numeric: tabular-nums;
   transition: color 200ms var(--ease);
 }
-.scope__row[aria-pressed='true'] { background: rgba(255, 255, 255, 0.05); }
+.scope__row[aria-pressed='true'] { background: rgb(var(--wash) / 0.05); }
 .scope__row[aria-pressed='true'] .scope__name { color: var(--text); }
 .scope__row[aria-pressed='true'] .scope__count { color: var(--ok); }
 
@@ -2747,8 +2856,8 @@ canvas.blob__body {
 
 .fold { border-radius: 10px; }
 .fold[data-open] {
-  background: rgba(0, 0, 0, 0.22);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.045);
+  background: rgb(0 0 0 / calc(0.22 * var(--shade)));
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.045);
 }
 
 /* Two rows and four columns: the glyph and the chevron span both rows, the
@@ -2770,7 +2879,7 @@ canvas.blob__body {
   cursor: pointer;
   transition: background var(--fade);
 }
-.fold__cap:hover { background: rgba(255, 255, 255, 0.035); }
+.fold__cap:hover { background: rgb(var(--wash) / 0.035); }
 .fold[data-open] .fold__cap:hover { background: transparent; }
 
 .fold__ico {
@@ -2855,13 +2964,13 @@ canvas.blob__body {
   border-radius: 999px;
   font-size: 11px; line-height: 15px;
   color: var(--text-muted);
-  background: rgba(255, 255, 255, 0.04);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  background: rgb(var(--wash) / 0.04);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
   unicode-bidi: isolate;
   transition: background 180ms var(--ease), color 180ms var(--ease),
               box-shadow 180ms var(--ease), transform 120ms var(--ease);
 }
-.chip:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+.chip:hover:not(:disabled) { background: rgb(var(--wash) / 0.08); color: var(--text); }
 .chip:active:not(:disabled) { transform: scale(0.96); }
 .chip:disabled { cursor: default; }
 .chip__count { color: var(--text-off); font-size: 10px; font-variant-numeric: tabular-nums; }
@@ -2870,8 +2979,8 @@ canvas.blob__body {
 /* Chosen, as opposed to in use. Two different jobs, two different marks. */
 .chip[aria-pressed='true'] {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.1);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  background: rgb(var(--wash) / 0.1);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.18);
 }
 .chip[aria-pressed='true'] .chip__count,
 .chip[aria-pressed='true'] .chip__asn { color: var(--text-muted); }
@@ -2918,16 +3027,16 @@ canvas.blob__body {
   border-radius: var(--edge);
 
   box-shadow:
-    inset 0 1px 1px rgba(255, 255, 255, 0.2),
-    inset 0 2px 2px rgba(255, 255, 255, 0.15),
-    inset 0 4px 4px rgba(255, 255, 255, 0.1),
-    inset 0 8px 8px rgba(255, 255, 255, 0.05),
-    inset 0 16px 16px rgba(255, 255, 255, 0.05),
-    0 -1px 1px rgba(0, 0, 0, 0.02),
-    0 -2px 2px rgba(0, 0, 0, 0.03),
-    0 -4px 4px rgba(0, 0, 0, 0.05),
-    0 -8px 8px rgba(0, 0, 0, 0.06),
-    0 -16px 16px rgba(0, 0, 0, 0.08);
+    inset 0 1px 1px rgb(var(--wash) / 0.2),
+    inset 0 2px 2px rgb(var(--wash) / 0.15),
+    inset 0 4px 4px rgb(var(--wash) / 0.1),
+    inset 0 8px 8px rgb(var(--wash) / 0.05),
+    inset 0 16px 16px rgb(var(--wash) / 0.05),
+    0 -1px 1px rgb(0 0 0 / calc(0.02 * var(--shade))),
+    0 -2px 2px rgb(0 0 0 / calc(0.03 * var(--shade))),
+    0 -4px 4px rgb(0 0 0 / calc(0.05 * var(--shade))),
+    0 -8px 8px rgb(0 0 0 / calc(0.06 * var(--shade))),
+    0 -16px 16px rgb(0 0 0 / calc(0.08 * var(--shade)));
 
   transition: box-shadow var(--turn), border-color var(--turn),
               background var(--turn);
@@ -3026,7 +3135,7 @@ canvas.blob__body {
 .spark:hover .spark__word b,
 .spark[data-mode='running'] .spark__word b {
   color: #fff;
-  text-shadow: 0 0 4px rgba(255, 255, 255, 0.4);
+  text-shadow: 0 0 4px rgb(var(--wash) / 0.4);
 }
 
 /* ------------------------------------------------------------- the stepper */
@@ -3060,8 +3169,8 @@ canvas.blob__body {
   color: var(--text-off);
   transition: color var(--fade), background var(--fade);
 }
-.stepper__key:hover { color: var(--ok); background: rgba(255, 255, 255, 0.07); }
-.stepper__key:active { background: rgba(255, 255, 255, 0.12); }
+.stepper__key:hover { color: var(--ok); background: rgb(var(--wash) / 0.07); }
+.stepper__key:active { background: rgb(var(--wash) / 0.12); }
 .stepper__key .ico { width: 11px; height: 11px; stroke-width: 2.4; }
 /* One chevron, used twice. */
 #sweepFirstUp .ico { transform: rotate(180deg); }
@@ -3071,7 +3180,7 @@ canvas.blob__body {
 .meter {
   height: 3px; margin-top: 11px;
   border-radius: 2px; overflow: hidden;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgb(var(--wash) / 0.06);
 }
 .meter i {
   display: block; height: 100%; width: 0;
@@ -3083,13 +3192,13 @@ canvas.blob__body {
 .tally {
   max-height: 150px; margin-top: 11px;
   overflow-y: auto; list-style: none;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  border-top: 1px solid rgb(var(--wash) / 0.05);
 }
 .tally li {
   display: flex; gap: 9px; align-items: baseline;
   padding: 5px 2px;
   font-size: 11px; line-height: 15px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+  border-bottom: 1px solid rgb(var(--wash) / 0.035);
   animation: rise 240ms var(--ease);
 }
 .tally li:last-child { border-bottom: 0; }
@@ -3099,13 +3208,13 @@ canvas.blob__body {
 .tally::-webkit-scrollbar { width: 10px; }
 .tally::-webkit-scrollbar-track { background: transparent; }
 .tally::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.13);
+  background: rgb(var(--wash) / 0.13);
   background-clip: padding-box;
   border: 3px solid transparent;
   border-radius: 5px;
 }
 .tally::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgb(var(--wash) / 0.2);
   background-clip: padding-box;
 }
 .tally__name {
@@ -3135,11 +3244,11 @@ canvas.blob__body {
   border-radius: 9px;
   font-size: 12px;
   gap: 7px;
-  background: rgba(255, 255, 255, 0.05);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  background: rgb(var(--wash) / 0.05);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.07);
 }
-.pane .btn--quiet:hover { background: rgba(255, 255, 255, 0.09); }
-.pane .btn--quiet:active { background: rgba(255, 255, 255, 0.12); }
+.pane .btn--quiet:hover { background: rgb(var(--wash) / 0.09); }
+.pane .btn--quiet:active { background: rgb(var(--wash) / 0.12); }
 .pane .btn--quiet .ico { color: var(--text-off); }
 .pane .btn--quiet:hover .ico { color: var(--ok); }
 
@@ -3184,8 +3293,8 @@ canvas.blob__body {
   position: absolute;
   left: 4px; top: 7px; bottom: 7px;
   width: 1px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.17),
-                                      rgba(255, 255, 255, 0.05));
+  background: linear-gradient(180deg, rgb(var(--wash) / 0.17),
+                                      rgb(var(--wash) / 0.05));
 }
 .flow__step { position: relative; }
 .flow__step + .flow__step { margin-top: 13px; }
@@ -3196,7 +3305,7 @@ canvas.blob__body {
   width: 9px; height: 9px;
   border-radius: 50%;
   background: var(--bg);
-  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.22);
+  box-shadow: inset 0 0 0 1.5px rgb(var(--wash) / 0.22);
   transition: box-shadow 260ms var(--ease), background 260ms var(--ease);
 }
 .flow__cap {
@@ -3230,19 +3339,21 @@ canvas.blob__body {
   display: grid; grid-template-columns: 1fr 1fr; gap: 2px;
   padding: 2px;
   border-radius: 10px;
-  background: rgba(0, 0, 0, 0.28);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  background: rgb(0 0 0 / calc(0.28 * var(--shade)));
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
 }
 .seg__slide {
   position: absolute;
   top: 2px; bottom: 2px; left: 2px;
   width: calc(50% - 3px);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.085);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  background: rgb(var(--wash) / 0.085);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.1);
   transition: transform 280ms var(--ease);
 }
 .seg[data-route='direct'] .seg__slide { transform: translateX(calc(100% + 2px)); }
+.seg[data-orb='desktop'] .seg__slide { transform: translateX(calc(100% + 2px)); }
+#orbColors { margin-top: 10px; }
 .seg__opt {
   position: relative;
   padding: 7px 4px;
@@ -3274,6 +3385,13 @@ canvas.blob__body {
 }
 
 .way { display: block; }
+.way__row { display: flex; align-items: center; gap: 6px; }
+.way__row .seg { flex: 1; min-width: 0; }
+.way__row .info { width: 28px; height: 28px; margin: 0; }
+.way__row .info__bubble { left: auto; right: 0; transform: none; }
+/* Empty, as it is when the way is ready: no room kept for a sentence that
+   is not there. */
+.way__note:empty { min-height: 0; margin: 0; }
 /* The line under the strip is the whole explanation, so it gets room to be
    two lines without the card resizing under the pointer every time the
    answer changes length. */
@@ -3316,8 +3434,8 @@ canvas.blob__body {
   border-radius: 8px;
   font-size: 10px; line-height: 15px;
   color: var(--text-muted);
-  background: rgba(0, 0, 0, 0.28);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  background: rgb(0 0 0 / calc(0.28 * var(--shade)));
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
   /* At the spaces, not through the middle of an argument. A command broken
      as `<su / rfshark-user>` is one somebody will paste wrong. */
   word-break: normal;
@@ -3331,13 +3449,13 @@ canvas.blob__body {
   width: max-content; max-width: 100%;
   margin-top: 9px;
   border-radius: 9px;
-  background: rgba(0, 0, 0, 0.24);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  background: rgb(0 0 0 / calc(0.24 * var(--shade)));
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
   transition: box-shadow 200ms var(--ease), background 200ms var(--ease);
 }
-.port:hover { background: rgba(0, 0, 0, 0.3); }
+.port:hover { background: rgb(0 0 0 / calc(0.3 * var(--shade))); }
 .port:focus-within {
-  background: rgba(0, 0, 0, 0.34);
+  background: rgb(0 0 0 / calc(0.34 * var(--shade)));
   box-shadow: inset 0 0 0 1px rgba(31, 216, 164, 0.55),
               0 0 0 3px rgba(31, 216, 164, 0.08);
 }
@@ -3364,7 +3482,7 @@ canvas.blob__body {
 .pane__aside {
   display: flex; align-items: center; gap: 12px;
   margin-top: 14px; padding-top: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  border-top: 1px solid rgb(var(--wash) / 0.05);
 }
 .pane__aside .pane__why { flex: 1; min-width: 0; margin-top: 0; }
 
@@ -3622,7 +3740,7 @@ canvas.blob__body {
   line-height: 1.5;
   text-align: left;
   white-space: normal;
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 10px 26px rgb(0 0 0 / calc(0.5 * var(--shade)));
   opacity: 0;
   visibility: hidden;
   transition: opacity 120ms ease, visibility 120ms;
@@ -3642,24 +3760,213 @@ canvas.blob__body {
    which is the one case translateX(-50%) cannot solve on its own. */
 .info--right .info__bubble { left: auto; right: 0; transform: none; }
 
-/* ----------------------------------------------------------- the roster */
+/* ------------------------------------------------------------- accounts */
 
-.acct { display: grid; gap: 6px; }
+/* The pane is a frame here rather than a card: the hero and the two
+   provider cards are the cards, and a box round three boxes is a box too
+   many. */
+.accts.pane { padding: 0; background: none; box-shadow: none; }
+.accts .pane__body { margin-top: 10px; }
+
+/* How many providers can connect, said as a number big enough to be read
+   before anything else on the screen is, and a bar that fills a segment per
+   provider. */
+.accthero {
+  position: relative;
+  overflow: hidden;
+  padding: 16px 16px 15px;
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(97, 239, 191, 0.13), transparent 60%),
+    radial-gradient(120% 140% at 100% 100%, rgba(140, 130, 255, 0.10), transparent 60%),
+    rgb(var(--wash) / 0.025);
+  box-shadow: inset 0 0 0 1px rgba(97, 239, 191, 0.16);
+}
+.accthero__row { display: flex; align-items: center; gap: 10px; }
+.accthero__n {
+  font-size: 13px;
+  color: var(--text-muted);
+  letter-spacing: 0.01em;
+}
+.accthero__n b {
+  font-size: 32px;
+  line-height: 34px;
+  font-weight: 700;
+  color: var(--text);
+  margin-right: 3px;
+  font-variant-numeric: tabular-nums;
+  transition: color 260ms var(--ease);
+}
+.accthero[data-ready="1"] .accthero__n b { color: var(--ok); }
+.accthero .pill { margin-left: auto; align-self: center; }
+.accthero__title {
+  display: flex;
+  align-items: center;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.accthero__bar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 12px;
+}
+.accthero__bar i {
+  height: 4px;
+  border-radius: 999px;
+  background: rgb(var(--wash) / 0.08);
+  transition: background 320ms var(--ease);
+}
+.accthero__bar i[data-on="1"] {
+  background: linear-gradient(90deg, var(--ok), var(--jade-2, var(--ok)));
+}
+
+/* -------------------------------------------- one card per provider */
+
+.use { display: grid; gap: 10px; }
+.use__opts { display: grid; gap: 10px; }
+
+.prov {
+  --brand: #3bc1c9;
+  position: relative;
+  display: grid;
+  gap: 14px;
+  padding: 14px 14px 12px;
+  border-radius: 16px;
+  background: rgb(var(--wash) / 0.025);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.07);
+  transition: box-shadow 220ms var(--ease), background-color 220ms var(--ease);
+}
+.prov[data-provider="windscribe"] { --brand: var(--jade-2, #4ae5c3); }
+.prov[data-on="1"] {
+  background: rgb(var(--wash) / 0.035);
+  box-shadow: inset 0 0 0 1px rgba(97, 239, 191, 0.38),
+              0 10px 28px -18px rgba(97, 239, 191, 0.45);
+}
+
+.prov__head { display: flex; align-items: center; gap: 12px; }
+/* The mark in a tile of its own colour, the way an app sits on a home
+   screen: it reads as a company rather than as an icon in a list. */
+.prov__badge {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 42px; height: 42px;
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--brand) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 32%, transparent);
+}
+.prov__mark { width: 22px; height: 22px; color: var(--brand); }
+.prov[data-empty="1"] .prov__mark { opacity: 0.7; }
+.prov__copy { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.prov__name { font-size: 14.5px; line-height: 19px; font-weight: 600; color: var(--text); }
+.prov__n {
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--text-off);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+/* Ready or not, as a word in a pill rather than a tick that needs reading. */
+.prov__state {
+  flex: none;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 10px; line-height: 15px; letter-spacing: 0.04em;
+  color: var(--text-off);
+  background: rgb(var(--wash) / 0.05);
+}
+.prov__state::before { content: 'Set up'; }
+.prov[data-empty="0"] .prov__state { color: var(--ok); background: rgba(97, 239, 191, 0.11); }
+.prov[data-empty="0"] .prov__state::before { content: '● Ready'; }
+
+/* Account, servers, pinned: numbered dots joined by a line that fills as
+   each step is done. */
+.prov__steps {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+.prov__steps li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-off);
+  counter-increment: step;
+  white-space: nowrap;
+}
+.prov__steps li + li { flex: 1; }
+.prov__steps li::before {
+  order: -1;
+  content: counter(step);
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  font-size: 9.5px;
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1.5px rgb(var(--wash) / 0.16);
+  transition: background 220ms var(--ease), box-shadow 220ms var(--ease), color 220ms var(--ease);
+}
+/* The joining line belongs to the step it leads to, drawn ahead of its dot. */
+.prov__steps li + li::after {
+  order: -2;
+  content: '';
+  flex: 1;
+  height: 2px;
+  margin: 0 4px;
+  border-radius: 2px;
+  background: rgb(var(--wash) / 0.08);
+  transition: background 220ms var(--ease);
+}
+.prov__steps li[data-done="1"] { color: var(--text); }
+.prov__steps li[data-done="1"]::before {
+  content: '✓';
+  color: var(--ink, #06281d);
+  background: var(--ok);
+  box-shadow: none;
+}
+.prov__steps li[data-done="1"]::after { background: rgba(97, 239, 191, 0.5); }
+
+/* This provider's accounts, in a well under the steps. */
+.prov__accts {
+  display: grid;
+  border-radius: 12px;
+  background: rgb(var(--deep, 10 10 16) / 0.35);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.06);
+}
+.prov__accts:empty { display: none; }
 
 .acct__row {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 9px 10px;
-  border-radius: var(--r-ctl);
-  border: 1px solid var(--border);
-  background: var(--control);
+  gap: 10px;
+  padding: 8px 8px 8px 10px;
 }
-.acct__row[data-active="1"] {
-  border-color: var(--ok);
-  background: var(--control-active);
+.acct__row + .acct__row { border-top: 1px solid rgb(var(--wash) / 0.06); }
+/* An initial in a circle: a face for the account, lit in the provider's
+   colour when it is the one in use. */
+.acct__tag {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: rgb(var(--wash) / 0.07);
 }
-
+.acct__row[data-active="1"] .acct__tag {
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 18%, transparent);
+}
 .acct__who { flex: 1; min-width: 0; display: grid; gap: 1px; }
 .acct__name {
   font-size: 12.5px;
@@ -3667,25 +3974,48 @@ canvas.blob__body {
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
 .acct__sub {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   font-size: 10.5px;
   color: var(--text-off);
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
-
-/* Which provider, said in a word rather than with a logo nobody licensed. */
-.acct__tag {
+.acct__sub::before {
+  content: '';
   flex: none;
-  padding: 2px 7px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  font-size: 9.5px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-muted);
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--work);
 }
-.acct__row[data-provider="windscribe"] .acct__tag { color: var(--jade-2, var(--ok)); }
-
-.acct__act { flex: none; display: flex; gap: 5px; }
+.acct__row[data-ready="1"] .acct__sub::before { background: var(--ok); }
+.acct__act { flex: none; display: flex; align-items: center; gap: 4px; }
+.acct__act .btn--quiet {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 11px;
+  border-radius: 8px;
+}
+/* Remove asks once more in place, because it cannot be undone and it sits
+   a few pixels from Use. */
+.acct__act .acct__drop[data-sure="1"] {
+  color: var(--fail);
+  border-color: rgba(255, 143, 155, 0.4);
+}
+.acct__icon {
+  display: grid;
+  place-items: center;
+  width: 28px; height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-off);
+  cursor: pointer;
+  transition: color 150ms var(--ease), background 150ms var(--ease);
+}
+.acct__icon:hover { color: var(--ok); background: rgb(var(--wash) / 0.06); }
+.acct__icon:disabled { opacity: 0.4; cursor: default; }
 
 .acct__new {
   display: grid;
@@ -3696,122 +4026,40 @@ canvas.blob__body {
   border: 1px dashed var(--border);
 }
 
-.acct__none {
-  padding: 11px;
-  border-radius: var(--r-ctl);
-  border: 1px dashed var(--border);
-  color: var(--text-off);
-  font-size: 11.5px;
-  line-height: 1.5;
-}
-
-
-/* -------------------------------------------- which providers, and whose */
-
-.use {
-  display: grid;
-  gap: 7px;
-  padding: 10px 11px;
-  margin-top: 8px;
-  border-radius: var(--r-ctl);
-  border: 1px solid var(--border);
-  background: var(--control);
-}
-.use__cap {
-  font-size: 10px;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--text-off);
-}
-.use__opts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-/* One card per provider, and the mark is the card rather than a bullet at
-   the front of it: 68px, hung off the left edge so a third of it is cut by
-   the card's own border. It reads as a mark on a thing rather than an icon
-   in a list, and it leaves the middle of the card for the only two lines
-   that matter - who it is, and what state it is in.
-
-   The tick box is still where the state lives. It is only moved out of
-   sight, so the label stays clickable and everything reading .checked or
-   setting .disabled goes on working. */
-.prov {
-  position: relative;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-height: 104px;
-  padding: 13px 13px 12px 56px;
-  border-radius: calc(var(--r-ctl) + 3px);
-  border: 1px solid var(--border);
-  background: var(--bg);
-  cursor: pointer;
-  transition: border-color 180ms var(--ease),
-              background-color 180ms var(--ease),
-              transform 110ms var(--ease);
-}
-.prov__in {
-  position: absolute;
-  width: 1px; height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-.prov__mark {
-  position: absolute;
-  left: -23px; top: 50%;
-  width: 68px; height: 68px;
-  transform: translateY(-50%);
-  color: var(--text-off);
-  opacity: 0.32;
-  pointer-events: none;
-  transition: color 200ms var(--ease), opacity 200ms var(--ease);
-}
-.prov__name {
-  font-size: 13.5px;
-  line-height: 18px;
-  color: var(--text);
-}
-.prov__n {
-  font-size: 11px;
-  line-height: 15px;
-  color: var(--text-off);
-}
-/* The one thing to do about this provider. Pushed to the bottom of the card
-   so the two cards agree on where their buttons are even when their states
-   do not, and hidden outright when the answer is nothing - an always-present
-   control that sometimes does nothing is how this pane got confusing. */
+/* The foot: the step that is next, the rarer actions as icons beside it,
+   and the switch for drawing exits from this provider at the far end. */
+.prov__foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .prov__do {
-  margin-top: auto;
-  align-self: flex-start;
-  padding: 5px 10px;
-  border-radius: var(--r-ctl);
+  height: 32px;
+  padding: 0 13px;
+  border-radius: 10px;
   border: 1px solid var(--border);
   background: var(--control);
   color: var(--text);
   font: inherit;
-  font-size: 11px;
-  line-height: 15px;
+  font-size: 11.5px;
+  font-weight: 500;
   cursor: pointer;
   transition: border-color 150ms var(--ease), color 150ms var(--ease),
-              transform 110ms var(--ease);
+              background 150ms var(--ease), transform 110ms var(--ease);
 }
 .prov__do:hover { border-color: var(--ok); color: var(--ok); }
-.prov__do[data-lead="1"] { border-color: var(--ok); color: var(--ok); }
-/* The card's second, rarer action. Bottom right, opposite the step you are
-   actually here for, and an icon because naming it would give it the same
-   weight as the step - which it is nowhere near having. */
+/* The step that stands between a provider and a connection is the lit one;
+   Update is the only one that is not required, so it is the only one quiet. */
+.prov__do[data-lead="1"] {
+  border-color: transparent;
+  color: var(--ink, #06281d);
+  background: var(--ok);
+  font-weight: 600;
+}
+.prov__do[data-lead="1"]:hover { color: var(--ink, #06281d); filter: brightness(1.08); }
 .prov__side {
-  position: absolute;
-  right: 9px; bottom: 9px;
   display: grid;
   place-items: center;
-  width: 26px; height: 26px;
+  width: 32px; height: 32px;
   padding: 0;
-  border-radius: var(--r-ctl);
-  border: 1px solid transparent;
+  border-radius: 10px;
+  border: 1px solid rgb(var(--wash) / 0.08);
   background: none;
   color: var(--text-off);
   cursor: pointer;
@@ -3826,51 +4074,147 @@ canvas.blob__body {
 .prov__side[data-busy="1"] .ico {
   animation: prov-spin 900ms linear infinite;
 }
+.prov__do:active, .prov__side:active { transform: scale(0.94); }
+/* A lit step that is asking goes dark, so the amber of work in progress has
+   something to be read against. */
+.prov__do[data-lead="1"][data-busy="1"]:disabled { background: var(--control); }
 @media (prefers-reduced-motion: reduce) {
   .prov__side[data-busy="1"] .ico { animation: none; opacity: 0.5; }
-}
-/* Off in the corner rather than in a row: the state line is what the eye
-   wants from two of these side by side, and a tick competing on the same
-   line made both harder to read. */
-.prov__tick {
-  position: absolute;
-  top: 10px; right: 11px;
-  width: 13px; height: 13px;
-  color: var(--ok);
-  opacity: 0;
-  transform: scale(0.6);
-  transition: opacity 130ms var(--ease), transform 220ms var(--ease);
-}
-.prov:hover:not([data-empty="1"]) { border-color: var(--text-off); }
-/* The card gives under the press. It is a switch the size of a poster, and
-   at that size a border change alone does not read as a thing being pushed. */
-.prov:not([data-empty="1"]):active { transform: scale(0.985); }
-.prov { transform-origin: center; }
-.prov__do:active, .prov__side:active { transform: scale(0.94); }
-@media (prefers-reduced-motion: reduce) {
-  .prov:not([data-empty="1"]):active,
   .prov__do:active, .prov__side:active { transform: none; }
 }
-.prov[data-on="1"] {
-  border-color: var(--ok);
-  background: var(--control);
-}
-.prov[data-on="1"] .prov__mark { color: var(--ok); opacity: 0.9; }
-.prov[data-on="1"] .prov__tick { opacity: 1; transform: none; }
-/* Not usable is said rather than shown as an empty tick that refuses. The
-   card dims, but the line saying why and the button that answers it stay at
-   full strength - between them they are the only thing on the card worth
-   reading when it is in this state. */
-.prov[data-empty="1"] { cursor: default; }
-.prov[data-empty="1"] .prov__mark { opacity: 0.14; }
-.prov[data-empty="1"] .prov__name { color: var(--text-off); }
 
-/* Below this the two cards side by side leave about ninety pixels for a name
-   and a button, which is not enough for either. The default window is 400
-   wide, so this is the shape most people see. */
-@media (max-width: 560px) {
-  .use__opts { grid-template-columns: minmax(0, 1fr); }
+.prov__use {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-muted);
 }
+/* The tick box is where the state lives, moved out of sight; the switch
+   beside it is drawn off it. */
+.prov__in {
+  position: absolute;
+  width: 1px; height: 1px;
+  opacity: 0;
+}
+.prov__switch {
+  position: relative;
+  flex: none;
+  width: 34px; height: 20px;
+  border-radius: 999px;
+  background: rgb(var(--wash) / 0.08);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.12);
+  transition: background 200ms var(--ease), box-shadow 200ms var(--ease);
+}
+.prov__switch::after {
+  content: '';
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: transform 260ms var(--swing, var(--ease)), background 200ms var(--ease);
+}
+.prov__in:checked + .prov__switch { background: var(--ok); box-shadow: none; }
+.prov__in:checked + .prov__switch::after { transform: translateX(14px); background: var(--ink, #06281d); }
+.prov__in:focus-visible + .prov__switch { outline: 2px solid var(--focus); outline-offset: 2px; }
+.prov__in:disabled + .prov__switch { opacity: 0.4; }
+.prov[data-empty="1"] .prov__use { cursor: default; color: var(--text-off); }
+
+/* Narrow: the switch's words go before the switch does. */
+@media (max-width: 400px) {
+  .prov__usecap { display: none; }
+}
+
+/* ------------------------------------------------- adding an account */
+
+.addacct { display: grid; gap: 0; margin: 2px 0 0; padding: 4px 16px 18px; border: 0; }
+
+/* The chosen provider, large, and which login it wants. */
+.addacct__hero {
+  --brand: #3bc1c9;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin-top: 4px;
+  padding: 14px;
+  border-radius: 16px;
+  background:
+    linear-gradient(120deg, color-mix(in srgb, var(--brand) 15%, transparent), transparent 70%),
+    rgb(var(--wash) / 0.025);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 28%, transparent);
+}
+.addacct__hero[data-provider="windscribe"] { --brand: var(--jade-2, #4ae5c3); }
+.addacct__badge {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 46px; height: 46px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--brand) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 35%, transparent);
+}
+.addacct__mark { width: 24px; height: 24px; color: var(--brand); }
+.addacct__copy { display: grid; gap: 3px; min-width: 0; }
+.addacct__name { font-size: 15px; font-weight: 600; color: var(--text); }
+.addacct__say { font-size: 11.5px; line-height: 16px; color: var(--text-muted); }
+
+.addacct__full {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 14px;
+  background: rgb(var(--wash) / 0.03);
+  font-size: 12px; line-height: 18px;
+  color: var(--text-muted);
+}
+
+.addacct__form { display: grid; margin-top: 14px; }
+.addacct__form .field { margin-top: 12px; }
+.addacct__form .field:first-child { margin-top: 0; }
+.addacct__form .field__in { height: 40px; border-radius: 10px; }
+
+.addacct__safe {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 14px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: rgb(var(--wash) / 0.035);
+  font-size: 11px; line-height: 15px;
+  color: var(--text-muted);
+}
+.addacct__safe .ico { flex: none; color: var(--ok); }
+
+.btn.addacct__go {
+  width: 100%;
+  height: 44px;
+  margin-top: 14px;
+  justify-content: center;
+  border-radius: 12px;
+  background: var(--ok);
+  color: var(--ink, #06281d);
+  font-weight: 600;
+  box-shadow: none;
+}
+.btn.addacct__go:hover { filter: brightness(1.07); }
+.btn.addacct__go[data-busy='1']:disabled { background: var(--control); }
+.addacct__cancel {
+  justify-self: center;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-off);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.addacct__cancel:hover { color: var(--text-muted); background: rgb(var(--wash) / 0.05); }
+.addacct .note:empty { display: none; }
 
 /* What a pin run left behind, when it wrote somewhere the app already reads
    and there is therefore nothing to press. */
@@ -3987,10 +4331,27 @@ canvas.blob__body {
   font-size: 10px;
   color: var(--text-off);
 }
+/* A width, not a minimum - and that is the whole of it.
+ *
+ * The row is a flex line of four cells and the name is the one that gives,
+ * so the width of this last cell decides where the three before it sit. A
+ * min-width let it be 62px on "not tested" and 116px on "no proxy for this
+ * account", and the address beside it moved 54px between two rows of the
+ * same open list. Six exits under Bulgaria, four addresses at one x and two
+ * at another: a column of monospace addresses that is not a column reads as
+ * a list that failed to finish drawing.
+ *
+ * The cost is 56px off the name, which is a city that is usually one short
+ * word and is repeated down the list anyway - Surfshark pins several
+ * addresses to one host, so the address is the thing that differs. A reason
+ * longer than the cell ellipsises and keeps its title. */
 .exit__ping {
   flex: none;
-  min-width: 62px;
+  width: 118px;
   text-align: right;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-size: 10.5px;
   color: var(--text-muted);
 }
@@ -3998,11 +4359,7 @@ canvas.blob__body {
    are refused is the finding - dropping them would leave a shorter list
    with no way to tell it had been filtered. */
 .exit[data-state="blocked"] { opacity: 0.55; }
-.exit[data-state="blocked"] .exit__ping {
-  color: var(--fail);
-  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-  max-width: 120px;
-}
+.exit[data-state="blocked"] .exit__ping { color: var(--fail); }
 .exit[data-state="ok"] .exit__ping { color: var(--ok); }
 
 /* ------------------------------------------- keeping names off the flags */
@@ -4019,9 +4376,9 @@ canvas.blob__body {
 .row::before {
   opacity: 0.34;
   -webkit-mask-image: linear-gradient(to right, transparent 0%,
-                      rgba(0, 0, 0, 0.10) 44%, #000 82%);
+                      rgb(0 0 0 / calc(0.10 * var(--shade))) 44%, #000 82%);
   mask-image: linear-gradient(to right, transparent 0%,
-              rgba(0, 0, 0, 0.10) 44%, #000 82%);
+              rgb(0 0 0 / calc(0.10 * var(--shade))) 44%, #000 82%);
 }
 .row:hover::before, .row.is-cursor::before { opacity: 0.5; }
 
@@ -4079,7 +4436,7 @@ canvas.blob__body {
 .load {
   width: 22px; height: 4px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.10);
+  background: rgb(var(--wash) / 0.10);
   overflow: hidden;
   position: relative;
 }
@@ -4093,11 +4450,39 @@ canvas.blob__body {
 .load[data-level="mid"]::after { background: var(--work, #d9a441); }
 .load[data-level="high"]::after { background: var(--fail); }
 
+.row__ping { font-size: 12.5px; font-weight: 600; color: var(--ok); white-space: nowrap; }
+.row__ping[data-level="mid"] { color: var(--work, #d9a441); }
+.row__ping[data-level="high"] { color: var(--fail); }
+
+/* A city in two lines, as on the phone: the name and its time on top, whose
+   relays, 10G, P2P and the count under them, and the buttons down the right
+   of both. Beside the name, the time and three buttons had left it 109px
+   in the default 400px window. */
+.row--city {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "dot name ping rail" "dot meta meta rail";
+  column-gap: 10px;
+  row-gap: 3px;
+  align-items: center;
+}
+.row--city > .flag { grid-area: dot; }
+.row--city .row__copy,
+.row--city .row__marks { display: contents; }
+.row--city .row__name { grid-area: name; min-width: 0; }
+.row--city .row__meta {
+  grid-area: meta; min-width: 0;
+  display: flex; align-items: center; gap: 7px;
+}
+.row--city .row__meta .row__tag { width: 16px; height: 16px; flex: none; }
+.row--city .row__count { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row--city .row__ping { grid-area: ping; justify-self: end; }
+.row--city > .rail { grid-area: rail; margin-left: 0; }
+
+/* The word alone, like the provider's mark beside it - three boxed things
+   in a row read as buttons. */
 .mark {
-  padding: 1px 5px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  font-size: 8.5px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.04em;
   color: var(--text-off);
@@ -4191,8 +4576,8 @@ canvas.blob__body {
    spacing alone - three seats a pixel apart, eight from the mark beside
    them - and the track itself arrives on the row you are actually on. */
 .row:hover .rail, .row:focus-visible .rail, .row.is-picked .rail {
-  background: rgba(255, 255, 255, 0.05);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  background: rgb(var(--wash) / 0.05);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.08);
 }
 
 /* Every seat the same size, and that size is a pointer target rather than a
@@ -4303,13 +4688,13 @@ canvas.blob__body {
   padding: 9px 14px;
   gap: 10px;
   border: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+  border-bottom: 1px solid rgb(var(--wash) / 0.045);
   border-radius: 0;
   background: transparent;
   box-shadow: none;
   contain-intrinsic-size: auto 46px;
 }
-.sheet__list .row:hover { background: rgba(255, 255, 255, 0.035); }
+.sheet__list .row:hover { background: rgb(var(--wash) / 0.035); }
 .sheet__list .row.is-picked {
   background: rgba(74, 229, 195, 0.07);
   box-shadow: inset 2px 0 0 var(--ok);
@@ -4330,7 +4715,7 @@ canvas.blob__body {
   background-image: var(--flag);
   background-size: cover;
   background-position: center;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.14);
 }
 /* A city has no flag of its own - it is in the country above it - so it gets
    a mark that holds the same column. */
@@ -4772,8 +5157,8 @@ canvas.blob__body {
   0%, 100% { color: var(--glyph-rest); text-shadow: none; }
   28%      { color: var(--glyph-mid); text-shadow: none; }
   46%      { color: var(--glyph-peak); text-shadow: 0 0 13px var(--glyph-halo); }
-  60%      { color: #FFFFFF; text-shadow: 0 0 10px rgba(255, 255, 255, 0.75),
-                                          0 0 20px rgba(255, 255, 255, 0.35); }
+  60%      { color: #FFFFFF; text-shadow: 0 0 10px rgb(var(--wash) / 0.75),
+                                          0 0 20px rgb(var(--wash) / 0.35); }
   78%      { color: var(--glyph-mid); text-shadow: none; }
 }
 
@@ -4848,7 +5233,7 @@ canvas.blob__body {
      ring is the ground colour, softly, so a digit landing on a stroke of
      the box still has an edge; it is a blur too, not an outline. */
   text-shadow:
-    0 0 3px rgba(9, 9, 14, 0.9),
+    0 0 3px rgb(var(--deep) / 0.9),
     0 0 6px rgba(255, 39, 64, 0.55),
     0 0 12px rgba(255, 39, 64, 0.3);
 }
@@ -4875,8 +5260,8 @@ canvas.blob__body {
   overscroll-behavior: contain;
   margin: 11px 0 2px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.02);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  background: rgb(var(--wash) / 0.02);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
 }
 .drop__row {
   display: grid;
@@ -4885,7 +5270,7 @@ canvas.blob__body {
   gap: 4px 10px;
   padding: 7px 11px;
 }
-.drop__row + .drop__row { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04); }
+.drop__row + .drop__row { box-shadow: inset 0 1px 0 rgb(var(--wash) / 0.04); }
 .drop__where { font-size: 11.5px; color: var(--text); }
 .drop__ip {
   font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
@@ -4984,3 +5369,649 @@ canvas.blob__body {
   border-color: rgba(255, 199, 97, 0.3);
   color: var(--work);
 }
+
+/* ------------------------------------------------------------ first run */
+
+/* The mark, drawing itself in: the ring traced round from its start, the
+   disc swelling in its middle, then the bead leaving through the gap - the
+   Android intro's animation, in CSS. */
+.logo-mark { width: 100%; height: 100%; display: block; overflow: visible; }
+.logo-mark__disc { fill: var(--ok); transform-origin: 128px 128px; }
+.logo-mark__ring { fill: none; stroke: var(--disc); stroke-width: 20; stroke-linecap: round; }
+.logo-mark__bead { fill: var(--disc); transform-origin: 221px 35px; }
+
+.logo-mark--draw .logo-mark__ring {
+  stroke-dasharray: 1 1.2;
+  stroke-dashoffset: 1;
+  animation: mark-ring 2s cubic-bezier(0.4, 0, 0.2, 1) 0.15s forwards;
+}
+.logo-mark--draw .logo-mark__disc {
+  transform: scale(0);
+  animation: mark-disc 1.3s cubic-bezier(0.34, 1.56, 0.64, 1) 0.7s forwards;
+}
+.logo-mark--draw .logo-mark__bead {
+  opacity: 0;
+  transform: translate(-24px, 24px) scale(0.4);
+  animation: mark-bead 0.9s cubic-bezier(0.22, 1, 0.36, 1) 2s forwards;
+}
+@keyframes mark-ring { to { stroke-dashoffset: 0; } }
+@keyframes mark-disc { to { transform: scale(1); } }
+@keyframes mark-bead { to { opacity: 1; transform: none; } }
+
+/* Working: the ring turns, slowly, while the servers are got ready. */
+.logo-mark--spin { animation: mark-turn 2.4s linear infinite; }
+.logo-mark--spin .logo-mark__disc { animation: mark-breathe 1.6s ease-in-out infinite alternate; }
+@keyframes mark-turn { to { transform: rotate(360deg); } }
+@keyframes mark-breathe { from { transform: scale(0.9); } to { transform: scale(1); } }
+
+.sheet--first[open] { align-items: center; }
+.first__top { align-self: stretch; display: flex; justify-content: flex-end; padding: 14px 16px 0; }
+.first__top .btn { height: 34px; padding: 0 14px; }
+.first__body {
+  width: 100%; max-width: 420px; flex: 1;
+  display: flex; flex-direction: column; align-items: center;
+  padding: 28px 20px 20px; overflow-y: auto;
+}
+.first__art { width: 132px; height: 132px; margin: 6px 0 18px; }
+.first__title { margin: 0; font-size: 22px; font-weight: 700; text-align: center; }
+.first__say {
+  margin: 8px 0 20px; color: var(--text-muted); font-size: 13px; line-height: 1.55;
+  text-align: center;
+}
+.first__go {
+  height: 44px;
+  border: 0;
+  border-radius: 13px;
+  color: #07140f;
+  background: linear-gradient(90deg, #61efbf, #3dd4ee);
+  font-size: 14px;
+  font-weight: 700;
+}
+.first__go:hover { filter: brightness(1.06); }
+.first__foot {
+  align-self: stretch; display: flex; flex-direction: column; gap: 16px;
+  padding: 0 20px 20px;
+}
+
+.intro__track { flex: 1; width: 100%; position: relative; overflow: hidden; }
+.intro__slide {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 0 28px; text-align: center;
+  opacity: 0; transform: translateX(40px);
+  transition: opacity 360ms ease, transform 480ms cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+}
+.intro__slide.is-here { opacity: 1; transform: none; pointer-events: auto; }
+.intro__slide.is-gone { transform: translateX(-40px); }
+.intro__art { width: 150px; height: 150px; margin-bottom: 26px; display: grid; place-items: center; }
+.intro__badge {
+  width: 96px; height: 96px; border-radius: 50%; display: grid; place-items: center;
+  color: var(--tint); background: color-mix(in srgb, var(--tint), transparent 84%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--tint), transparent 70%),
+              0 0 60px color-mix(in srgb, var(--tint), transparent 70%);
+}
+.intro__badge .ico { width: 40px; height: 40px; }
+.intro__dots { display: flex; justify-content: center; gap: 7px; }
+.intro__dots i {
+  width: 7px; height: 7px; border-radius: 4px; background: rgb(var(--wash) / 0.18);
+  transition: width 380ms cubic-bezier(0.22, 1, 0.36, 1), background 300ms ease;
+}
+.intro__dots i.is-here { width: 24px; background: var(--ok); }
+
+.choice {
+  width: 100%; margin-bottom: 12px; padding: 14px;
+  border: 1px solid rgb(var(--wash) / 0.08); border-radius: 16px;
+  background: rgb(var(--wash) / 0.03); color: inherit; font: inherit; text-align: left;
+}
+.choice--row { cursor: pointer; }
+.choice--row:hover { background: rgb(var(--wash) / 0.05); }
+.choice__head { display: flex; align-items: center; gap: 12px; }
+.choice__glyph {
+  width: 36px; height: 36px; flex: none; display: grid; place-items: center;
+  border-radius: 10px; color: var(--ok); background: rgba(97, 239, 191, 0.1);
+}
+.choice__copy { display: flex; flex-direction: column; gap: 2px; }
+.choice__name { font-size: 14px; font-weight: 700; }
+.choice__note { color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+.choice__pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; width: 100%; }
+
+.steps { list-style: none; margin: 4px 0 12px; padding: 0; width: 100%; }
+.steps__row { display: flex; gap: 12px; padding: 8px 0; }
+.steps__tick {
+  width: 20px; height: 20px; flex: none; margin-top: 1px; border-radius: 50%;
+  background: rgb(var(--wash) / 0.08); position: relative;
+}
+.steps__row[data-at='now'] .steps__tick {
+  background: rgba(97, 239, 191, 0.18); box-shadow: inset 0 0 0 1px var(--ok);
+  animation: status-pulse 1.2s ease-out infinite;
+}
+.steps__row[data-at='done'] .steps__tick { background: var(--ok); }
+.steps__row[data-at='done'] .steps__tick::after {
+  content: ''; position: absolute; left: 7px; top: 4px; width: 5px; height: 9px;
+  border: solid #07140f; border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.steps__copy { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.steps__name { font-size: 13px; font-weight: 600; color: var(--text-muted); }
+.steps__row[data-at='now'] .steps__name,
+.steps__row[data-at='done'] .steps__name { color: var(--text); }
+.steps__detail { font-size: 11px; color: var(--text-muted); }
+.steps__detail:empty { display: none; }
+.steps__bar { display: none; height: 4px; border-radius: 2px; background: rgb(var(--wash) / 0.08); overflow: hidden; }
+.steps__row[data-at='now'] .steps__bar { display: block; }
+.steps__bar i { display: block; height: 100%; width: 2%; background: var(--ok); transition: width 300ms ease; }
+
+/* ---------------------------------------------------------------- themes */
+
+/* The Android app's nine palettes. Midnight is :root above. Each dark one
+   moves the page, its surfaces and its light; White turns the page over -
+   dark text, dark hairlines, the state colours a step deeper so mint and
+   amber still read on paper. */
+:root[data-theme='graphite'] {
+  --raise-base: 17 18 20;
+  --bg: #111113; --surface: #18191b; --control: #212225;
+  --control-hover: #272a2d; --control-active: #2e3135;
+  --deep: 14 14 16; --raise-top: 52 54 58; --raise-hi: 45 47 51;
+  --raise-mid: 34 35 38; --raise-lo: 29 30 33;
+  --bg-top: #141416; --bg-end: #0c0c0e;
+  --glow: rgba(255, 255, 255, 0.06); --glow-2: rgba(255, 255, 255, 0.02);
+}
+:root[data-theme='black'] {
+  --raise-base: 8 8 11;
+  --bg: #000000; --surface: #0e0e12; --control: #18181f;
+  --control-hover: #202029; --control-active: #2a2a34;
+  --deep: 4 4 6; --raise-top: 44 44 54; --raise-hi: 36 36 46;
+  --raise-mid: 26 26 34; --raise-lo: 20 20 27;
+  --bg-top: #050507; --bg-end: #000000;
+  --glow: rgba(72, 58, 194, 0.12); --glow-2: rgba(50, 196, 189, 0.03);
+}
+:root[data-theme='ocean'] {
+  --raise-base: 12 19 32;
+  --bg: #060b16; --surface: #0f1828; --control: #172236;
+  --control-hover: #1e2b42; --control-active: #26344e;
+  --deep: 6 11 22; --raise-top: 44 60 88; --raise-hi: 37 51 76;
+  --raise-mid: 28 40 60; --raise-lo: 23 34 52;
+  --bg-top: #0a1222; --bg-end: #040810;
+  --glow: rgba(42, 111, 219, 0.22); --glow-2: rgba(50, 160, 196, 0.07);
+}
+:root[data-theme='forest'] {
+  --raise-base: 12 21 18;
+  --bg: #060e0b; --surface: #0f1a16; --control: #16241f;
+  --control-hover: #1d2d27; --control-active: #25372f;
+  --deep: 6 14 11; --raise-top: 44 64 56; --raise-hi: 37 55 48;
+  --raise-mid: 27 42 36; --raise-lo: 22 36 31;
+  --bg-top: #0a1612; --bg-end: #040a08;
+  --glow: rgba(31, 157, 107, 0.2); --glow-2: rgba(50, 196, 150, 0.06);
+}
+:root[data-theme='plum'] {
+  --raise-base: 22 14 27;
+  --bg: #0e0812; --surface: #1b1222; --control: #261a2f;
+  --control-hover: #30213b; --control-active: #3a2946;
+  --deep: 14 8 18; --raise-top: 66 46 80; --raise-hi: 57 39 70;
+  --raise-mid: 43 29 53; --raise-lo: 37 25 46;
+  --bg-top: #160d1c; --bg-end: #09050c;
+  --glow: rgba(162, 58, 194, 0.24); --glow-2: rgba(196, 50, 160, 0.06);
+}
+:root[data-theme='ember'] {
+  --raise-base: 24 17 14;
+  --bg: #110a08; --surface: #1e1512; --control: #2a1d18;
+  --control-hover: #34241e; --control-active: #3f2c25;
+  --deep: 17 10 8; --raise-top: 72 52 44; --raise-hi: 62 44 37;
+  --raise-mid: 47 33 28; --raise-lo: 41 29 24;
+  --bg-top: #1a100c; --bg-end: #0b0605;
+  --glow: rgba(217, 98, 43, 0.22); --glow-2: rgba(196, 120, 50, 0.06);
+}
+:root[data-theme='slate'] {
+  --raise-base: 18 22 27;
+  --bg: #0c0f13; --surface: #161b21; --control: #1f262e;
+  --control-hover: #27303a; --control-active: #303a45;
+  --deep: 12 15 19; --raise-top: 54 64 76; --raise-hi: 46 55 66;
+  --raise-mid: 35 42 51; --raise-lo: 30 36 44;
+  --bg-top: #11161c; --bg-end: #080a0d;
+  --glow: rgba(96, 125, 155, 0.16); --glow-2: rgba(96, 160, 180, 0.05);
+}
+:root[data-theme='white'] {
+  --bg: #f4f5f8; --surface: #ffffff; --control: #eceef2;
+  --control-hover: #e4e7ec; --control-active: #dce0e7;
+  --divider: rgb(0 0 0 / calc(0.09 * var(--shade)));
+  --border: rgb(0 0 0 / calc(0.14 * var(--shade)));
+  --text: #16171d; --text-muted: #474b57; --text-off: #7a7f8e;
+  --ok: #0c9c72; --work: #b7791f; --fail: #d23b54; --focus: #0c9c72;
+  --fail-bg: rgba(210, 59, 84, 0.1);
+  --wash: 0 0 0;
+  --deep: 255 255 255;
+  --raise-top: 255 255 255; --raise-hi: 250 251 253;
+  --raise-mid: 244 245 248; --raise-lo: 238 240 244;
+  --bg-top: #f8f9fb; --bg-end: #eceef3;
+  --glow: rgba(108, 92, 231, 0.12); --glow-2: rgba(50, 196, 189, 0.06);
+  --disc: #111318;
+  --jade-2: #0c9c72;
+  --shade: 0.25;
+  --raise-base: 255 255 255;
+  color-scheme: light;
+}
+
+/* The theme picker: each theme as a little page of itself - its background,
+   a card on it, and a dot of mint - so the choice is seen, not read. */
+.themes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+.theme {
+  display: flex; flex-direction: column; gap: 6px; padding: 6px;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: transparent; color: var(--text-muted); font: inherit; font-size: 11px;
+  cursor: pointer; text-align: left;
+}
+.theme:hover { border-color: rgb(var(--wash) / 0.28); }
+.theme[aria-checked='true'] { border-color: var(--ok); color: var(--text); box-shadow: 0 0 0 1px var(--ok); }
+.theme__page {
+  position: relative; height: 34px; border-radius: 8px; overflow: hidden;
+  background: var(--page);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.08);
+}
+.theme__page i {
+  position: absolute; left: 6px; right: 14px; bottom: 6px; height: 12px;
+  border-radius: 4px; background: var(--card);
+}
+.theme__page b {
+  position: absolute; right: 6px; top: 6px; width: 7px; height: 7px; border-radius: 50%;
+  background: #61efbf;
+}
+
+/* The few colours White cannot take from a variable: the button's working
+   and connected looks, which are dark glass on the dark themes, and the
+   scrollbars, painted for a dark page. */
+:root[data-theme='white'] .go[data-mode='on'] {
+  background: rgba(12, 156, 114, 0.08); border-color: rgba(12, 156, 114, 0.35);
+}
+:root[data-theme='white'] .go[data-mode='on']:hover { background: rgba(12, 156, 114, 0.14); }
+:root[data-theme='white'] .go[data-mode='busy'] {
+  background: rgba(183, 121, 31, 0.08); border-color: rgba(183, 121, 31, 0.3);
+}
+:root[data-theme='white'] .go[data-mode='busy']:hover { background: rgba(183, 121, 31, 0.14); }
+:root[data-theme='white'] .sheet__list::-webkit-scrollbar-thumb,
+:root[data-theme='white'] .sheet__body::-webkit-scrollbar-thumb {
+  border-color: var(--surface); background: #c9ccd4;
+}
+:root[data-theme='white'] .side__cap i { background: #a2a6b2; }
+
+/* The window's own buttons along the top of every sheet. */
+.winbar {
+  flex: none;
+  align-self: stretch;
+  display: flex; justify-content: flex-end; align-items: center; gap: 2px;
+  height: 34px; padding: 4px 10px 0;
+}
+.winbar .icon { width: 30px; height: 28px; }
+
+/* The close question: a card, not a page - it is one decision with two
+   answers and it should not look like somewhere you have arrived. */
+.ask {
+  width: min(330px, calc(100vw - 40px));
+  margin: auto;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+}
+.ask::backdrop { background: rgb(0 0 0 / calc(0.55 * var(--shade))); }
+.ask__title { margin: 0 0 8px; font-size: 15px; font-weight: 700; }
+.ask__say { margin: 0 0 14px; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.ask__keep {
+  display: flex; align-items: flex-start; gap: 8px; margin-bottom: 16px;
+  color: var(--text-muted); font-size: 11.5px; line-height: 1.4; cursor: pointer;
+}
+.ask__keep input { margin: 1px 0 0; accent-color: var(--ok); }
+.ask__row { display: flex; justify-content: flex-end; gap: 8px; }
+.ask__row .btn { padding: 0 14px; }
+
+/* Three answers, sharing the strip the ways out use. */
+.seg--close { margin-top: 10px; }
+.seg--close[data-close='tray'] .seg__slide { transform: translateX(calc(100% + 2.7px)); }
+.seg--close[data-close='exit'] .seg__slide { transform: translateX(calc(200% + 5.4px)); }
+
+/* Nothing of the main screen until the first run has been settled - see
+   data-boot in index.html. The header stays: it is the window's own frame,
+   with the only close button there is, and a window that cannot be closed
+   while it waits for an answer is worse than a bare one. */
+:root[data-boot='wait'] .app > :not(.bar) { visibility: hidden; }
+
+/* With the connection's details open the card is at its tallest, and the
+   orb's floor of 236px left the hint below it 7px past the bottom of the
+   window - on a copy not set up yet, where the hint runs to two lines. The
+   stage centres the orb on whatever room it has, so it can give back ten. */
+.app:has(#details:not([hidden])) .hero { min-height: 226px; }
+
+/* ------------------------------------------------- timing every country */
+
+.reach__all {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(97, 239, 191, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(97, 239, 191, 0.4);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 150ms var(--ease), box-shadow 150ms var(--ease);
+}
+.reach__all .ico { color: var(--ok); }
+.reach__all:hover { background: rgba(97, 239, 191, 0.2); }
+.reach__all[data-running="1"] {
+  background: rgba(255, 143, 155, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 143, 155, 0.45);
+}
+.reach__all[data-running="1"] .ico { color: var(--fail); }
+.reach__all:disabled { opacity: 0.45; cursor: default; }
+
+/* The line between what was timed and what was not. */
+.listsplit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 4px 4px;
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-off);
+}
+.listsplit b { color: var(--text); font-weight: 600; }
+
+/* 10G and P2P on a country's own line. */
+.row__name .mark { margin-left: 6px; vertical-align: 1px; font-weight: 400; }
+
+/* An exit that failed: a red mark where its time would be, and the reason
+   behind it on hover or focus. */
+.exit__why {
+  position: relative;
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  width: 118px; height: 22px;
+  color: var(--fail);
+  cursor: help;
+}
+.exit__why .ico { width: 15px; height: 15px; }
+.exit__why .info__bubble { left: auto; right: 0; transform: none; min-width: 200px; }
+.exit__why:hover .info__bubble,
+.exit__why:focus .info__bubble { opacity: 1; visibility: visible; }
+.exit__num { color: var(--text-off); font-weight: 400; margin-left: 6px; }
+
+.quick__row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.quick__cap { flex: 1; display: grid; gap: 2px; font-size: 12px; color: var(--text); }
+.quick__sub { font-size: 10.5px; color: var(--text-off); }
+#prefQuick .note:empty { display: none; }
+
+/* ------------------------------------------------- a window made wide */
+
+/* Maximised, or dragged out, the window keeps the column the app is drawn
+   for, in the middle, rather than stretching every row until a name and
+   its buttons are a screen apart. The title bars stay full width, so the
+   window's own buttons stay in its corner. */
+@media (min-width: 720px) {
+  .app > :not(.bar),
+  dialog.sheet > :not(.winbar):not(.floor) {
+    width: 100%;
+    max-width: 640px;
+    margin-inline: auto;
+  }
+}
+
+/* -------------------------------------------- the exit list, as on the phone */
+
+/* The Android app's picker, brought back to the window it came from: each
+   country a card of its own, its time and its place under the name, a line
+   of who and what under that, and its cities in a panel inside the card
+   when it is open. Kept here, at the end, because the rows above have been
+   restyled in layers and this has to be the last word on them. */
+
+/* The sorts as chips, each with its word, and where the list comes from as
+   a chip after them. */
+#reach { flex-wrap: wrap; gap: 6px; padding: 4px 16px 8px; }
+#sortBy.pair--sort {
+  display: flex; gap: 6px; flex: none;
+  padding: 0; border: 0; background: none; box-shadow: none;
+}
+#sortBy .pair__slide { display: none; }
+#sortBy .pair__opt {
+  display: inline-flex; align-items: center; gap: 5px;
+  width: auto; height: 30px; padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid var(--divider);
+  background: rgb(var(--wash) / 0.035);
+  color: var(--text-muted);
+  font: inherit; font-size: 12px; font-weight: 500;
+  white-space: nowrap;
+}
+#sortBy .pair__opt .ico { width: 13px; height: 13px; color: var(--text-off); }
+#sortBy .pair__opt[aria-selected="true"] {
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+  color: var(--text); font-weight: 600;
+}
+#sortBy .pair__opt[aria-selected="true"] .ico { color: var(--ok); }
+#reach #sourcePick {
+  width: auto; margin-left: auto;
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 30px; padding: 0 9px 0 11px;
+  border: 1px solid var(--divider); border-radius: 999px;
+  font-size: 12px; font-weight: 600; letter-spacing: 0; text-transform: none;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+#reach #sourcePick[data-narrow='1'] {
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+  color: var(--ok);
+}
+.reach__line {
+  display: flex; align-items: center; gap: 10px;
+  padding: 2px 16px 8px;
+}
+/* Nothing to say, no line: the room goes to the list. */
+.reach__line:has(.reach__said:empty) { display: none; }
+.reach__line .reach__said { flex: 1; min-width: 0; padding: 0; font-size: 12px; }
+/* Test all as a round chip after the others, the bolt alone. */
+#reach .reach__all {
+  flex: none; justify-content: center;
+  width: 30px; height: 30px; padding: 0; margin-left: 0;
+  border-radius: 999px;
+}
+#reach .reach__all .ico { width: 14px; height: 14px; }
+
+/* The list's own heading, with the count: FASTEST FIRST 72. */
+.listsplit--top { margin: 10px 6px 2px; }
+
+/* Fastest available: the one featured card. */
+#list .row--auto {
+  height: auto; margin: 4px 0;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent, #a196ff) 25%, transparent);
+  border-radius: 18px;
+  background: linear-gradient(120deg,
+    color-mix(in srgb, var(--accent, #a196ff) 16%, transparent),
+    color-mix(in srgb, var(--ok) 6%, transparent));
+}
+#list .row--auto.is-picked {
+  border: 1.5px solid color-mix(in srgb, var(--ok) 70%, transparent);
+}
+#list .row--auto::before, #list .row--auto::after { display: none; }
+#list .row--auto .row__auto-icon { width: 40px; height: 40px; border-radius: 13px; }
+#list .row--auto .row__name { font-size: 15px; font-weight: 650; }
+#list .row--auto .row__sub { font-size: 12px; white-space: normal; }
+
+/* A country: the card is the group, the row inside it is bare. */
+/* Tighter than the phone's card - padding, flag and the gaps between lines
+   all a step down - so a 740px window shows five countries rather than
+   three and a bit. The same three lines, the same order. */
+#list .group {
+  margin: 3px 0;
+  border: 1px solid var(--divider);
+  border-radius: 18px;
+  background: rgb(var(--wash) / 0.028);
+  overflow: hidden;
+  transition: border-color 160ms var(--ease), background 160ms var(--ease);
+}
+#list .group:hover { border-color: rgb(var(--wash) / 0.16); }
+#list .group.is-in {
+  border: 1.5px solid color-mix(in srgb, var(--ok) 60%, transparent);
+  background: color-mix(in srgb, var(--ok) 7%, transparent);
+}
+#list .group > .row {
+  height: auto;
+  margin: 0;
+  padding: 9px 4px 9px 10px;
+  gap: 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  align-items: center;
+}
+#list .group > .row::before,
+#list .group > .row::after { display: none; }
+#list .group > .row:active { transform: none; }
+#list .group > .row > .flag { width: 38px; height: 38px; }
+/* A card not yet drawn holds a card's height, not an old flat row's 46px:
+   content-visibility skips it, and the three lines inside spilled out of
+   the 46px it was holding. */
+#list .group > .row { contain-intrinsic-size: auto 77px; }
+/* The lines' own margins space them; the grid's gap on top was 4px more. */
+#list .group > .row .row__copy { gap: 0; }
+#list .group > .row .row__name {
+  font-size: 15px; line-height: 20px; font-weight: 650;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#list .group > .row .row__meta {
+  margin-top: 2px;
+  font-family: inherit; font-size: 12px; letter-spacing: 0;
+  color: var(--text-off);
+  /* Two lines at most, wrapping between words like a sentence - the phone's
+     maxLines = 2 - rather than losing the relay count off the end. */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; white-space: normal;
+}
+#list .group > .row .row__meta b { color: var(--text); font-weight: 600; }
+.row__dot {
+  display: inline-block; width: 6px; height: 6px; margin: 0 5px 1px 0;
+  border-radius: 50%; background: var(--ok); vertical-align: middle;
+}
+.row__dot[data-level="mid"] { background: var(--work); }
+.row__dot[data-level="high"] { background: var(--fail); }
+.row__lead[data-level="high"] { color: var(--fail); }
+.row__badges {
+  display: flex; align-items: center; gap: 7px;
+  margin-top: 5px; min-height: 18px;
+}
+.row__badges .row__tag { width: 18px; height: 18px; }
+.row__badges .row__tag .row__mark { width: 17px; height: 17px; }
+.mark[data-kind] {
+  padding: 0; border: 0; background: none;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.12em;
+  line-height: 18px;
+}
+.mark[data-kind="fast"] { color: var(--accent, #a196ff); }
+.mark[data-kind="p2p"] { color: var(--ok); }
+
+/* The bolt, the star and the chevron, without the track. */
+#list .group .rail {
+  background: none; box-shadow: none; border: 0; padding: 0; gap: 0;
+}
+#list .group .rail .rowtest,
+#list .group .rail .star,
+#list .group .rail .expand { width: 36px; height: 36px; }
+/* The phone's IconButton: an 18dp glyph in a 36dp seat, in the quiet ink
+   at full strength - not a 14px glyph at 62%, which on the card read as a
+   control that was switched off. */
+#list .group .rail .ico { width: 18px; height: 18px; }
+#list .group .rail .rowtest:not([data-idle="true"]),
+#list .group .rail .star { opacity: 1; }
+/* A city inside the card: the phone's 32dp seats. */
+#list .group__in .rail .rowtest,
+#list .group__in .rail .star,
+#list .group__in .rail .expand { width: 32px; height: 32px; }
+
+/* The chevron turns over when its row is open. */
+.expand__chev {
+  fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.expand .expand__ico { transition: transform 220ms var(--ease); }
+.expand[data-on="true"] .expand__ico { transform: rotate(180deg); }
+
+/* Its cities, and a one-city country's servers, in a panel inside it. */
+#list .group__in,
+#list .group > .exits {
+  margin: 0 12px 12px;
+  border-radius: 14px;
+  background: rgb(var(--deep) / 0.5);
+  overflow: hidden;
+}
+#list .group__in > .row--city {
+  height: auto; min-height: 56px;
+  margin: 0;
+  padding: 9px 4px 9px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--divider);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#list .group__in > .row--city:last-of-type { border-bottom: 0; }
+#list .group__in > .row--city::before,
+#list .group__in > .row--city::after { display: none; }
+#list .group__in > .row--city:hover { background: rgb(var(--wash) / 0.035); }
+#list .group__in > .row--city.is-picked { background: color-mix(in srgb, var(--ok) 7%, transparent); }
+#list .group__in .row--city .row__name { font-size: 13.5px; font-weight: 650; }
+#list .group__in .row--city .row__meta { font-family: inherit; font-size: 11.5px; letter-spacing: 0; }
+#list .group__in .row--city > .flag--dot { width: 14px; }
+
+/* A one-city country's servers, inside its card: the column may shrink, so
+   a long address gives way instead of pushing the row past the window. */
+#list .group > .exits { grid-template-columns: minmax(0, 1fr); padding: 4px; }
+#list .group > .exits .exit { min-width: 0; }
+#list .group > .exits .exit__meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Narrow, and only really narrow - the phone's narrow layout: the bolt and
+   the star go down to the badge line, so the name and the line under it have
+   the card's width rather than losing their ends to three buttons. The
+   chevron stays at the right of the whole card. The default 400px window
+   has room for the line beside all three, so it gets the phone's wide card:
+   the three in one row, centred on the card. */
+@media (max-width: 340px) {
+  #list .group > .row:not(.row--via):not(.row--heads) {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+    grid-template-areas:
+      "flag name   name name chev"
+      "flag meta   meta meta chev"
+      "flag badges test star chev";
+    column-gap: 10px;
+    row-gap: 0;
+  }
+  #list .group > .row > .flag { grid-area: flag; width: 36px; height: 36px; }
+  #list .group > .row .row__copy,
+  #list .group > .row > .rail { display: contents; }
+  #list .group > .row .row__name { grid-area: name; }
+  #list .group > .row .row__meta { grid-area: meta; }
+  #list .group > .row .row__badges { grid-area: badges; margin-top: 4px; }
+  #list .group > .row > .rail .rowtest { grid-area: test; margin-top: 4px; }
+  #list .group > .row > .rail .star { grid-area: star; margin-top: 4px; }
+  #list .group > .row > .rail .expand { grid-area: chev; }
+}
+/* The red mark of a server that failed is an icon's width in the card,
+   not the 118px column it held beside the times - which left the server's
+   own name 66px. */
+#list .group .exit__why { width: 28px; height: 28px; justify-content: center; }
+/* The names in the theme's own ink: an older rule writes them in a fixed
+   light grey, which on the White theme was white on white. */
+#list .group .row__name,
+#list .row--auto .row__name { color: var(--text); }
+#list .row--auto .row__sub { color: var(--text-off); }

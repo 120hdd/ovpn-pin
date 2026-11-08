@@ -60,7 +60,9 @@ func runRace(paths []string, user, password string, timeout time.Duration, width
 	}
 
 	started := time.Now()
-	w, err := core.Race(context.Background(), servers, user, password, timeout, width,
+	w, err := core.Race(context.Background(), servers,
+		core.Logins{"surfshark": {User: user, Password: password},
+			"windscribe": {User: user, Password: password}}, timeout, width,
 		func(asked, total int) {
 			// Progress on stderr, the answer on stdout. A run whose output
 			// is piped somewhere then carries the result and not the

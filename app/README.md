@@ -77,7 +77,7 @@ Why any of this exists — and the measurements behind it — is in the
 
 ## Settings
 
-### Sign-in
+### Accounts
 
 The provider's **service** username and password, not the login email. An
 email is refused by every exit with exactly the same silence as a wrong
@@ -269,6 +269,26 @@ to this app, and no icon fixes that afterwards.
 **The tray icon owns the connection's lifetime.** Closing the window leaves
 the proxy up, because that is what *connected* should mean. Quitting from the
 tray takes it down and restores the machine.
+
+**Minimising minimises.** To the taskbar, where the button says what it
+does. Putting Relay away in the tray is what the close button asks about the
+first time it is pressed, and is remembered from the answer; minimising as
+well left no way to get the window off the screen and keep its taskbar
+button.
+
+**The tray menu says whether you are connected and as what**, connects or
+disconnects, connects straight to a favourite, and holds the window's
+switches: *Lock position* and *Always on top*. Its lines are cut to 40
+characters (`short()`) - Windows sizes a menu to its longest item, and a
+country with a long name through a hostname made it half the screen wide.
+Windows draws that menu itself, so it is told dark or light to match the
+theme (`winwindow.menus`), which is as near as a Win32 menu gets to nine
+themes.
+
+**It comes back where it was.** Size, position and maximised state are read
+with `GetWindowPlacement`, which is right even while the window is minimised
+or hidden in the tray, and put back with `SetWindowPlacement` — onto the
+nearest monitor if the one it was on is gone. See `winwindow.py`.
 
 ---
 

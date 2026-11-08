@@ -88,14 +88,54 @@ def out_dir():
     return os.path.join(paths.DATA_DIR, 'pinned')
 
 
-def listening(port, host='127.0.0.1', timeout=1.0):
-    """Whether anything is on that port. A local listener accepts at once or
-    it is not there, so this is a fast no and never a long wait."""
+# The script's own list of ports to try, in its order, for when nobody has
+# said which. Copied rather than parsed out of the .ps1 - it is one line, and
+# a proxy that is not on it can still be named by hand.
+PROXY_PORTS = (10808, 10809, 7890, 7891, 2080, 2081, 1080, 1081, 8889, 8080,
+               20171, 12334)
+
+
+def proxy_answer(port, host='127.0.0.1', timeout=5.0):
+    """What a CONNECT to the DoH host through that port gets back.
+
+    'none' nothing is listening; 'ok' it opened the tunnel; 'auth' it wants a
+    password (407), which is a proxy that is there and will refuse every
+    lookup; 'refused' any other answer, including a SOCKS-only port closing
+    on an HTTP request; 'slow' no answer in time, which a proxy on a slow
+    tunnel can be and is not held against it.
+
+    The question Test-HttpProxy in the script asks, asked here too, because
+    listening is not the same as carrying: Happ listens on 10808 and answers
+    407 to everything, and a run through it was 142 "could not resolve"s.
+    """
     try:
-        with socket.create_connection((host, int(port)), timeout):
-            return True
+        sock = socket.create_connection((host, int(port)), 1.0)
     except (OSError, ValueError, OverflowError):
-        return False
+        return 'none'
+    try:
+        sock.settimeout(timeout)
+        sock.sendall(b'CONNECT cloudflare-dns.com:443 HTTP/1.1\r\n'
+                     b'Host: cloudflare-dns.com:443\r\n\r\n')
+        head = sock.recv(256)
+    except socket.timeout:
+        return 'slow'
+    except OSError:
+        return 'refused'
+    finally:
+        sock.close()
+    m = re.match(rb'HTTP/1\.[01] (\d{3})', head)
+    if not m:
+        return 'refused'
+    code = int(m.group(1))
+    return 'ok' if code == 200 else 'auth' if code == 407 else 'refused'
+
+
+def find_port(first=DEFAULT_PORT):
+    """The first local port that really carries a lookup, or None."""
+    for port in (first, *(p for p in PROXY_PORTS if p != first)):
+        if proxy_answer(port) == 'ok':
+            return port
+    return None
 
 
 def clean_port(value, fallback=DEFAULT_PORT):
@@ -191,11 +231,23 @@ class Pin:
                                 'originals, and the next run would pin its '
                                 'own output. Choose a different folder for '
                                 'them.'})
-        if route == 'proxy' and not quick and not listening(port):
+        answer = proxy_answer(port) if route == 'proxy' and not quick else None
+        if answer == 'none':
             said.append({'kind': 'no-proxy',
                          'say': f'Nothing is listening on 127.0.0.1:{port}. '
                                 f'Start your proxy - v2rayN, Clash, Nekoray, '
                                 f'sing-box, Hiddify - or resolve directly.'})
+        elif answer == 'auth':
+            said.append({'kind': 'no-proxy',
+                         'say': f'127.0.0.1:{port} asks for a password, so '
+                                f'every lookup through it is refused. Use '
+                                f'your proxy\'s HTTP port - often the next '
+                                f'number up - or resolve directly.'})
+        elif answer == 'refused':
+            said.append({'kind': 'no-proxy',
+                         'say': f'127.0.0.1:{port} answers but will not '
+                                f'carry a lookup. Use your proxy\'s HTTP '
+                                f'port, or resolve directly.'})
         return said
 
     def plan(self, folder=None, out=None, route='proxy', port=DEFAULT_PORT,

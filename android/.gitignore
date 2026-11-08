@@ -1,0 +1,13 @@
+# Gradle and the IDE
+.gradle/
+build/
+app/build/
+.idea/
+*.iml
+.kotlin/
+
+# Where the SDK is on this machine
+local.properties
+
+# The Go core, built by mobile/build-android.sh. Any checkout rebuilds it.
+app/libs/relay.aar

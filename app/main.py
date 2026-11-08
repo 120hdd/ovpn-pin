@@ -32,6 +32,7 @@ import ctypes
 import ctypes.wintypes
 import json
 import os
+import secrets
 import signal
 import sys
 import threading
@@ -144,12 +145,31 @@ def _diagnostics_to_file(name):
 
 SETTINGS = os.path.join(paths.STATE_DIR, 'settings.json')
 
-# What the window opens at. The height is set by the front of the app
-# rather than by the settings sheet, which scrolls: the card, the orb
-# above it and the hint below have to sit together without the orb
-# being squeezed into an oval to make room.
+# The window's shape. The height is set by the front of the app rather than
+# by the settings sheet, which scrolls: the card, the orb above it and the
+# hint below have to sit together without the orb being squeezed into an
+# oval to make room. These are the proportions and the fallback; the size it
+# actually opens at is a share of the screen, so that it is neither a
+# postage stamp on a 4K monitor nor taller than a laptop's.
 WINDOW_W = 400
 WINDOW_H = 740
+WINDOW_SHARE = 0.85          # of the work area's height
+SW_SHOWNOACTIVATE = 4
+WINDOW_MIN = (380, 640)      # unless the screen itself is smaller
+
+# The window's own switches, in the tray menu and in Settings alike. What
+# the close button does is not among them: it has three answers rather than
+# two and lives in the settings file on its own (onClose).
+WINDOW_DEFAULTS = {'lockWindow': False, 'onTop': False}
+
+
+def app_version():
+    """The release this copy was built from, or 'dev' when run from source."""
+    try:
+        with open(paths.VERSION_TXT, encoding='utf-8') as f:
+            return f.read().strip() or 'dev'
+    except OSError:
+        return 'dev'
 
 
 def load_settings():
@@ -394,14 +414,18 @@ except Exception:
 os.environ.setdefault('WEBVIEW2_DEFAULT_BACKGROUND_COLOR', '00111113')
 
 import dropped                                               # noqa: E402
+import oneinstance                                           # noqa: E402
 import engine                                                # noqa: E402
 import pin                                                   # noqa: E402
 import sweep                                                 # noqa: E402
 import tunnel                                                # noqa: E402
 import webview                                               # noqa: E402
 import winproxy                                              # noqa: E402
+import winwindow                                             # noqa: E402
 import accounts                                              # noqa: E402
+import countries                                             # noqa: E402
 import uishot                                                # noqa: E402
+import vdesk                                                 # noqa: E402
 import surfshark                                             # noqa: E402
 import windscribe                                            # noqa: E402
 from engine import Engine                                    # noqa: E402
@@ -421,6 +445,7 @@ class Api:
             set_system_proxy=self._settings_early.get('systemProxy', True),
             port=self._settings_early.get('port'))
         self._window = None
+        self._hwnd_cache = None
         self._tray = None
         self._busy = False
         self._settings = self._settings_early
@@ -441,6 +466,13 @@ class Api:
         self._testing = False
         self._tunnel = None
         self._tunnel_key = None
+        # Set once the tray exists: leaving for good is one action, wherever
+        # it is asked for.
+        self._quit = None
+        # Set while that action is under way. Quitting closes the window,
+        # and without this the close would be answered with "put it in the
+        # tray" and refused - an app that could not be quit at all.
+        self._leaving = False
 
     # -- talking to the page ----------------------------------------------
 
@@ -453,9 +485,16 @@ class Api:
         except Exception:
             pass
 
-    def _retray(self, state):
-        if self._tray:
+    def _retray(self, state=None):
+        """The icon to a new state, or with none given, only the menu - whose
+        status line, Connect item and favourites are read when it is built,
+        and on Windows it is built ahead of being opened, not as it opens."""
+        if not self._tray:
+            return
+        if state:
             self._tray.set_state(state)
+        else:
+            self._tray.refresh()
 
     # -- what the page asks for -------------------------------------------
 
@@ -631,11 +670,22 @@ class Api:
                 'picked': self._settings.get('picked', 'auto'),
                 'favourites': self._settings.get('favourites') or [],
                 'sortBy': self._settings.get('sortBy', 'ping'),
+                'quickAt': self._settings.get('quickAt', 0),
+                'autoQuick': self._settings.get('autoQuick', True),
+                'connected': bool(self._engine.running()),
                 'keepOnClose': bool(self._settings.get('keepOnClose')),
+                'window': self._window_options(),
+                'orbColors': self._settings.get('orbColors', 'signal'),
+                'onClose': self._settings.get('onClose', ''),
+                'theme': self._settings.get('theme', 'midnight'),
+                'introSeen': bool(self._settings.get('introSeen')),
+                'tunnelReady': bool(self._settings.get('tunnelDomain')
+                                    and self._settings.get('tunnelPassword')),
                 'mode': self._settings.get('mode', 'surfshark'),
                 'hasCredentials': self._has_credentials(),
                 'username': self._engine.username(),
-                'about': (f'{APP_NAME}  -  port {self._engine.port}'
+                'version': app_version(),
+                'about': (f'{APP_NAME} {app_version()}  -  port {self._engine.port}'
                           f'\n{paths.APP_DIR}')}
 
     def info(self):
@@ -651,7 +701,11 @@ class Api:
         if (self._sysproxy.stashed() and not self._engine.running()
                 and not px_live_elsewhere(self._engine.port)):
             recovered = self._sysproxy.restore()
-        status = self._engine.status()
+        status = dict(self._engine.status())
+        if status.get('state') == 'on' and self._since:
+            # So a window opened onto a connection already up counts from
+            # when it came up, not from when the window did.
+            status['since'] = self._since
         self._retray('on' if status.get('state') == 'on' else 'off')
         out = self._describe()
         out.update({'status': status, 'recovered': recovered,
@@ -678,6 +732,7 @@ class Api:
         if info.get('ip') != self._real_ip or self._real_ip is None:
             self._real_ip = info.get('ip')
             self._emit('RealIp', info)
+            self._retray()
 
     def _watch_self(self):
         """Keep that address honest while it is not ours to change.
@@ -1635,6 +1690,15 @@ class Api:
             return {'ok': False,
                     'error': f'Nothing waiting in {folder}.'}
         self._settings['pinFolder'] = folder
+        # Nobody has named a port, so the default is a guess, and the setup
+        # sheet has no port field to correct it from. Happ listens on 10808
+        # and wants a password there; its HTTP port is 10809. Whichever port
+        # really carries a lookup is kept, where Settings shows it.
+        if (self._settings.get('pinRoute', 'proxy') == 'proxy'
+                and 'pinPort' not in self._settings):
+            found = pin.find_port()
+            if found:
+                self._settings['pinPort'] = found
         save_settings(self._settings)
         return {'ok': True, **self.pinPlan()}
 
@@ -1718,6 +1782,8 @@ class Api:
         or a single file.
         """
         code = code or ''
+        if code == 'quick':
+            return self._quick_pool()
         if code.startswith('file:'):
             name = code[5:]
             return [s for s in self._engine.servers() if s.file == name]
@@ -1736,6 +1802,42 @@ class Api:
                 continue
             out.append(s)
         return out
+
+    def _quick_pool(self):
+        """One exit per country: enough to put a time on every row of the
+        list, at a fraction of the cost of asking every exit - a few hundred
+        handshakes in a burst is what this line starts dropping, and what a
+        provider may read as one address hammering its logins.
+
+        The one asked is the one most likely to stand for its country: the
+        last to answer, else one never tried, else the first.
+        """
+        found = self._engine.reach()
+        best = {}
+        for s in self._engine.servers():
+            rec = found.get(s.file)
+            rank = 1 if rec is None else (2 if rec.get('ok') else 0)
+            if s.country not in best or rank > best[s.country][0]:
+                best[s.country] = (rank, s)
+        return [s for _, s in best.values()]
+
+    def quickTest(self):
+        """Time one exit per country, gently: six at a time, a short wait.
+
+        Only with the tunnel down. Through it, every exit would be timed from
+        wherever the tunnel comes out, which says nothing about this line.
+        """
+        if self._engine.running():
+            return {'ok': False,
+                    'error': "Disconnect first: through the tunnel, the "
+                             "times would be the tunnel's."}
+        return self.testReach('quick')
+
+    def setAutoQuick(self, on=True):
+        """Whether opening the list times a stale one on its own."""
+        self._settings['autoQuick'] = bool(on)
+        save_settings(self._settings)
+        return {'ok': True, 'autoQuick': bool(on)}
 
     def testReach(self, code=None):
         """Ask the exits behind one row whether they take the credentials.
@@ -1760,12 +1862,20 @@ class Api:
         if not pool:
             return {'ok': False, 'error': 'Nothing to test.'}
         only = {s.file for s in pool}
+        quick = code == 'quick'
         self._testing = True
 
         def work():
             try:
+                # The whole list is the gentle run: fewer at once, shorter
+                # waits, so a minute of it does not read as an attack.
+                kw = {'width': 6, 'timeout': 3.5} if quick else {}
                 out = self._engine.test_reach(
-                    lambda p: self._emit('Reach', p), only=only)
+                    lambda p: self._emit('Reach', p), only=only, **kw)
+                if quick and not out.get('cancelled'):
+                    self._settings['quickAt'] = int(time.time())
+                    save_settings(self._settings)
+                    out['quickAt'] = self._settings['quickAt']
                 # Moved out of the way of `ok`, which every call in this
                 # class uses for "the call worked" and which was being set
                 # over the top of it here - so the count reached the page as
@@ -1940,6 +2050,7 @@ class Api:
             on = True
         self._settings['favourites'] = codes
         save_settings(self._settings)
+        self._retray()
         return {'ok': True, 'codes': codes, 'on': on}
 
     def setSort(self, kind=None):
@@ -1951,6 +2062,29 @@ class Api:
         save_settings(self._settings)
         return {'ok': True, 'sortBy': kind}
 
+    def markIntroSeen(self):
+        """The intro is shown once, the first time this copy opens."""
+        self._settings['introSeen'] = True
+        save_settings(self._settings)
+        return {'ok': True}
+
+    def setTheme(self, key='midnight'):
+        """One of the nine themes the Android app has."""
+        known = ('midnight', 'graphite', 'black', 'ocean', 'forest', 'plum',
+                 'ember', 'slate', 'white')
+        key = key if key in known else 'midnight'
+        self._settings['theme'] = key
+        save_settings(self._settings)
+        menu_theme(key)
+        return {'ok': True, 'theme': key}
+
+    def setOrbColors(self, kind='signal'):
+        """Traffic light or the desktop's own lavender and teal."""
+        kind = kind if kind in ('signal', 'desktop') else 'signal'
+        self._settings['orbColors'] = kind
+        save_settings(self._settings)
+        return {'ok': True, 'orbColors': kind}
+
     def setKeepOnClose(self, on=False):
         self._settings['keepOnClose'] = bool(on)
         save_settings(self._settings)
@@ -1959,6 +2093,7 @@ class Api:
     def remember(self, code):
         self._settings['picked'] = code
         save_settings(self._settings)
+        self._retray()
         return {'ok': True}
 
     # -- the tunnel of your own -------------------------------------------
@@ -2004,37 +2139,77 @@ class Api:
             'hasClient': bool(paths.gost_exe()),
             'running': bool(client and client.listening()),
             'edges': client.edges() if client else [],
+            'isAddress': tunnel.is_address(st.get('tunnelDomain', '')),
+            'pin': client.pin() if client else '',
         }
 
-    def installCommand(self, domain=None, user=None, password=None):
-        """One line that puts the installer on the server and runs it.
+    def _ensure_tunnel_passwords(self):
+        """The two passwords, made here when there are none yet. The install
+        command carries them to the server, so this window already holds what
+        the server will ask for and nothing has to be copied back."""
+        changed = False
+        for key in ('tunnelPassword', 'tunnelApiPassword'):
+            if not self._settings.get(key):
+                self._settings[key] = secrets.token_urlsafe(15)
+                changed = True
+        if changed:
+            save_settings(self._settings)
+            self._tunnel = None
 
-        The pane used to show `./install-server.sh …`, which quietly assumed
-        the script was already there - and it never is. Nothing hosts it, so
-        the script travels inside the command: base64 in a single line, which
-        an SSH session takes as one paste and a phone can manage.
+    def installCommand(self, domain=None):
+        """The lines to paste on the server: install, status and uninstall.
 
-        The Surfshark credentials are left as placeholders rather than filled
-        in. They would otherwise sit in a clipboard and, on most machines, in
-        a shell history file on a server, to save the person two words.
+        Install is one line that carries the installer inside itself - base64,
+        because nothing hosts it - and runs it with this window's own
+        passwords, made now if there are none. Once it has run there is only
+        Test left to press. A leading space keeps it out of the server's shell
+        history (Ubuntu's bash ignores lines that start with one).
+
+        No provider account goes in it. Server + exit sends the picked
+        location's own credential through the API each time it connects.
         """
         try:
             with open(paths.INSTALLER, 'rb') as f:
                 blob = base64.b64encode(f.read()).decode()
         except OSError as e:
             return {'ok': False, 'error': f'the installer is missing: {e}'}
-        host = (domain or '').strip() or 'yourdomain.com'
-        return {'ok': True, 'command':
-                "mkdir -p /opt/relay && echo '" + blob + "' | base64 -d "
-                "> /opt/relay/install-server.sh && bash "
-                f"/opt/relay/install-server.sh {host} "
-                f"{user or '<surfshark-user>'} {password or '<surfshark-pass>'}"}
+        host = (domain or self._settings.get('tunnelDomain') or '').strip()
+        if not host:
+            return {'ok': False, 'error': "type the server's IP or domain first"}
+        if host != self._settings.get('tunnelDomain'):
+            self.saveTunnel(domain=host)
+        self._ensure_tunnel_passwords()
+        pw = self._settings['tunnelPassword']
+        api = self._settings['tunnelApiPassword']
+        return {'ok': True,
+                'command': " mkdir -p /opt/relay && echo '" + blob + "' | base64 -d "
+                           "> /opt/relay/install-server.sh && bash "
+                           f"/opt/relay/install-server.sh {host} "
+                           f"--password '{pw}' --api-password '{api}'",
+                'status': "systemctl --no-pager --lines=0 status gost sing-box nginx"
+                          " | grep -E '^. |Active:'; ss -lnt | grep -E "
+                          "':443 |127.0.0.1:(1000[0-3]|18080) '",
+                'uninstall': "systemctl disable --now gost sing-box;"
+                             " rm -f /etc/systemd/system/gost.service"
+                             " /etc/systemd/system/sing-box.service"
+                             " /usr/local/bin/gost /usr/local/bin/sing-box"
+                             f" /etc/nginx/sites-enabled/relay-{host}.conf"
+                             f" /etc/nginx/sites-available/relay-{host}.conf;"
+                             " rm -rf /etc/gost /etc/sing-box /etc/relay /opt/relay;"
+                             " systemctl daemon-reload; systemctl reload nginx"}
 
     def saveTunnel(self, domain=None, password=None, apiPassword=None):
         """Keep what was typed. Blank means unchanged, not cleared: the page
         never sends the passwords back, so treating empty as "erase" would
         wipe them every time the domain was edited."""
         if domain is not None:
+            if domain.strip() != self._settings.get('tunnelDomain', ''):
+                # A new server: the certificate kept for the old one is not
+                # this one's, and would only make it refuse.
+                try:
+                    self._tunnel_client().forget_cert()
+                except RuntimeError:
+                    pass
             self._settings['tunnelDomain'] = domain.strip()
         if password:
             self._settings['tunnelPassword'] = password.strip()
@@ -2077,6 +2252,18 @@ class Api:
         """
         try:
             client = self._tunnel_client()
+            by_address = tunnel.is_address(client.domain)
+            if by_address:
+                # Taken the first time, then required: a server showing
+                # another certificate is refused here, before gost is.
+                try:
+                    client.ensure_cert()
+                    client.check_cert()
+                except tunnel.PinChanged as e:
+                    return {'ok': False, 'error': str(e), 'verdict': 'pin-changed'}
+                except OSError as e:
+                    return {'ok': False, 'verdict': 'unreachable',
+                            'error': f'{client.domain} did not answer on 443: {e}'}
             client.start()
             seen, restarted, found = None, False, []
             try:
@@ -2086,7 +2273,13 @@ class Api:
                 try:
                     client.restart()
                     seen = client.probe()
-                except Exception:
+                except Exception as e:
+                    if by_address:
+                        # No edges to look for: the address is the one way in.
+                        return {'ok': False, 'restarted': True,
+                                'error': f'{client.domain} answered but carried '
+                                         f'nothing: {str(e)[:160]}',
+                                'running': client.listening()}
                     verdict, why = client.diagnose()
                     if verdict not in ('edges-blocked', 'wrong-zone'):
                         return {'ok': False, 'error': why, 'verdict': verdict,
@@ -2196,9 +2389,12 @@ class Api:
                         where, lambda p: self._emit('Progress', p),
                         provider=want, only=only, city=city)
                 else:
-                    result = self._through_tunnel(where, mode)
+                    result = self._through_tunnel(where, mode, provider=want,
+                                                  only=only, city=city)
                 self._since = time.time()
                 self._retray('on')
+                if isinstance(result, dict):
+                    result = dict(result, since=self._since)
                 self._emit('Connected', result)
                 # The independent check runs after the window already says
                 # connected, because it is a round trip to somebody else's
@@ -2206,6 +2402,21 @@ class Api:
                 self._confirm()
             except Exception as e:
                 kind = str(e).split(':')[0] if str(e) else e.__class__.__name__
+                # Written down, because the window shows one sentence and a
+                # failure nobody can read afterwards is a failure nobody can
+                # fix. Kept short: the last few, not a history.
+                try:
+                    path = os.path.join(paths.STATE_DIR, 'connect-errors.log')
+                    with open(path, 'a', encoding='utf-8') as f:
+                        f.write(time.strftime('%Y-%m-%d %H:%M:%S ')
+                                + f'{mode} {country!r}\n' + traceback.format_exc() + '\n')
+                    if os.path.getsize(path) > 64_000:
+                        with open(path, encoding='utf-8') as f:
+                            tail = f.read()[-32_000:]
+                        with open(path, 'w', encoding='utf-8') as f:
+                            f.write(tail)
+                except OSError:
+                    pass
                 try:
                     self._engine.disconnect(quiet=True)
                 except Exception:
@@ -2222,7 +2433,7 @@ class Api:
         threading.Thread(target=work, daemon=True).start()
         return {'ok': True}
 
-    def _through_tunnel(self, country, mode):
+    def _through_tunnel(self, country, mode, provider=None, only=None, city=None):
         """Connect by way of the user's own server.
 
         Multi-IP mode is the only one with a choice to make, and it makes it
@@ -2238,15 +2449,53 @@ class Api:
 
         label = 'your server'
         if mode == 'multi':
-            user, password = self._engine.credentials()
-            if country in (None, '', 'auto'):
-                # No country asked for, so leave the server on whatever it
+            if country in (None, '', 'auto') and not (only or city or provider):
+                # No place asked for, so leave the server on whatever it
                 # was last set to rather than picking one on its behalf.
                 label = 'chosen exit'
             else:
-                server, ip, _host = self._engine.address_for(country)
-                client.set_exit(ip, user, password, name=country)
-                label = country
+                # The pick as the list made it: a country, a city in one, one
+                # provider's share, or one server. A single server used to
+                # reach here as no country at all, and the server stayed on
+                # whatever exit it had last - a Swiss pick came out in Turkey.
+                ordered = self._engine.candidates(
+                    None if country in (None, '', 'auto') else country,
+                    provider=provider, only=only, city=city)
+                if not ordered:
+                    raise RuntimeError('no-servers')
+                # From a server in Iran, upload is throttled per foreign exit
+                # IP: most in a city carry next to nothing up while
+                # downloading at megabytes. So each is set in turn and asked
+                # to carry an upload end to end, and the first that does is
+                # kept - the location stays the one picked. A single server
+                # was picked by hand and is used as it is.
+                tries = 1 if only else 6
+                best, last = None, None
+                for server in ordered[:tries]:
+                    ip, _host = engine.px.read_config(server.path)
+                    # The chosen exit's own provider, asked after it is
+                    # chosen. This used to be the Surfshark credential
+                    # whatever the exit, so a Windscribe country here was
+                    # refused by its own exit - and the server answered 503
+                    # for every connection after.
+                    user, password = self._engine.credentials_for(server)
+                    client.set_exit(ip, user, password, name=server.file)
+                    last = server.file
+                    if tries == 1:
+                        best = (server, ip, user, password, 0)
+                        break
+                    progress({'phase': 'starting', 'country': server.country,
+                              'city': f'testing upload via {server.file.split("_")[0]}'})
+                    rate = client.upload_rate('multi')
+                    if best is None or rate > best[4]:
+                        best = (server, ip, user, password, rate)
+                    if rate >= 64 << 10:
+                        break
+                server, ip, user, password, rate = best
+                if server.file != last:
+                    # The fastest was not the last one tried: put it back.
+                    client.set_exit(ip, user, password, name=server.file)
+                label = server.country
 
         return self._engine.connect_tunnel(
             client.address('multi' if mode == 'multi' else 'single'),
@@ -2269,6 +2518,7 @@ class Api:
                 info['unconfirmed'] = str(e)[:120]
             if self._engine.exit_info is info:
                 self._emit('Connected', self._engine.status())
+                self._retray()
         threading.Thread(target=work, daemon=True).start()
 
     def cancel(self):
@@ -2293,6 +2543,109 @@ class Api:
     def minimise(self):
         if self._window:
             self._window.minimize()
+
+    # -- the window itself ------------------------------------------------
+
+    def _hwnd(self):
+        if not winwindow.alive(self._hwnd_cache):
+            self._hwnd_cache = winwindow.find(APP_NAME)
+        return self._hwnd_cache
+
+    def _window_option(self, key):
+        return bool(self._settings.get(key, WINDOW_DEFAULTS[key]))
+
+    def _window_options(self):
+        return {key: self._window_option(key) for key in WINDOW_DEFAULTS}
+
+    def _set_window_option(self, key, on):
+        self._settings[key] = bool(on)
+        save_settings(self._settings)
+        self._apply_window()
+        self._retray()
+        # The same switches are in Settings - tell the page, so a flip from
+        # the tray is not contradicted by an open Window screen.
+        self._emit('WindowOptions', self._window_options())
+
+    def minimizeWindow(self):
+        """The header's own minimise button - there is no Windows one."""
+        if self._window:
+            self._window.minimize()
+        return {'ok': True}
+
+    def hideWindow(self):
+        """Out of the way, into the tray. The connection is untouched: this
+        is the window going, not the app."""
+        try:
+            self._remember_place()
+        except Exception:
+            pass
+        if self._window:
+            self._window.hide()
+        return {'ok': True}
+
+    def quitApp(self):
+        """Really leave - the tray's Quit, reachable from the window too."""
+        if self._quit:
+            threading.Thread(target=self._quit, daemon=True).start()
+        return {'ok': True}
+
+    def setOnClose(self, kind=''):
+        """What the close button does from now on, or '' to be asked again."""
+        kind = kind if kind in ('tray', 'exit') else ''
+        self._settings['onClose'] = kind
+        save_settings(self._settings)
+        return {'ok': True, 'onClose': kind}
+
+    def closeRequest(self):
+        """The close button, pressed. Answers what is to happen rather than
+        doing it, so that the window's own X and Alt+F4 give the same three
+        answers: 'tray', 'exit', or 'ask' - and the page asks.
+
+        Nothing closes while the answer is 'ask'. An app that lives in the
+        tray and a window that is merely out of the way are different
+        things, and which one the X means is the person's to decide once.
+        """
+        if not (self._tray and self._tray.icon):
+            # Nothing to be hidden in: the X has to be a real close, or the
+            # window could not be got rid of at all.
+            return {'do': 'exit'}
+        kind = self._settings.get('onClose')
+        return {'do': kind if kind in ('tray', 'exit') else 'ask'}
+
+    def setWindowOption(self, key, on=False):
+        """One of the tray's window switches, from Settings."""
+        if key not in WINDOW_DEFAULTS:
+            return {'ok': False, 'error': f'no window option called {key}'}
+        self._set_window_option(key, bool(on))
+        return {'ok': True, 'window': self._window_options()}
+
+    def _apply_window(self):
+        """No frame, and always-on-top, as the settings have them.
+
+        Safe to call again, and called again whenever the window comes back
+        from the tray or from being minimised: WinForms owns this window and
+        keeps its own idea of what its frame should be, so what was set from
+        underneath it is put back rather than trusted to have stayed.
+        """
+        try:
+            winwindow.borderless(self._hwnd())
+        except Exception:
+            traceback.print_exc()
+        try:
+            # winwindow's, not pywebview's. This runs on whichever thread
+            # asked - the tray's, the page's, the one listening for a second
+            # copy - and pywebview's on_top setter hangs the app when that is
+            # not the window's own thread. See winwindow.on_top.
+            winwindow.on_top(self._hwnd(), self._window_option('onTop'))
+        except Exception:
+            traceback.print_exc()
+
+    def _remember_place(self):
+        where = winwindow.placement(self._hwnd())
+        if where:
+            self._settings['placement'] = where
+            save_settings(self._settings)
+        return where
 
 
 def install_safety(api):
@@ -2343,6 +2696,50 @@ def install_safety(api):
     return undo
 
 
+def short(text, limit=40):
+    """A label the tray menu can be as wide as.
+
+    Windows sizes the menu to its longest item, and the items here carry
+    whatever a server or a country is called - "United Kingdom of Great
+    Britain and Northern Ireland" through a hostname is a menu half the
+    screen wide, for a line nobody reads to the end. Forty characters
+    holds a country and an address and cuts only what is absurd.
+    """
+    text = ' '.join((text or '').split())
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + '…'
+
+
+# The themes with a light background. Everything the page draws comes
+# from its own variables; the tray menu is drawn by Windows out of one of
+# two palettes, so each theme is sorted into the nearer of them.
+LIGHT_THEMES = ('white',)
+
+
+def menu_theme(theme):
+    """Dark or light for the tray menu, to match the theme the page is in.
+
+    Nine themes against the two Windows has. Worth doing anyway: before
+    this, a White copy opened a black menu and every dark copy a white one,
+    since the menu followed the system's setting and nothing else in the app
+    does.
+    """
+    try:
+        winwindow.menus(theme not in LIGHT_THEMES)
+    except Exception:
+        traceback.print_exc()
+
+
+def elapsed(seconds):
+    """12 min, 1 h 05 min - how long a connection has been up, for a line
+    that is read at a glance."""
+    minutes = int(seconds // 60)
+    if minutes < 1:
+        return 'under a minute'
+    if minutes < 60:
+        return f'{minutes} min'
+    return f'{minutes // 60} h {minutes % 60:02d} min'
+
+
 class Tray:
     """A real notification-area icon.
 
@@ -2379,26 +2776,157 @@ class Tray:
         except Exception as e:
             self.error = repr(e)
             return False
-        menu = pystray.Menu(
-            pystray.MenuItem('Show Relay', self._show, default=True),
-            pystray.MenuItem('Disconnect', self._disconnect,
-                             enabled=lambda _: self.api._engine.running() is not None),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem('Quit', self._quit))
+        Item, Menu = pystray.MenuItem, pystray.Menu
+        api = self.api
+        # Before the menu exists, so the first right-click is already in the
+        # theme rather than in the system's idea of one.
+        menu_theme(api._settings.get('theme', 'midnight'))
+
+        # pystray calls an action with as many of (icon, item) as it takes,
+        # counting them from the function's code - so every action here takes
+        # none, and nothing is a functools.partial, which has no code to count.
+        def toggle(key):
+            def flip(*_):
+                api._set_window_option(key, not api._window_option(key))
+            return flip
+
+        def switch(key, text):
+            return Item(text, toggle(key),
+                        checked=lambda _: api._window_option(key))
+
+        menu = Menu(
+            # Not a button: the one line that answers "am I routed, and as
+            # what" without opening the window.
+            Item(lambda _: self._status_line(), lambda: None, enabled=False),
+            Menu.SEPARATOR,
+            Item('Show Relay', self._show, default=True),
+            Item(lambda _: self._act_label(), self._act),
+            Item('Favourites', Menu(self._favourite_items)),
+            Menu.SEPARATOR,
+            switch('lockWindow', 'Lock position'),
+            switch('onTop', 'Always on top'),
+            Menu.SEPARATOR,
+            Item('Quit', self._quit))
         self.icon = pystray.Icon(APP_NAME, self._image('off'),
-                                 f'{APP_NAME} - not connected', menu)
+                                 self._title('off'), menu)
         threading.Thread(target=self.icon.run, daemon=True).start()
+        threading.Thread(target=self._tick, daemon=True).start()
         return True
 
+    def _title(self, state):
+        text = {'on': 'connected', 'busy': 'connecting…'}.get(state, 'not connected')
+        since = self.api._since
+        if state == 'on' and since:
+            text += f' · {elapsed(time.time() - since)}'
+        return f'{APP_NAME} — {text}'
+
     def set_state(self, state):
+        self._state = state
         if not self.icon:
             return
-        text = {'on': 'connected', 'busy': 'connecting…'}.get(state, 'not connected')
         try:
             self.icon.icon = self._image(state)
-            self.icon.title = f'{APP_NAME} — {text}'
+            self.icon.title = self._title(state)
         except Exception:
             pass
+        self.refresh()
+
+    def _tick(self):
+        # How long it has been up, in the tooltip - which is all of the app
+        # there is while the window is closed. Minutes are its resolution,
+        # so half a minute is often enough.
+        while self.icon:
+            time.sleep(30)
+            if getattr(self, '_state', None) == 'on':
+                try:
+                    self.icon.title = self._title('on')
+                except Exception:
+                    pass
+
+    def refresh(self):
+        """Rebuild the menu, which on Windows is built before it is opened
+        and so goes on saying whatever was true when it was last built."""
+        if not self.icon:
+            return
+        try:
+            self.icon.update_menu()
+        except Exception:
+            pass
+
+    # -- what the menu says ----------------------------------------------
+
+    @staticmethod
+    def _name(code):
+        """A picker code as a person would say it. The same four shapes the
+        connect call takes: auto, "fr", "fr/par", "fr:windscribe", and
+        "file:<config>" for one exit by name."""
+        code = code or 'auto'
+        if code == 'auto':
+            return 'fastest'
+        if code.startswith('file:'):
+            base = os.path.basename(code[5:])
+            return base[:-5] if base.lower().endswith('.ovpn') else base
+        where, _, provider = code.partition(':')
+        country, _, city = where.partition('/')
+        name = countries.country_name(country)
+        if city:
+            name = f'{countries.city_name(city)}, {name}'
+        if provider:
+            name += f' ({accounts.LABELS.get(provider, provider.title())})'
+        return name
+
+    def _running(self):
+        try:
+            return self.api._engine.running() is not None
+        except Exception:
+            return False
+
+    def _status_line(self):
+        api = self.api
+        if api._busy:
+            return 'Connecting…'
+        try:
+            status = api._engine.status()
+        except Exception:
+            return 'Status unknown'
+        state = status.get('state')
+        if state == 'on':
+            exit_ = status.get('exit') or {}
+            seen = exit_.get('seen_as') or {}
+            country = seen.get('country') or exit_.get('country')
+            parts = ['Connected',
+                     countries.country_name(country) if country else None,
+                     # Only the checked address. The proxy's own is not the
+                     # one websites see, and the page refuses to show it for
+                     # the same reason.
+                     seen.get('ip')]
+        elif state == 'broken':
+            parts = ['Connection broken - open Relay']
+        else:
+            parts = ['Not connected', api._real_ip]
+        return short(' · '.join(p for p in parts if p))
+
+    def _act_label(self):
+        if self.api._busy:
+            return 'Cancel connecting'
+        if self._running():
+            return 'Disconnect'
+        return short(f"Connect — {self._name(self.api._settings.get('picked'))}")
+
+    def _favourite_items(self):
+        import pystray
+        codes = self.api._settings.get('favourites') or []
+        if not codes:
+            yield pystray.MenuItem('None yet - star a place in the list',
+                                   lambda: None, enabled=False)
+            return
+        for code in codes:
+            def pick(*_, code=code):
+                self.api._emit('Tray', {'do': 'pick', 'code': code})
+            yield pystray.MenuItem(short(self._name(code)), pick,
+                                   enabled=lambda _: not self.api._busy)
+
+    # -- what the menu does ----------------------------------------------
 
     def _show(self, *_):
         try:
@@ -2406,15 +2934,17 @@ class Tray:
             self.api._window.restore()
         except Exception:
             pass
+        self.api._apply_window()
 
-    def _disconnect(self, *_):
-        try:
-            self.api.disconnect()
-            self.api._emit('Disconnected', {})
-        except Exception:
-            pass
+    def _act(self, *_):
+        """Connect, cancel or disconnect - whichever the page's own button
+        would do now. Asked of the page rather than done here, so that a
+        connection started from the tray walks the same steps, and leaves the
+        window saying the same thing, as one started from the button."""
+        self.api._emit('Tray', {'do': 'act'})
 
     def _quit(self, *_):
+        self.api._leaving = True
         try:
             self.icon.stop()
         except Exception:
@@ -2434,8 +2964,8 @@ def dress_window():
 
     Windows 11 will recolour the caption it is already drawing instead:
     DWMWA_CAPTION_COLOR takes the bar, DWMWA_TEXT_COLOR takes the title, and
-    DWMWA_BORDER_COLOR takes the hairline around the window. The minimise,
-    maximise and close glyphs are the system's own and follow the caption -
+    DWMWA_BORDER_COLOR takes the hairline around the window. The minimise
+    and close glyphs are the system's own and follow the caption -
     on a dark one they come out white, which is the ask - and they stay the
     system's, so they keep their hover colours, their tooltips, their snap
     layouts flyout and their hit targets at the very edge of the screen.
@@ -2576,12 +3106,15 @@ def ui_check(window):
     try:
         time.sleep(2.5)
         # In front, or the picture is of whatever is sitting on top of us.
-        try:
-            handle = ctypes.windll.user32.FindWindowW(None, APP_NAME)
-            ctypes.windll.user32.SetForegroundWindow(handle)
-            time.sleep(0.5)
-        except Exception:
-            pass
+        # Not when it is running on another desktop: bringing it forward
+        # there would take the person with it.
+        if not vdesk.wanted():
+            try:
+                handle = ctypes.windll.user32.FindWindowW(None, APP_NAME)
+                ctypes.windll.user32.SetForegroundWindow(handle)
+                time.sleep(0.5)
+            except Exception:
+                pass
 
         said['probe'] = window.evaluate_js('window.__probe && window.__probe()')
         said['errors'] = window.evaluate_js('window.__errs')
@@ -2664,7 +3197,7 @@ def ui_check(window):
             "document.getElementById('prefsTitle').textContent")
         # Into the one the rest of this check needs.
         window.evaluate_js(
-            "document.querySelector('.menu__row[data-goto=sign-in]').click()")
+            "document.querySelector('.menu__row[data-goto=accounts]').click()")
         time.sleep(0.4)
 
         # -- the whys, moved into (i) buttons -------------------------------
@@ -2704,7 +3237,11 @@ def ui_check(window):
             "[document.getElementById('useSurfsharkN').textContent,"
             " document.getElementById('useWindscribeN').textContent]")
 
-        window.evaluate_js("document.getElementById('acctAdd').click()")
+        # Each provider's card opens its own page; one account per provider,
+        # so the roster is emptied in this window first or the form would be
+        # the "already has its account" sentence instead.
+        window.evaluate_js(
+            "acct.rows = []; acct.provider = 'surfshark'; acctShowForm(true)")
         time.sleep(0.5)
         # A dialog over the pane, not a form unfolding inside the list - the
         # list is what "is this one already here" needs to still see.
@@ -2712,8 +3249,7 @@ def ui_check(window):
             "document.getElementById('acctDlg').open")
         said['acctCapSurfshark'] = window.evaluate_js(
             "document.getElementById('acctUserCap').textContent")
-        window.evaluate_js(
-            "document.querySelector('#acctWhich [data-provider=windscribe]').click()")
+        window.evaluate_js("acctSetProvider('windscribe'); acctShowForm(true)")
         time.sleep(0.3)
         said['acctCapWindscribe'] = window.evaluate_js(
             "document.getElementById('acctUserCap').textContent")
@@ -2727,8 +3263,8 @@ def ui_check(window):
             window.__acctAddReal = window.pywebview.api.accountAdd;
             window.pywebview.api.accountAdd = () => Promise.reject(
                 new Error('Permission denied: accounts.json'));
-            document.querySelector(
-                '#acctWhich [data-provider=surfshark]').click();
+            acctSetProvider('surfshark');
+            acctShowForm(true);
             document.getElementById('acctUser').value = 'test-service-user';
             document.getElementById('acctPass').value = 'test-password';
             document.getElementById('acctSave').click();
@@ -3576,39 +4112,122 @@ def ui_check(window):
 
 
 def main():
+    # Before anything that touches the proxy, the engine or the settings
+    # file: a second copy that got that far would already be fighting the
+    # first. It has asked the first to come forward, and that is all it does.
+    if not oneinstance.claim():
+        # The UI checks drive a copy of their own, so with Relay already open
+        # they never ran - and exiting 0 here read as a pass. Say so instead.
+        testing = [a for a in ('--ui-check', '--ui-layout', '--ui-drive', '--ui-perf')
+                   if a in sys.argv]
+        if testing:
+            print(f'{testing[0]}: {APP_NAME} is already open. Close it (tray icon, '
+                  f'Quit) and run this again - the check needs its own copy.')
+            sys.exit(2)
+        print(f'{APP_NAME} is already running; brought it to the front.')
+        return
+
     api = Api()
     undo = install_safety(api)
 
     settings = api._settings
 
-    # The way-out strip and its line cost the card about eighty pixels, and
-    # the orb is what paid: its height is what is left over, so it went from
-    # round to squeezed without the page ever overflowing. A window saved
-    # before that control existed is now too short for its own contents, so
-    # it is raised once here rather than left for somebody to find by
-    # dragging the edge. Only upwards, and only to the new floor - a window
-    # deliberately made taller than that keeps the size it was given.
-    if settings.get('h') and settings['h'] < WINDOW_H:
-        settings['h'] = WINDOW_H
-        save_settings(settings)
+    # The exact rectangle, from the last time it closed, scaled to the
+    # screen as it is now. Applied once the window exists - pywebview takes
+    # a size in its own units, which is what the size below is for, and that
+    # gets it close; this gets it exact, and back onto a screen if the one it
+    # was on has gone.
+    placed = settings.get('placement') or {}
+    size, least = winwindow.opening(
+        placed, WINDOW_W / WINDOW_H, WINDOW_SHARE, WINDOW_MIN) \
+        or ((WINDOW_W, WINDOW_H), WINDOW_MIN)
+
+    # A check asked to run on another virtual desktop (vdesk.py) opens
+    # minimised, so it never shows on this one, and is moved over there
+    # once it has a handle. Chromium stops drawing a window it thinks is
+    # out of sight, and one on another desktop is - so for a check it is
+    # told not to work that out, or every picture would be of a blank page.
+    elsewhere = vdesk.wanted() if any(
+        flag in sys.argv for flag in ('--ui-check', '--ui-drive',
+                                      '--ui-layout', '--ui-perf')) else None
+    if elsewhere:
+        os.environ['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'] = (
+            os.environ.get('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS', '')
+            + ' --disable-features=CalculateNativeWinOcclusion').strip()
 
     window = webview.create_window(
         APP_NAME,
         os.path.join(paths.UI_DIR, 'index.html'),
         js_api=api,
-        width=settings.get('w', WINDOW_W),
-        height=settings.get('h', WINDOW_H),
+        width=size[0], height=size[1],
         x=settings.get('x'), y=settings.get('y'),
-        min_size=(380, 640),
+        min_size=least,
+        on_top=api._window_option('onTop'),
         background_color='#111113',
-        resizable=True,
+        # No Windows chrome: the header is the title bar, with its own
+        # minimise and close, and dragging it moves the window. Only the
+        # parts marked as drag regions drag - never a button.
+        frameless=True,
+        easy_drag=False,
+        shadow=True,
+        resizable=False,
         text_select=False,
         zoomable=False,
+        minimized=bool(elsewhere),
     )
     api._window = window
 
     tray = Tray(api, on_quit=lambda: window.destroy())
     api._tray = tray
+    api._quit = tray._quit
+
+    def come_forward():
+        # Launched again while already running: the same as Show in the tray
+        # menu, and to the front as well, which a click on the tray gets for
+        # free and a signal from another process does not.
+        tray._show()
+        try:
+            ctypes.windll.user32.SetForegroundWindow(api._hwnd())
+        except Exception:
+            pass
+
+    oneinstance.listen(come_forward, api._stop)
+
+    def settle():
+        # On its own thread and after the window is on screen, because
+        # on_start can run before the form has a handle to find.
+        window.events.shown.wait(15)
+        if placed:
+            try:
+                winwindow.place(api._hwnd(), placed)
+            except Exception:
+                traceback.print_exc()
+        api._apply_window()
+        if elsewhere:
+            try:
+                handle = api._hwnd()
+                print(f'{APP_NAME}: {vdesk.move(handle, elsewhere)}', flush=True)
+                # Restored where it now is, without being made the active
+                # window - activating it would take the person there too.
+                ctypes.windll.user32.ShowWindow(handle, SW_SHOWNOACTIVATE)
+            except Exception:
+                traceback.print_exc()
+
+    def maximised():
+        # There is no maximise button, but Win+Up and a few other ways in
+        # are the system's rather than the frame's. Put it straight back.
+        try:
+            window.restore()
+        except Exception:
+            traceback.print_exc()
+
+    # Minimise minimises - to the taskbar, where the button says what it
+    # does. Putting Relay away in the tray is the close button's question
+    # (closeRequest), and a minimise that vanished into the tray as well
+    # left no way to get the window off the screen and keep it on the
+    # taskbar.
+    window.events.maximized += maximised
+    window.events.restored += api._apply_window
 
     def on_start():
         # Each of these on its own, and none able to take the others down.
@@ -3617,6 +4236,8 @@ def main():
         # that came up and does nothing, with no tray, no address watcher and
         # no diagnostic. Which is exactly what one of them did.
         for step in (tray.start, dress_window,
+                     lambda: threading.Thread(target=settle,
+                                              daemon=True).start(),
                      lambda: threading.Thread(target=api._watch_self,
                                               daemon=True).start(),
                      lambda: threading.Thread(target=api._watch_traffic,
@@ -3625,6 +4246,14 @@ def main():
                 step()
             except Exception:
                 traceback.print_exc()
+        # A driven copy closes itself when it is finished, and its close
+        # goes through the same handler a person's does - which now asks
+        # whether to go to the tray, of a window with nobody at it. The
+        # check then waited for an answer for as long as it was left. So a
+        # copy that is being driven is leaving from the start.
+        if any(flag in sys.argv for flag in ('--ui-check', '--ui-drive',
+                                            '--ui-layout', '--ui-perf')):
+            api._leaving = True
         if '--ui-check' in sys.argv:
             threading.Thread(target=ui_check, args=(window,),
                              daemon=True).start()
@@ -3654,9 +4283,17 @@ def main():
     def closing():
         # Remember where it was, and leave the connection alone. Quitting is
         # the tray's job; closing the window is just closing the window.
+        #
+        # The placement first: it is right in every state, including the
+        # ones the check below has to refuse - minimised, hidden in the tray.
         try:
-            where = {'w': window.width, 'h': window.height,
-                     'x': window.x, 'y': window.y}
+            api._remember_place()
+        except Exception:
+            pass
+        try:
+            # Only the position: the size is the placement's, as a share of
+            # the screen, and a pixel count here would undo that.
+            where = {'x': window.x, 'y': window.y}
             # Only if it is somewhere. A window being torn down reports
             # coordinates from the far side of nowhere - -21332 was the real
             # number - and a position like that is remembered faithfully and
@@ -3664,11 +4301,32 @@ def main():
             # there is and the person has no way to know why. Nothing is
             # written rather than something that cannot be come back from.
             if all(-8000 < where[k] < 20000 for k in ('x', 'y')) \
-                    and where['w'] >= 300 and where['h'] >= 400:
+                    and window.width >= 300 and window.height >= 400:
                 settings.update(where)
+                settings.pop('w', None)
+                settings.pop('h', None)
                 save_settings(settings)
         except Exception:
             pass
+
+        # Alt+F4, or anything else that closes the window without going
+        # through the header's X, gets the same three answers the X does.
+        # Returning False cancels the close.
+        asked = 'exit' if api._leaving else api.closeRequest().get('do')
+        if asked == 'tray':
+            try:
+                window.hide()
+            except Exception:
+                traceback.print_exc()
+            return False
+        if asked == 'ask':
+            # Off this thread: the closing handler runs on the window's own
+            # thread, and asking the page anything from there would wait on
+            # the thread that has to answer.
+            threading.Thread(target=lambda: api._emit('AskClose', {}),
+                             daemon=True).start()
+            return False
+
         undo()
         return True
 

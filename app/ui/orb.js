@@ -242,7 +242,7 @@ void main() {
       const cur = { a: want.a.slice(), b: want.b.slice(), c: want.c.slice(), speed: want.speed };
       if (hero) {
         new MutationObserver(() => { want = targets(); })
-          .observe(hero, { attributes: true, attributeFilter: ['data-state'] });
+          .observe(hero, { attributes: true, attributeFilter: ['data-state', 'data-scheme'] });
       }
 
       /* u_colors is vec4[8]; we use the first three slots */
@@ -261,9 +261,10 @@ void main() {
       function resize() {
         /* 1.5x supersample keeps the gooey edges clean at 210px */
         const dpr = Math.min(devicePixelRatio || 1, 2)*1.5;
-        const box = canvas.getBoundingClientRect();
-        if (!box.width || !box.height) return false;
-        const w = Math.round(box.width*dpr), h = Math.round(box.height*dpr);
+        /* laid-out size, not drawn: the stage shrinks by a transform */
+        const bw = canvas.clientWidth, bh = canvas.clientHeight;
+        if (!bw || !bh) return false;
+        const w = Math.round(bw*dpr), h = Math.round(bh*dpr);
         if (canvas.width !== w || canvas.height !== h) {
           canvas.width = w; canvas.height = h;
           gl.viewport(0, 0, w, h);

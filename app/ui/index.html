@@ -1,5 +1,10 @@
 <!doctype html>
-<html lang="en">
+<!-- data-boot is taken off once boot() knows whether this copy has seen
+     the intro and has anything to connect with. Until then the main screen
+     is not drawn: it used to be shown for a moment, Connect button and all,
+     and then covered by the welcome - a flash of somewhere you had not got
+     to yet. -->
+<html lang="en" data-boot="wait">
 <head>
 <meta charset="utf-8">
 <title>Relay</title>
@@ -20,6 +25,15 @@
     + ((e.reason && e.reason.stack || '').split(/\n/).slice(1, 3)
        .map((l) => ' | ' + l.trim()).join(''))));
 </script>
+<!-- The theme before the first paint, from the last time this window saw
+     it - so a White copy does not open in Midnight and then change. Settings
+     have the real answer and boot puts it back if the two disagree. -->
+<script>
+  try {
+    var relayTheme = localStorage.getItem('relay.theme');
+    if (relayTheme) document.documentElement.dataset.theme = relayTheme;
+  } catch (e) {}
+</script>
 </head>
 <body>
 
@@ -34,12 +48,15 @@
   <symbol id="i-route" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3" /> <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15" /> <circle cx="18" cy="5" r="3" /></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /></symbol>
   <symbol id="i-gauge" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4" /> <path d="M3.34 19a10 10 0 1 1 17.32 0" /></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /> <path d="M12 8v4" /> <path d="M12 16h.01" /></symbol>
   <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /> <path d="M12 16v-4" /> <path d="M12 8h.01" /></symbol>
   <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" /> <circle cx="12" cy="12" r="3" /></symbol>
   <symbol id="i-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" /> <path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" /> <path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" /> <path d="m2 2 20 20" /></symbol>
   <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34" /> <circle cx="11" cy="11" r="8" /></symbol>
   <symbol id="i-tower" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9" /> <path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5" /> <circle cx="12" cy="9" r="2" /> <path d="M16.2 4.8c2 2 2.26 5.11.8 7.47" /> <path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1" /> <path d="M9.5 18h5" /> <path d="m8 22 4-11 4 11" /></symbol>
   <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /> <path d="M12 5v14" /></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /></symbol>
   <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18" /> <path d="m6 6 12 12" /></symbol>
   <symbol id="i-chev-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6" /></symbol>
   <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /> <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /> <path d="M2 12h20" /></symbol>
@@ -75,13 +92,24 @@
 
 <main class="app">
 
+  <!-- The title bar as well as the header: there is no Windows frame. The
+       name and the empty middle move the window when dragged (drag-zone);
+       the buttons never do. -->
   <header class="bar">
-    <span class="bar__mark">
-      <img class="bar__logo" src="app-logo.png" alt="" aria-hidden="true">
-      <span class="bar__name">RELAY</span>
+    <span class="bar__mark drag-zone">
+      <!-- The mark, the same drawing as the app icon (make_icon.py) and the
+           Android app's: a disc, its ring open across the upper right, and
+           the bead that has left through the opening. Inline, so it takes
+           the theme's colours. -->
+      <svg class="bar__logo" viewBox="0 0 256 256" aria-hidden="true">
+        <circle class="bar__disc" cx="128" cy="128" r="56"/>
+        <path class="bar__ring" d="M226.48 110.64 A100 100 0 1 1 145.36 29.52"/>
+        <circle class="bar__bead" cx="221.3" cy="34.7" r="16"/>
+      </svg>
+      <span class="bar__name">Relay</span>
     </span>
+    <span class="bar__drag drag-zone" aria-hidden="true"></span>
     <span class="bar__tools">
-      <span class="privacy"><i></i>PRIVATE</span>
       <!-- Two sliders, not a cog. The hand-drawn one here was a circle with
            rays coming off it, which at 15px is a sun - and a sun in the
            corner of an app reads as a theme switch, which this is not. -->
@@ -106,6 +134,14 @@
       <button class="icon" id="settings" type="button" aria-label="Settings">
         <svg class="ico" aria-hidden="true"><use href="#i-settings"/></svg>
       </button>
+      <span class="bar__win">
+        <button class="icon icon--win" id="winMin" type="button" aria-label="Minimise window">
+          <svg class="ico" aria-hidden="true"><use href="#i-minus"/></svg>
+        </button>
+        <button class="icon icon--win icon--shut" id="winClose" type="button" aria-label="Close window">
+          <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
+        </button>
+      </span>
     </span>
   </header>
 
@@ -113,15 +149,17 @@
        between them, so showing one without the other asks the user to
        remember what their own IP was. -->
   <section class="hero" id="hero" data-state="off" aria-label="Route overview">
-    <div class="blob-stage" aria-hidden="true">
-      <span class="blob__glow"></span>
-      <span class="blob__orbit blob__orbit--outer"><i></i></span>
-      <span class="blob__orbit blob__orbit--inner"><i></i></span>
-      <span class="blob__halo"></span>
-      <span class="blob__float">
+    <div class="blob-stage">
+      <span class="blob__glow" aria-hidden="true"></span>
+      <span class="blob__orbit blob__orbit--outer" aria-hidden="true"><i></i></span>
+      <span class="blob__orbit blob__orbit--inner" aria-hidden="true"><i></i></span>
+      <span class="blob__halo" aria-hidden="true"></span>
+      <!-- The orb is a button, as on Android: press to connect or
+           disconnect, hold to reconnect. -->
+      <span class="blob__float" id="orb" role="button" tabindex="0" aria-label="Connect">
         <!-- WebGL2 core; app.js swaps this back to the DOM bead sphere when
              the GPU is blocked (RDP, SwiftShader denylist). -->
-        <canvas class="blob__body" id="orbCanvas"></canvas>
+        <canvas class="blob__body" id="orbCanvas" aria-hidden="true"></canvas>
       </span>
     </div>
     <p class="route-label"><i></i><span id="routeLabel">READY TO RELAY</span></p>
@@ -215,14 +253,23 @@
            you are looking at - the strip alone would be three words and a
            guess. -->
       <div class="way" id="wayWrap" data-way="surfshark">
-        <div class="seg seg--three" id="way" data-way="surfshark">
-          <i class="seg__slide" aria-hidden="true"></i>
-          <button class="seg__opt" type="button" data-way="surfshark"
-                  aria-pressed="true">Provider</button>
-          <button class="seg__opt" type="button" data-way="single"
-                  aria-pressed="false">Your server</button>
-          <button class="seg__opt" type="button" data-way="multi"
-                  aria-pressed="false">Server + exit</button>
+        <!-- What the chosen way is, behind an (i) beside the strip, as on
+             Android; the line under it is only for what needs doing. -->
+        <div class="way__row">
+          <div class="seg seg--three" id="way" data-way="surfshark">
+            <i class="seg__slide" aria-hidden="true"></i>
+            <button class="seg__opt" type="button" data-way="surfshark"
+                    aria-pressed="true">Provider</button>
+            <button class="seg__opt" type="button" data-way="single"
+                    aria-pressed="false">Your server</button>
+            <button class="seg__opt" type="button" data-way="multi"
+                    aria-pressed="false">Server + exit</button>
+          </div>
+          <button class="info info--right" id="wayInfo" type="button"
+                  aria-label="What this way out is">
+            <svg class="ico" aria-hidden="true"><use href="#i-info"/></svg>
+            <span class="info__bubble" role="tooltip" id="wayWhy"></span>
+          </button>
         </div>
         <p class="note way__note" id="wayNote"></p>
       </div>
@@ -289,11 +336,11 @@
     <div class="rig__edge"></div>
     <div class="rig__main" id="searchMain">
       <input class="rig__in" id="search" type="text"
-             autocomplete="off" spellcheck="false" aria-label="Search countries">
+             autocomplete="off" spellcheck="false" aria-label="Search a country or city">
       <!-- The hint is ours rather than the field's, so the fade can be taken
            off the end of the words instead of out of a fixed-width band that
            landed across the middle of them. -->
-      <span class="rig__hint" id="inputMask" aria-hidden="true">Search countries</span>
+      <span class="rig__hint" id="inputMask" aria-hidden="true">Search a country or city</span>
       <span class="rig__spark" id="inputSpark"></span>
       <span class="rig__lens" aria-hidden="true">
         <svg class="ico" aria-hidden="true"><use href="#i-search"/></svg>
@@ -318,39 +365,46 @@
     <!-- Answering-first sits underneath all three: a blocked exit is not a
          good answer to "sort by name" either. -->
     <div class="pair pair--sort" id="sortBy" role="tablist">
-      <!-- Icons, because three words beside a fourth control made a row of
-           four things that all looked like buttons doing the same kind of
-           job. Each keeps its word as a tooltip and as its label for anyone
-           not reading by eye. -->
+      <!-- The phone's chips: each one an icon and the word, so a sort always
+           says what it is. -->
       <button class="pair__opt" type="button" data-sort="ping" role="tab"
               aria-selected="true" aria-label="Fastest first" title="Fastest first">
-        <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg>
+        <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg><span>Ping</span>
       </button>
       <button class="pair__opt" type="button" data-sort="load" role="tab"
               aria-selected="false" aria-label="Emptiest first" title="Emptiest first">
-        <svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg>
+        <svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg><span>Load</span>
       </button>
       <button class="pair__opt" type="button" data-sort="name" role="tab"
               aria-selected="false" aria-label="By name" title="By name">
-        <svg class="ico" aria-hidden="true"><use href="#i-az"/></svg>
+        <svg class="ico" aria-hidden="true"><use href="#i-az"/></svg><span>A–Z</span>
       </button>
       <i class="pair__slide" aria-hidden="true"></i>
     </div>
+    <!-- Where the exits come from, as a chip at the end of the sorts - the
+         phone's "Everything". The count is the list's first line now. -->
+    <button class="listhead listhead--pick" id="sourcePick" type="button"
+            aria-haspopup="dialog">
+      <span id="sourceName">All locations</span>
+      <svg class="listhead__chev ico ico--sm" aria-hidden="true"><use href="#i-chev-down"/></svg>
+    </button>
+    <!-- One exit per country, six at a time: a time on every row, so that
+         Fastest first is about what was measured. Stop while it runs. A bolt
+         at the end of the chips rather than a line of its own: that line was
+         40px of a list that showed three countries. The word stays, for a
+         screen reader and for paintTesting(), out of sight. -->
+    <button class="reach__all" id="testAll" type="button"
+            title="Test all: time one exit in every country. Times are from the last test.">
+      <svg class="ico ico--sm" aria-hidden="true"><use href="#i-bolt"/></svg>
+      <span class="sr" id="testAllLabel">Test all</span>
+    </button>
     <i class="reach__bar" id="reachBar" aria-hidden="true"></i>
   </div>
-  <p class="note reach__said" id="reachSaid">Times are from the last test.</p>
-
-  <!-- The line that was already counting the list now says what the list is
-       drawn from as well. Two facts about one thing, on the line that was
-       there for the first of them - rather than a row of chips under the
-       search box, which is a permanent piece of furniture for a setting
-       almost nobody changes twice. -->
-  <button class="listhead listhead--pick" id="sourcePick" type="button"
-          aria-haspopup="dialog">
-    <span id="sourceName">All locations</span>
-    <svg class="listhead__chev ico ico--sm" aria-hidden="true"><use href="#i-chev-down"/></svg>
-    <span class="listhead__n" id="listCount">—</span>
-  </button>
+  <!-- How a test is going, and what it found. Empty, and gone, until there
+       is something to say. -->
+  <div class="reach__line">
+    <p class="note reach__said" id="reachSaid"></p>
+  </div>
   <div class="sheet__list" id="list"></div>
 </dialog>
 
@@ -476,10 +530,10 @@
          four things already open, so the sheet opens on a list you
          read in a second instead of on the middle of a form. -->
     <nav class="menu" id="prefsMenu">
-      <button class="menu__row" type="button" data-goto="sign-in">
+      <button class="menu__row" type="button" data-goto="accounts">
         <span class="menu__copy">
-          <span class="menu__name">Sign-in</span>
-          <span class="menu__note">the accounts this app can use</span>
+          <span class="menu__name">Accounts</span>
+          <span class="menu__note">your providers, sign-ins and servers</span>
         </span>
         <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
       </button>
@@ -497,103 +551,133 @@
         </span>
         <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
       </button>
+      <button class="menu__row" type="button" data-goto="look">
+        <span class="menu__copy">
+          <span class="menu__name">Look</span>
+          <span class="menu__note">theme, the orb's colours</span>
+        </span>
+        <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
+      </button>
+      <button class="menu__row" type="button" data-goto="window">
+        <span class="menu__copy">
+          <span class="menu__name">Window</span>
+          <span class="menu__note">where it sits, the tray, closing it</span>
+        </span>
+        <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
+      </button>
       <button class="menu__row" type="button" data-goto="about-this-copy">
         <span class="menu__copy">
-          <span class="menu__name">About this copy</span>
-          <span class="menu__note">paths, versions, the log</span>
+          <span class="menu__name">About</span>
+          <span class="menu__note">version, paths, the log</span>
         </span>
         <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
       </button>
     </nav>
 
-    <section class="screen" data-screen="sign-in" hidden>
+    <section class="screen" data-screen="accounts" hidden>
 
     <!-- 1 · the accounts.
 
-         One pane for both providers, because they are the same decision:
-         which account is this app using. They were two, and being two is
-         what made "you can only have one of each, and swapping means typing
-         it again" look like the natural state of things rather than a
-         limitation.
+         One card per provider rather than a list of accounts in one place
+         and the providers' steps in another. Everything about Surfshark -
+         the accounts it has, how far along it is, the one thing to do next
+         and whether exits are drawn from it - is in Surfshark's card, so
+         there is nothing to match up between two lists.
 
-         What differs between them is only how an account is proved - one
-         takes a service credential off a web page, the other needs a login
-         and a puzzle - so that is the only place the form differs. -->
-    <section class="pane pane--gate" id="prefAccounts" style="--i:0">
-      <div class="pane__head">
-        <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-key"/></svg></span>
-        <h3 class="pane__title">Accounts</h3>
-        <span class="pill" id="acctPill" data-state="off">none</span>
+         What differs between the providers is only how an account is proved
+         - one takes a service credential off a web page, the other needs a
+         login and a puzzle - so that is the only place the form differs. -->
+    <section class="pane pane--gate accts" id="prefAccounts" style="--i:0">
+      <!-- The line across the top: how many providers can connect, as a
+           number and a bar, and the way to add another account. -->
+      <div class="accthero">
+        <div class="accthero__row">
+          <span class="accthero__n"><b id="acctReadyN">0</b> of 2</span>
+          <span class="pill" id="acctPill" data-state="off">none</span>
+        </div>
+        <h3 class="pane__title accthero__title" id="acctHeroSay">providers ready to connect</h3>
+        <div class="accthero__bar" aria-hidden="true"><i></i><i></i></div>
       </div>
-      <p class="pane__why">Every account this app can use, and which one each
-        provider is using now. Surfshark takes the <b>service</b> username and
-        password from its manual-setup page — not the email you log in with.
-        Windscribe cannot: it issues a different credential per client, so it
-        has to be signed in to, and that means a puzzle.</p>
+      <p class="pane__why">Every account this app can use, one card per provider,
+        and which providers the exit list is drawn from. Surfshark takes the
+        <b>service</b> username and password from its manual-setup page — not the
+        email you log in with. Windscribe cannot: it issues a different credential
+        per client, so it has to be signed in to, and that means a puzzle.</p>
 
       <div class="pane__body">
-        <!-- The roster. Built by the page; empty until there is one. -->
-        <div class="acct" id="acctList"></div>
+        <p class="note" id="acctSaid"></p>
 
-        <div class="pane__row">
-          <button class="btn btn--quiet btn--auto" id="acctAdd" type="button">Add an account</button>
-          <p class="note" id="acctSaid"></p>
-        </div>
-
-        <!-- Which of them the exit list is drawn from. Separate from
-             which accounts exist, because they are separate questions: an
-             account can be signed in and still be one you do not want
-             exits from today. -->
         <div class="use" id="acctUse">
-          <span class="use__cap">Connect through</span>
-        <!-- A card each, not two lines with tick boxes in a footnote. Which
-             company carries your traffic is the largest choice in this pane
-             and it was drawn as the smallest thing in it. The tick box is
-             still what holds the state - the change event, the disabled
-             state and everything reading .checked are unchanged - it is
-             just no longer the whole of what you see. -->
           <div class="use__opts" id="useOpts">
-            <label class="prov" data-provider="surfshark">
-              <input class="prov__in" type="checkbox" id="useSurfshark" value="surfshark">
-              <svg class="prov__mark" aria-hidden="true"><use href="#i-ss"/></svg>
-              <span class="prov__name">Surfshark</span>
-              <span class="prov__n" id="useSurfsharkN">—</span>
-              <!-- The one thing to do about this provider, whatever that is
-                   this minute. Written by paintUse, hidden when the answer
-                   is "nothing". -->
-              <button class="prov__do" id="useSurfsharkDo" type="button" hidden></button>
-              <svg class="prov__tick" aria-hidden="true"><use href="#i-check"/></svg>
-            </label>
-            <label class="prov" data-provider="windscribe">
-              <input class="prov__in" type="checkbox" id="useWindscribe" value="windscribe">
-              <svg class="prov__mark" aria-hidden="true"><use href="#i-ws"/></svg>
-              <span class="prov__name">Windscribe</span>
-              <span class="prov__n" id="useWindscribeN">—</span>
-              <button class="prov__do" id="useWindscribeDo" type="button" hidden></button>
-              <!-- Windscribe only, and an icon rather than a row of its own:
-                   the credential behind a session goes stale and this is what
-                   fetches another without a puzzle. It belongs to this card
-                   and nowhere else, and it is rare enough that a word for it
-                   would outweigh the step you are actually here for. -->
-              <button class="prov__side" id="wsRefresh" type="button"
-                      aria-label="Refresh the Windscribe credential"
-                      title="Refresh the credential" hidden>
-                <svg class="ico ico--sm" aria-hidden="true"><use href="#i-refresh"/></svg>
-              </button>
-              <svg class="prov__tick" aria-hidden="true"><use href="#i-check"/></svg>
-            </label>
+            <div class="prov" data-provider="surfshark">
+              <div class="prov__head">
+                <span class="prov__badge"><svg class="prov__mark" aria-hidden="true"><use href="#i-ss"/></svg></span>
+                <span class="prov__copy">
+                  <span class="prov__name">Surfshark</span>
+                  <span class="prov__n" id="useSurfsharkN">—</span>
+                </span>
+                <span class="prov__state" aria-hidden="true"></span>
+              </div>
+              <!-- Account, servers, pinned: the three things between a
+                   provider and a connection, ticked off as each is done. -->
+              <ol class="prov__steps" id="useSurfsharkSteps">
+                <li data-step="account">Account</li>
+                <li data-step="servers">Servers</li>
+                <li data-step="pinned">Pinned</li>
+              </ol>
+              <!-- This provider's accounts. Built by the page. -->
+              <div class="prov__accts" data-for="surfshark"></div>
+              <div class="prov__foot">
+                <!-- The one thing to do about this provider, whatever that
+                     is this minute. Written by paintUse. -->
+                <button class="prov__do" id="useSurfsharkDo" type="button" hidden></button>
+                <!-- Which providers the exit list is drawn from. Separate
+                     from which accounts exist, because an account can be
+                     signed in and still be one you do not want exits from
+                     today. The tick box is still what holds the state. -->
+                <label class="prov__use" title="Draw exits from Surfshark">
+                  <span class="prov__usecap">Connect through</span>
+                  <input class="prov__in" type="checkbox" id="useSurfshark" value="surfshark">
+                  <span class="prov__switch" aria-hidden="true"></span>
+                </label>
+              </div>
+            </div>
+            <div class="prov" data-provider="windscribe">
+              <div class="prov__head">
+                <span class="prov__badge"><svg class="prov__mark" aria-hidden="true"><use href="#i-ws"/></svg></span>
+                <span class="prov__copy">
+                  <span class="prov__name">Windscribe</span>
+                  <span class="prov__n" id="useWindscribeN">—</span>
+                </span>
+                <span class="prov__state" aria-hidden="true"></span>
+              </div>
+              <ol class="prov__steps" id="useWindscribeSteps">
+                <li data-step="account">Account</li>
+                <li data-step="servers">Servers</li>
+                <li data-step="pinned">Pinned</li>
+              </ol>
+              <div class="prov__accts" data-for="windscribe"></div>
+              <div class="prov__foot">
+                <button class="prov__do" id="useWindscribeDo" type="button" hidden></button>
+                <!-- Windscribe only: the credential behind a session goes
+                     stale, and this fetches another without a puzzle. -->
+                <button class="prov__side" id="wsRefresh" type="button"
+                        aria-label="Refresh the Windscribe credential"
+                        title="Refresh the credential" hidden>
+                  <svg class="ico ico--sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+                </button>
+                <label class="prov__use" title="Draw exits from Windscribe">
+                  <span class="prov__usecap">Connect through</span>
+                  <input class="prov__in" type="checkbox" id="useWindscribe" value="windscribe">
+                  <span class="prov__switch" aria-hidden="true"></span>
+                </label>
+              </div>
+            </div>
           </div>
           <p class="note" id="useSaid"></p>
         </div>
 
-        <!-- Both providers publish their fleet, so the folder of configs
-             somebody downloads by hand is a list this app can ask for. Those
-             two buttons used to live down here, one row each, always on
-             screen and each with a paragraph beside it. They are the cards'
-             own next step now - one per card, and only the one that is
-             actually next. Refresh credential went into the Windscribe card
-             with them, as the icon it is. Nothing is left down here but the
-             line saying how any of it went. -->
+        <!-- How the last fetch or refresh went. -->
         <p class="note" id="provSaid"></p>
       </div>
     </section>
@@ -669,56 +753,33 @@
         <h3 class="pane__title">Your own tunnel</h3>
         <span class="pill" id="tunnelPill" data-state="off">not set</span>
       </div>
-      <p class="pane__why">A server you rent, reached through a CDN, carrying
-        the traffic instead of the provider's proxy. It is here because the
-        provider's stopped carrying <b>uploads</b> &mdash; measured on this
-        line, the same file went up at 1&#8209;10&nbsp;Mbit with half the
-        attempts dying, and 40&#8209;80&nbsp;Mbit through a tunnel.</p>
-      <p class="pane__skip">Nothing to do here unless you rent a server and
-        own a domain.</p>
+      <p class="pane__why">A server you rent, carrying the traffic instead
+        of the provider's proxy. It is here because the provider's stopped
+        carrying <b>uploads</b> &mdash; measured on this line, the same file
+        went up at 1&#8209;10&nbsp;Mbit with half the attempts dying, and
+        40&#8209;80&nbsp;Mbit through a tunnel.</p>
+      <p class="pane__skip">Nothing to do here unless you rent a server.</p>
 
       <div class="pane__body">
         <div class="step">
           <p class="step__cap">
-            <svg class="ico" aria-hidden="true"><use href="#i-tower"/></svg>
-            <span>On the server, once</span>
-          </p>
-          <p class="pane__why">Point a domain at the server on Cloudflare with
-            the cloud <b>on</b>, then paste this into an SSH session as
-            <b>root</b>. Copy takes the whole installer rather than just this
-            line, so it is one paste with nothing to upload first. Safe to run
-            twice, it leaves other sites on the box alone, and it prints the
-            two passwords when it finishes.</p>
-          <div class="pane__row pane__row--code">
-            <code class="path path--flush mono" id="tunnelCmd">install-server.sh &lt;domain.com&gt; &lt;surfshark-user&gt; &lt;surfshark-pass&gt;</code>
-            <button class="btn btn--quiet btn--auto" id="tunnelCopy" type="button">Copy</button>
-          </div>
-          <p class="note" id="tunnelCmdNote">Copy fills the domain in from
-            the field below. Put your Surfshark username and password where
-            the brackets are.</p>
-        </div>
-
-        <div class="step">
-          <p class="step__cap">
             <svg class="ico" aria-hidden="true"><use href="#i-socket"/></svg>
-            <span>Back in this window</span>
+            <span>Your server</span>
           </p>
-          <p class="pane__why">Both passwords are made by the installer and
-            printed when it finishes. The <b>tunnel</b> one stops strangers who
-            find the domain using it as an open proxy; the <b>API</b> one is
-            what lets this window change the exit country. Lost them? They are
-            on the server in <span class="mono">/etc/gost/tunnel.pw</span> and
-            <span class="mono">/etc/gost/api.pw</span>.</p>
+          <p class="pane__why">Its <b>IP address</b> is enough &mdash; no domain,
+            no DNS. A domain works too, behind Cloudflare or not. The two
+            passwords are made by this window when you copy the install
+            command, so leave them empty unless you already have them.</p>
           <label class="field">
-            <span class="field__cap">Domain</span>
+            <span class="field__cap">Server IP or domain</span>
             <input class="field__in mono" id="tunnelDomain" type="text"
-                   placeholder="yourdomain.com" autocomplete="off"
+                   placeholder="203.0.113.7" autocomplete="off"
                    autocapitalize="off" spellcheck="false">
           </label>
           <label class="field">
             <span class="field__cap">Tunnel password</span>
             <span class="field__pair">
-              <input class="field__in mono" id="tunnelPass" type="password" placeholder="not set"
+              <input class="field__in mono" id="tunnelPass" type="password" placeholder="made for you"
                      autocomplete="off" spellcheck="false">
               <button class="field__peek" id="tunnelPeek" type="button"
                       aria-pressed="false" aria-label="Show the password">
@@ -729,7 +790,7 @@
           <label class="field">
             <span class="field__cap">API password</span>
             <span class="field__pair">
-              <input class="field__in mono" id="tunnelApi" type="password" placeholder="not set"
+              <input class="field__in mono" id="tunnelApi" type="password" placeholder="made for you"
                      autocomplete="off" spellcheck="false">
               <button class="field__peek" id="tunnelApiPeek" type="button"
                       aria-pressed="false" aria-label="Show the password">
@@ -737,6 +798,39 @@
               </button>
             </span>
           </label>
+        </div>
+
+        <div class="step">
+          <p class="step__cap">
+            <svg class="ico" aria-hidden="true"><use href="#i-tower"/></svg>
+            <span>On the server, as root</span>
+          </p>
+          <p class="pane__why">Paste <b>Install</b> into an SSH session. It is
+            one line carrying the whole installer and this window's passwords,
+            and it sets up everything &mdash; run it again any time to repair
+            or update. No provider account goes in it: <b>server + exit</b>
+            sends the location you pick, with that provider's own account,
+            each time it connects.</p>
+          <div class="pane__row pane__row--code">
+            <code class="path path--flush mono" id="tunnelCmd">install-server.sh &lt;server&gt; --password … --api-password …</code>
+            <button class="btn btn--quiet btn--auto" id="tunnelCopy" type="button">Copy</button>
+          </div>
+          <div class="pane__row pane__row--code">
+            <code class="path path--flush mono">status: what is running on the server</code>
+            <button class="btn btn--quiet btn--auto" id="tunnelCopyStatus" type="button">Copy</button>
+          </div>
+          <div class="pane__row pane__row--code">
+            <code class="path path--flush mono">uninstall: take the tunnel off again</code>
+            <button class="btn btn--quiet btn--auto" id="tunnelCopyUninstall" type="button">Copy</button>
+          </div>
+          <p class="note" id="tunnelCmdNote">Then press Test below.</p>
+        </div>
+
+        <div class="step">
+          <p class="step__cap">
+            <svg class="ico" aria-hidden="true"><use href="#i-socket"/></svg>
+            <span>Back in this window</span>
+          </p>
           <div class="pane__row pane__row--acts">
             <button class="btn btn--quiet btn--auto" id="tunnelSave" type="button">Save</button>
             <button class="btn btn--quiet btn--auto" id="tunnelTest" type="button">Test</button>
@@ -880,6 +974,33 @@
       <div class="meter" id="pinMeter" hidden><i id="pinBar"></i></div>
       <ol class="tally" id="pinTally" hidden></ol>
       <ul class="chips" id="pinUse" hidden></ul>
+    </section>
+
+    <!-- 5½ · the light one. One exit per country, timed by how quickly its
+         proxy answers - what the list's Fastest first is made of. -->
+    <section class="pane" id="prefQuick" style="--i:6">
+      <div class="pane__head">
+        <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-bolt"/></svg></span>
+        <h3 class="pane__title">Quick timing</h3>
+        <span class="pill" id="quickPill" data-state="off">never</span>
+      </div>
+      <p class="pane__why">One exit from each country is asked how quickly its proxy
+        answers - six at a time, a few seconds each, so a minute or so for the
+        whole list and gentle on the line. Only with the tunnel down: through it,
+        every time would be the tunnel's. The bolt on a country in the list times
+        all of its exits.</p>
+      <div class="pane__body">
+        <p class="note" id="quickSaid"></p>
+        <div class="quick__row">
+          <span class="quick__cap">Time the list on its own
+            <span class="quick__sub">when it opens and the last run is over six hours old</span></span>
+          <button class="toggle" id="autoQuick" type="button" role="switch"
+                  aria-checked="true" aria-label="Time the list on its own"><span></span></button>
+        </div>
+        <div class="pane__row">
+          <button class="btn btn--quiet btn--auto" id="quickRun" type="button">Time every country</button>
+        </div>
+      </div>
     </section>
 
     <!-- 6 · the heavy one -->
@@ -1075,6 +1196,91 @@
 
     </section>
 
+    <!-- The tray menu's switches, here as well: a setting only reachable by
+         right-clicking an icon in the corner of the taskbar is one most
+         people never find. Both places change the same setting. -->
+    <section class="screen" data-screen="look" hidden>
+
+    <section class="pane" style="--i:1">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title">Theme</h3>
+        <div class="themes" id="themes" role="radiogroup" aria-label="Theme"></div>
+      </span>
+    </section>
+
+    <section class="pane" style="--i:2">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title">Orb colours</h3>
+        <p class="pane__why">Traffic light: silver when not connected, yellow
+          while connecting, green when connected, red when it failed. Desktop:
+          the original lavender and teal at rest.</p>
+        <div class="seg" id="orbColors" data-orb="signal">
+          <i class="seg__slide" aria-hidden="true"></i>
+          <button class="seg__opt" type="button" data-orb="signal"
+                  aria-pressed="true">Traffic light</button>
+          <button class="seg__opt" type="button" data-orb="desktop"
+                  aria-pressed="false">Desktop</button>
+        </div>
+      </span>
+    </section>
+    </section>
+
+    <section class="screen" data-screen="window" hidden>
+
+    <section class="pane pane--line" style="--i:1">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-pin"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title">Lock position</h3>
+        <p class="pane__why">The window stays where it is; dragging the
+          header does nothing.</p>
+      </span>
+      <button class="toggle" id="winLock" type="button" data-option="lockWindow"
+              role="switch" aria-checked="false"><span></span></button>
+    </section>
+
+    <section class="pane pane--line" style="--i:2">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title">Always on top</h3>
+        <p class="pane__why">Relay stays in front of other windows.</p>
+      </span>
+      <button class="toggle" id="winTop" type="button" data-option="onTop"
+              role="switch" aria-checked="false"><span></span></button>
+    </section>
+
+    <section class="pane" style="--i:3">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-x"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title">The close button</h3>
+        <p class="pane__why">What the X does. In the tray Relay keeps running
+          and the connection stays up; quitting ends it. Either way the tray's
+          own Quit is always there.</p>
+        <div class="seg seg--three seg--close" id="onClose" data-close="">
+          <i class="seg__slide" aria-hidden="true"></i>
+          <button class="seg__opt" type="button" data-close=""
+                  aria-pressed="true">Ask</button>
+          <button class="seg__opt" type="button" data-close="tray"
+                  aria-pressed="false">Tray</button>
+          <button class="seg__opt" type="button" data-close="exit"
+                  aria-pressed="false">Quit</button>
+        </div>
+      </span>
+    </section>
+
+    <section class="pane pane--line" style="--i:4">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-socket"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title">Stay connected after closing</h3>
+        <p class="pane__why">Closing the window leaves the connection up, for
+          programs pointed at the proxy by hand. Off, closing disconnects.</p>
+      </span>
+      <button class="toggle" id="keepOnClose" type="button"
+              role="switch" aria-checked="false"><span></span></button>
+    </section>
+    </section>
+
     <section class="screen" data-screen="about-this-copy" hidden>
 
     <!-- 7 · a footnote, and shaped like one -->
@@ -1103,37 +1309,198 @@
      of them, and unfolding all of that inside a list of accounts pushed the
      list off the screen at the moment you most wanted to see it - which is
      what "is this one already here" needs. -->
+<!-- First run, as the Android app has it.
+
+     The intro: what Relay is, in five slides, the first time it opens. The
+     welcome: a copy with nothing to connect with is asked how it will
+     connect, rather than shown a Connect button that cannot work. The
+     setup: once an account is in, its servers are fetched and pinned
+     without anybody needing to find two buttons in Settings. -->
+<dialog class="sheet sheet--first sheet--intro" id="introDlg">
+  <header class="first__top">
+    <button class="btn btn--quiet btn--auto" id="introSkip" type="button">Skip</button>
+  </header>
+  <div class="intro__track" id="introTrack">
+    <section class="intro__slide" data-tint="#8c82ff">
+      <div class="intro__art"><svg class="logo-mark logo-mark--draw" viewBox="0 0 256 256" aria-hidden="true">
+        <circle class="logo-mark__disc" cx="128" cy="128" r="56"/>
+        <path class="logo-mark__ring" pathLength="1" d="M226.48 110.64 A100 100 0 1 1 145.36 29.52"/>
+        <circle class="logo-mark__bead" cx="221.3" cy="34.7" r="16"/>
+      </svg></div>
+      <h2 class="first__title">Relay</h2>
+      <p class="first__say">A private way out from a line that forges DNS answers and
+        filters VPNs - one click to connect, and it tells you exactly where your
+        traffic comes out.</p>
+    </section>
+    <section class="intro__slide" data-tint="#ffc761">
+      <div class="intro__art"><span class="intro__badge"><svg class="ico" aria-hidden="true"><use href="#i-bolt"/></svg></span></div>
+      <h2 class="first__title">The first exit that answers</h2>
+      <p class="first__say">Relay asks dozens of your provider's exits at once and
+        connects through whichever answers first. Pick a country, or let it race
+        them all.</p>
+    </section>
+    <section class="intro__slide" data-tint="#61efbf">
+      <div class="intro__art"><span class="intro__badge"><svg class="ico" aria-hidden="true"><use href="#i-pin"/></svg></span></div>
+      <h2 class="first__title">Pinned to real addresses</h2>
+      <p class="first__say">This line's resolver answers with forged addresses. Relay
+        looks every server up over DNS-over-HTTPS and keeps the address that is
+        really it.</p>
+    </section>
+    <section class="intro__slide" data-tint="#3dd4ee">
+      <div class="intro__art"><span class="intro__badge"><svg class="ico" aria-hidden="true"><use href="#i-tower"/></svg></span></div>
+      <h2 class="first__title">Or your own server</h2>
+      <p class="first__say">Have a server of your own behind Cloudflare? Relay speaks
+        its tunnel directly - quicker and steadier, with uploads that do not
+        stall.</p>
+    </section>
+    <section class="intro__slide" data-tint="#ff8fb8">
+      <div class="intro__art"><span class="intro__badge"><svg class="ico" aria-hidden="true"><use href="#i-star"/></svg></span></div>
+      <h2 class="first__title">One click, anywhere</h2>
+      <p class="first__say">Click the orb or the Connect button, or use the tray icon
+        by the clock. Hold the orb to reconnect.</p>
+    </section>
+  </div>
+  <footer class="first__foot">
+    <div class="intro__dots" id="introDots" aria-hidden="true">
+      <i></i><i></i><i></i><i></i><i></i>
+    </div>
+    <button class="btn first__go" id="introNext" type="button" autofocus>Next</button>
+  </footer>
+</dialog>
+
+<dialog class="sheet sheet--first" id="welcomeDlg">
+  <div class="first__body">
+    <div class="first__art"><svg class="logo-mark logo-mark--draw" viewBox="0 0 256 256" aria-hidden="true">
+        <circle class="logo-mark__disc" cx="128" cy="128" r="56"/>
+        <path class="logo-mark__ring" pathLength="1" d="M226.48 110.64 A100 100 0 1 1 145.36 29.52"/>
+        <circle class="logo-mark__bead" cx="221.3" cy="34.7" r="16"/>
+      </svg></div>
+    <h2 class="first__title">Welcome to Relay</h2>
+    <p class="first__say">How will you connect? Relay needs one of these before it can
+      carry anything - more can be added later under Settings.</p>
+    <div class="choice">
+      <div class="choice__head">
+        <span class="choice__glyph"><svg class="ico" aria-hidden="true"><use href="#i-key"/></svg></span>
+        <span class="choice__copy">
+          <span class="choice__name">A VPN account</span>
+          <span class="choice__note">Sign in, and Relay gets the provider's servers and
+            pins them to real addresses for you.</span>
+        </span>
+      </div>
+      <div class="choice__pair">
+        <button class="btn first__go" type="button" data-provider="surfshark">Surfshark</button>
+        <button class="btn first__go" type="button" data-provider="windscribe">Windscribe</button>
+      </div>
+    </div>
+    <button class="choice choice--row" id="welcomeServer" type="button">
+      <span class="choice__head">
+        <span class="choice__glyph"><svg class="ico" aria-hidden="true"><use href="#i-tower"/></svg></span>
+        <span class="choice__copy">
+          <span class="choice__name">My own server</span>
+          <span class="choice__note">A server of yours behind Cloudflare. Set its domain
+            and password.</span>
+        </span>
+      </span>
+    </button>
+  </div>
+</dialog>
+
+<dialog class="sheet sheet--first" id="setupDlg">
+  <div class="first__body">
+    <div class="first__art"><svg class="logo-mark logo-mark--spin" viewBox="0 0 256 256" aria-hidden="true">
+        <circle class="logo-mark__disc" cx="128" cy="128" r="56"/>
+        <path class="logo-mark__ring" pathLength="1" d="M226.48 110.64 A100 100 0 1 1 145.36 29.52"/>
+        <circle class="logo-mark__bead" cx="221.3" cy="34.7" r="16"/>
+      </svg></div>
+    <h2 class="first__title" id="setupTitle">Getting your servers ready</h2>
+    <p class="first__say">Once, for each account. After this Relay connects in a second.</p>
+    <ol class="steps">
+      <li class="steps__row" data-step="signed" data-at="done">
+        <i class="steps__tick" aria-hidden="true"></i>
+        <span class="steps__copy"><span class="steps__name" id="setupSigned">Signed in</span></span>
+      </li>
+      <li class="steps__row" data-step="servers" data-at="todo">
+        <i class="steps__tick" aria-hidden="true"></i>
+        <span class="steps__copy"><span class="steps__name" id="setupServers">Getting the server list</span></span>
+      </li>
+      <li class="steps__row" data-step="pinning" data-at="todo">
+        <i class="steps__tick" aria-hidden="true"></i>
+        <span class="steps__copy">
+          <span class="steps__name">Pinning each server to its real address</span>
+          <span class="steps__detail mono" id="setupDetail"></span>
+          <span class="steps__bar" aria-hidden="true"><i id="setupBar"></i></span>
+        </span>
+      </li>
+    </ol>
+    <p class="note note--bad" id="setupError" hidden></p>
+    <div class="choice__pair" id="setupAgain" hidden>
+      <button class="btn first__go" id="setupRetry" type="button">Try again</button>
+      <button class="btn btn--quiet" id="setupClose" type="button">Close</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- The X, the first time it is pressed. Closing the window and leaving
+     the app are different things and the button cannot be both, so it asks
+     once and then remembers - and after that the way out is the tray's own
+     Quit, which is where an app that lives in the tray keeps it. -->
+<dialog class="ask" id="askClose">
+  <h2 class="ask__title">Close the window, or quit Relay?</h2>
+  <p class="ask__say">In the tray Relay keeps running and the connection
+    stays up; its icon by the clock brings the window back. Quitting ends
+    the connection and closes the app.</p>
+  <label class="ask__keep">
+    <input type="checkbox" id="askRemember" checked>
+    <span>Do this every time. Changed under Settings → Window.</span>
+  </label>
+  <div class="ask__row">
+    <button class="btn btn--quiet btn--auto" id="askQuit" type="button">Quit Relay</button>
+    <button class="btn first__go btn--auto" id="askTray" type="button">Put in the tray</button>
+  </div>
+</dialog>
+
 <dialog class="sheet sheet--add" id="acctDlg">
   <header class="sheet__top">
     <span class="sheet__heading">
-      <span class="sheet__kicker">SIGN-IN</span>
-      <span class="sheet__title">Add an account</span>
+      <span class="sheet__kicker">ACCOUNTS</span>
+      <span class="sheet__title" id="acctDlgTitle">Add an account</span>
     </span>
     <button class="icon" id="acctDlgClose" type="button" aria-label="Close">
       <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
     </button>
   </header>
-  <!-- One shape for both providers. The switch on top changes what it asks
-       for - a service credential or a login - and nothing else, because
-       that is genuinely the only difference between them. -->
-  <div class="acct__new" id="acctNew">
-  <div class="pair" id="acctWhich" role="tablist">
-    <button class="pair__opt" type="button" data-provider="surfshark"
-            role="tab" aria-selected="true">Surfshark</button>
-    <button class="pair__opt" type="button" data-provider="windscribe"
-            role="tab" aria-selected="false">Windscribe</button>
-    <i class="pair__slide" aria-hidden="true"></i>
+  <!-- Its own page per provider: opened from that provider's card, for that
+       provider, with nothing to switch. What it asks for - a service
+       credential or a login - is the only difference between them. One
+       account per provider. -->
+  <div class="acct__new addacct" id="acctNew">
+  <!-- The chosen provider, large, and which login it wants. -->
+  <div class="addacct__hero" id="acctHero" data-provider="surfshark">
+    <span class="addacct__badge">
+      <svg class="addacct__mark" aria-hidden="true"><use id="acctHeroMark" href="#i-ss"/></svg>
+    </span>
+    <span class="addacct__copy">
+      <b class="addacct__name" id="acctHeroName">Connect Surfshark</b>
+      <span class="addacct__say" id="acctNewSay">The service login from Surfshark's
+        manual-setup page, not your email.</span>
+    </span>
   </div>
 
+  <!-- This provider has its account already: nothing to add until it is
+       removed. -->
+  <p class="addacct__full" id="acctFull" hidden>Each provider takes one account. Remove
+    this one's in Accounts to add a different one.</p>
+
+  <div class="addacct__form" id="acctForm">
   <label class="field">
-    <span class="field__cap" id="acctUserCap">Username</span>
-    <input class="field__in mono" id="acctUser" type="text" placeholder="not set"
+    <span class="field__cap" id="acctUserCap">Service username</span>
+    <input class="field__in mono" id="acctUser" type="text" placeholder="from the manual-setup page"
            autocomplete="off" autocapitalize="off" spellcheck="false">
   </label>
   <label class="field">
     <span class="field__cap">Password</span>
     <span class="field__pair">
-      <input class="field__in mono" id="acctPass" type="password" placeholder="not set"
+      <input class="field__in mono" id="acctPass" type="password" placeholder="password"
              autocomplete="off" spellcheck="false">
       <button class="field__peek" id="acctPeek" type="button"
               aria-pressed="false" aria-label="Show the password">
@@ -1143,21 +1510,25 @@
   </label>
   <label class="field" id="acctTwoWrap" hidden>
     <span class="field__cap">Two-factor code <span class="field__hint">optional</span></span>
-    <input class="field__in mono" id="acctTwo" type="text" placeholder="only if your account uses one"
+    <input class="field__in mono" id="acctTwo" type="text" placeholder="only if it is on"
            autocomplete="off" spellcheck="false" inputmode="numeric">
   </label>
   <label class="field">
-    <span class="field__cap">Call it <span class="field__hint">optional</span></span>
+    <span class="field__cap">Name <span class="field__hint">optional</span></span>
     <input class="field__in" id="acctLabel" type="text" placeholder="the username, if you leave this"
            autocomplete="off" spellcheck="false">
   </label>
 
-  <div class="pane__row">
-    <button class="btn btn--quiet btn--auto" id="acctSave" type="button">Save</button>
-    <button class="btn btn--quiet btn--auto" id="acctCancel" type="button">Cancel</button>
-    <p class="note" id="acctNewSaid"></p>
+  <p class="addacct__safe">
+    <svg class="ico ico--sm" aria-hidden="true"><use href="#i-key"/></svg>
+    <span>Kept on this computer. Sent only to <span id="acctSafeTo">Surfshark</span>.</span>
+  </p>
+
+  <button class="btn addacct__go" id="acctSave" type="button">Save account</button>
+  <button class="addacct__cancel" id="acctCancel" type="button">Cancel</button>
+  <p class="note" id="acctNewSaid"></p>
   </div>
-      </div>
+  </div>
 </dialog>
 
 <dialog class="sheet sheet--captcha" id="wsCapDlg">

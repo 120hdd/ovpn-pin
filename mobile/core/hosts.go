@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"io"
 	"sort"
 	"sync"
 	"time"
@@ -131,8 +132,24 @@ func (h *Hosts) rename(addr, label string) {
 	}
 }
 
-// closed records a connection ending, with what it carried.
-func (h *Hosts) closed(row *hostRow, up, down int64) {
+// moved adds bytes to a row while its connection is still carrying them.
+//
+// Counted as they pass, not when the connection ends. Adding at close was
+// how a 50 MB download read as 1 MB: one long download is one connection,
+// and its bytes reached the meter only when it closed - and an app keeps
+// that connection open long after the file is done.
+func (h *Hosts) moved(row *hostRow, up, down int64) {
+	if h == nil || row == nil {
+		return
+	}
+	h.mu.Lock()
+	row.Up += up
+	row.Down += down
+	h.mu.Unlock()
+}
+
+// closed records a connection ending. What it carried is already counted.
+func (h *Hosts) closed(row *hostRow) {
 	if h == nil || row == nil {
 		return
 	}
@@ -141,9 +158,29 @@ func (h *Hosts) closed(row *hostRow, up, down int64) {
 	if row.Live > 0 {
 		row.Live--
 	}
-	row.Up += up
-	row.Down += down
 	row.Last = float64(time.Now().UnixNano()) / 1e9
+}
+
+// counted is a writer that adds what it writes to a row as it goes. One
+// lock per chunk io.Copy hands it - 32 KB at a time, nothing next to the
+// cost of the write itself.
+type counted struct {
+	w    io.Writer
+	h    *Hosts
+	row  *hostRow
+	down bool
+}
+
+func (c counted) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	if n > 0 {
+		if c.down {
+			c.h.moved(c.row, 0, int64(n))
+		} else {
+			c.h.moved(c.row, int64(n), 0)
+		}
+	}
+	return n, err
 }
 
 // evictOldest drops the least recently seen row. Called with the lock held.

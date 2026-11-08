@@ -3,8 +3,11 @@ package core
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +15,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -77,6 +81,15 @@ type TunnelServer struct {
 	Password string   // the CONNECT credential, sent as relay:<this>
 	Edges    []string // Cloudflare addresses to dial, quickest first
 
+	// Pin is the SHA-256 of the certificate a server reached by IP address
+	// must serve, in hex. Such a server has no name for a CA to vouch for,
+	// so its installer makes its own certificate and the app trusts that
+	// one exactly. Empty means not yet known: the first answer is taken and
+	// can be read back from SeenPin, to be kept - SSH's first-connect rule.
+	Pin string
+
+	seenPin atomic.Value // string: the certificate the server last showed
+
 	// Session is the multiplexed session, held between CONNECTs. Nil until
 	// the first one, and dropped whenever it breaks.
 	mu   sync.Mutex
@@ -136,7 +149,7 @@ func (t *TunnelServer) dialOne(ctx context.Context, addr string, timeout time.Du
 	dialer := websocket.Dialer{
 		HandshakeTimeout: timeout,
 		NetDial:          func(string, string) (net.Conn, error) { return raw, nil },
-		TLSClientConfig:  &tls.Config{ServerName: t.Domain},
+		TLSClientConfig:  t.tlsConfig(),
 	}
 
 	u := url.URL{Scheme: "wss", Host: t.Domain, Path: t.mode.path()}
@@ -154,6 +167,53 @@ func (t *TunnelServer) dialOne(ctx context.Context, addr string, timeout time.Du
 	}
 	resp.Body.Close()
 	return &wsConn{Conn: ws}, nil
+}
+
+// ErrPinChanged is a server reached by address showing a certificate other
+// than the one first seen there. Either it was reinstalled - and the pin
+// has to be cleared by hand - or something between here and it is not it.
+var ErrPinChanged = errors.New("the server's certificate is not the one first seen there")
+
+// IsAddress says whether the server is reached by IP rather than by name.
+func (t *TunnelServer) IsAddress() bool { return net.ParseIP(t.Domain) != nil }
+
+// SeenPin is the SHA-256 of the certificate the server last showed, in hex.
+func (t *TunnelServer) SeenPin() string {
+	s, _ := t.seenPin.Load().(string)
+	return s
+}
+
+// tlsConfig is a CA's word for a named server, and the pin for an address.
+func (t *TunnelServer) tlsConfig() *tls.Config {
+	if !t.IsAddress() {
+		return &tls.Config{ServerName: t.Domain}
+	}
+	return PinnedTLS(t.Pin, func(seen string) { t.seenPin.Store(seen) })
+}
+
+// PinnedTLS trusts exactly one certificate: the one whose SHA-256 is pin,
+// or, with no pin yet, whatever is shown first - handed to seen either way.
+// What a self-signed server by address can be checked against.
+func PinnedTLS(pin string, seen func(string)) *tls.Config {
+	return &tls.Config{
+		// Not what it sounds like: the chain is not a CA's, so Go's own
+		// check would refuse it - and the pin below is the check instead.
+		InsecureSkipVerify: true,
+		VerifyPeerCertificate: func(raw [][]byte, _ [][]*x509.Certificate) error {
+			if len(raw) == 0 {
+				return errors.New("the server showed no certificate")
+			}
+			sum := sha256.Sum256(raw[0])
+			got := hex.EncodeToString(sum[:])
+			if seen != nil {
+				seen(got)
+			}
+			if pin != "" && !strings.EqualFold(pin, got) {
+				return ErrPinChanged
+			}
+			return nil
+		},
+	}
 }
 
 // session returns the live multiplexed session, opening one if there is none.
@@ -270,7 +330,7 @@ func (t *TunnelServer) connect(conn net.Conn, target string) ([]byte, error) {
 	case code == "407":
 		return nil, errors.New("the server refused the tunnel password")
 	case !strings.HasPrefix(code, "2"):
-		return nil, fmt.Errorf("CONNECT refused: %s", strings.TrimSpace(line))
+		return nil, fmt.Errorf("%w: %s", ErrTargetRefused, strings.TrimSpace(line))
 	}
 
 	// Anything bufio read ahead belongs to the tunnel and has to go back.

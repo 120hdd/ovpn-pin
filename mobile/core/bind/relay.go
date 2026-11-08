@@ -16,6 +16,7 @@ package relay
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,6 +38,13 @@ type Result struct {
 	Name   string
 	Path   string
 	TookMs int
+
+	// Which config won, and whose it is. Both are needed after the race
+	// rather than during it: the tunnel has to be opened with the same
+	// provider's credential the probe used, and a folder holding two
+	// providers is the ordinary case.
+	File     string
+	Provider string
 }
 
 // Client holds the candidates and the credentials for one run.
@@ -44,24 +52,62 @@ type Result struct {
 // Built up by calling Add rather than handed a list, because a slice of
 // structs is exactly what gomobile cannot carry across.
 type Client struct {
-	mu       sync.Mutex
-	servers  []core.Server
-	user     string
-	password string
-	cancel   context.CancelFunc
-	tunnel   *core.Tunnel
-	cat      *core.Catalogue
+	mu      sync.Mutex
+	servers []core.Server
+	cancel  context.CancelFunc
+	tunnel  *core.Tunnel
+	cat     *core.Catalogue
+
+	// One credential per provider. A Windscribe exit asked with a Surfshark
+	// credential is refused, and a refusal reads on screen as "this exit is
+	// blocked here" - which is the wrong thing to have learned.
+	logins core.Logins
 
 	// The multiplexed session, when the way out is the user's own server.
 	// Held apart from the tunnel because it outlives a single connection and
 	// has to be closed by hand.
 	server *core.TunnelServer
+
+	// Exits given up on while connected, by address. Kept out of the next
+	// race so that replacing an exit that stopped carrying does not pick the
+	// same one again because it still answers the race's quick question.
+	avoid map[string]bool
 }
 
 var errTunnelUp = errors.New("a tunnel is already up - stop it before starting another")
 
 func NewClient(user, password string) *Client {
-	return &Client{user: user, password: password}
+	c := &Client{logins: core.Logins{}}
+	if user != "" || password != "" {
+		c.logins["surfshark"] = core.Login{User: user, Password: password}
+	}
+	return c
+}
+
+// SetCredentials hands over one provider's sign-in.
+//
+// Called once per provider that has one, before anything is raced. Two
+// providers is the ordinary case here and they are not one account, which is
+// the whole reason this is not the pair NewClient takes.
+func (c *Client) SetCredentials(provider, user, password string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.logins == nil {
+		c.logins = core.Logins{}
+	}
+	if user == "" || password == "" {
+		delete(c.logins, provider)
+		return
+	}
+	c.logins[provider] = core.Login{User: user, Password: password}
+}
+
+// login is one provider's credential, or the empty one.
+func (c *Client) login(provider string) core.Login {
+	if provider == "" {
+		provider = "surfshark"
+	}
+	return c.logins[provider]
 }
 
 // Add offers one pinned exit. The name is what its certificate has to serve;
@@ -97,6 +143,12 @@ func (c *Client) ScanFolder(folder string) error {
 	if err != nil {
 		return err
 	}
+	// What was measured and what was published, read here rather than by the
+	// caller: a catalogue without them can only be alphabetised, and every
+	// caller wanted them. Both are empty on a phone that has never tested or
+	// fetched anything, which is a state the list already draws.
+	cat.Attach(core.LoadReach(), core.LoadWindscribeMeta())
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.cat = cat
@@ -120,8 +172,13 @@ func (c *Client) CountriesJSON() string {
 	return cat.CountriesJSON()
 }
 
-// RaceIn is Race narrowed to one country. "auto" and "" mean all of them,
-// which is what the window's own default sends.
+// RaceIn is Race narrowed to one row of the list. "auto" and "" mean all of
+// them, which is what the window's own default sends.
+//
+// Every row the picker offers can arrive here, not only a country: a city
+// (au/syd), a provider (fr:windscribe) and a single exit (file:x.ovpn) are
+// all picks, and handing those to In - which only knows country codes -
+// matched nothing and came back no-servers for an exit plainly on screen.
 func (c *Client) RaceIn(country string, timeoutMs int, width int, p Progress) (*Result, error) {
 	c.mu.Lock()
 	cat := c.cat
@@ -129,7 +186,11 @@ func (c *Client) RaceIn(country string, timeoutMs int, width int, p Progress) (*
 	if cat == nil {
 		return nil, errors.New("nothing has been scanned yet")
 	}
-	return c.race(cat.In(country), timeoutMs, width, p)
+	pool := cat.In(country)
+	if strings.ContainsAny(country, ":/") {
+		pool = cat.Pool(country)
+	}
+	return c.race(pool, timeoutMs, width, p)
 }
 
 // Count is how many candidates are loaded.
@@ -160,7 +221,25 @@ func (c *Client) Race(timeoutMs int, width int, p Progress) (*Result, error) {
 
 func (c *Client) race(servers []core.Server, timeoutMs int, width int, p Progress) (*Result, error) {
 	c.mu.Lock()
-	user, password := c.user, c.password
+	logins := core.Logins{}
+	for k, v := range c.logins {
+		logins[k] = v
+	}
+	// Without the exits given up on - unless that leaves nothing, which is a
+	// pick of one exit, or a city of two that both went. Asking the one that
+	// stopped again is a better answer than "no servers" about a list that is
+	// plainly on screen, and it may have come back.
+	if len(c.avoid) > 0 {
+		var kept []core.Server
+		for _, s := range servers {
+			if !c.avoid[s.Addr] {
+				kept = append(kept, s)
+			}
+		}
+		if len(kept) > 0 {
+			servers = kept
+		}
+	}
 	c.mu.Unlock()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -174,16 +253,18 @@ func (c *Client) race(servers []core.Server, timeoutMs int, width int, p Progres
 		progress = p.OnProgress
 	}
 
-	w, err := core.Race(ctx, servers, user, password,
+	w, err := core.Race(ctx, servers, logins,
 		time.Duration(timeoutMs)*time.Millisecond, width, progress)
 	if err != nil {
 		return nil, err
 	}
 	return &Result{
-		Addr:   w.Server.Addr,
-		Name:   w.Server.Name,
-		Path:   w.Server.Path,
-		TookMs: int(w.Took.Milliseconds()),
+		Addr:     w.Server.Addr,
+		Name:     w.Server.Name,
+		Path:     w.Server.Path,
+		TookMs:   int(w.Took.Milliseconds()),
+		File:     w.Server.File,
+		Provider: w.Server.Provider,
 	}, nil
 }
 
@@ -218,9 +299,27 @@ func (c *Client) Stop() {
 
 // Ask is one exit on its own: whether it takes the credentials, in
 // milliseconds. What a "test this server" row calls.
-func (c *Client) Ask(addr, name string, timeoutMs int) (int, error) {
-	took, err := core.Ask(core.NewExit(addr, name, c.user, c.password),
-		time.Duration(timeoutMs)*time.Millisecond)
+//
+// By filename rather than by address, because the filename is what says whose
+// exit it is - and asking a Windscribe exit the Surfshark question gets a 200
+// from a proxy that will forward nothing.
+func (c *Client) Ask(file string, timeoutMs int) (int, error) {
+	c.mu.Lock()
+	cat := c.cat
+	c.mu.Unlock()
+	if cat == nil {
+		return 0, errors.New("nothing has been scanned yet")
+	}
+	pool := cat.Pool("file:" + file)
+	if len(pool) == 0 {
+		return 0, errors.New(file + " is not in the folder")
+	}
+	s := pool[0]
+	login, ok := c.logins.For(s)
+	if !ok {
+		return 0, errors.New("no credentials for " + s.Provider)
+	}
+	took, err := core.AskExit(s, login, time.Duration(timeoutMs)*time.Millisecond)
 	if err != nil {
 		return 0, err
 	}
@@ -319,17 +418,27 @@ func SetProtector(p Protector) {
 // than taking a Result, because a Result that came back from a previous run
 // and an exit that is still up are two different things and only the caller
 // knows which it has.
-func (c *Client) StartTunnel(fd int, mtu int, addr, name string) error {
+func (c *Client) StartTunnel(fd int, mtu int, addr, name, provider string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.tunnel != nil {
 		return errTunnelUp
 	}
-	t, err := core.StartTunnel(fd, mtu, core.NewExit(addr, name, c.user, c.password))
+	// The winner's own provider, carried back from the race. Opening the
+	// tunnel with the other one's credential is a connection that races
+	// successfully and then carries nothing.
+	login := c.login(provider)
+	exit := core.NewExit(addr, name, login.User, login.Password)
+	t, err := core.StartTunnel(fd, mtu, exit)
 	if err != nil {
 		return err
 	}
 	c.tunnel = t
+	// So that anything this app fetches for itself - a provider server list,
+	// a sign-in - goes through the tunnel rather than around it. It would
+	// otherwise go around: the app excludes itself from its own VPN, which is
+	// right for the socket that dials the exit and wrong for everything else.
+	core.SetLive(exit)
 	return nil
 }
 
@@ -351,8 +460,7 @@ func (c *Client) StartServerTunnel(fd int, mtu int, cfg *ServerConfig) error {
 		return errTunnelUp
 	}
 
-	srv := core.NewTunnelServer(cfg.Domain, cfg.Password, cfg.edges(),
-		core.TunnelMode(cfg.Mode))
+	srv := cfg.server()
 	t, err := core.StartTunnel(fd, mtu, srv)
 	if err != nil {
 		srv.Close()
@@ -360,6 +468,7 @@ func (c *Client) StartServerTunnel(fd int, mtu int, cfg *ServerConfig) error {
 	}
 	c.tunnel = t
 	c.server = srv
+	core.SetLive(srv)
 	return nil
 }
 
@@ -368,6 +477,10 @@ func (c *Client) StopTunnel() error {
 	t, srv := c.tunnel, c.server
 	c.tunnel, c.server = nil, nil
 	c.mu.Unlock()
+
+	// Before either is closed, so nothing starts a fetch through a way out
+	// that is halfway shut.
+	core.SetLive(nil)
 
 	// The session first, then the stack. A smux session left open holds a
 	// websocket open, and a websocket left open holds the phone's radio awake
@@ -379,6 +492,102 @@ func (c *Client) StopTunnel() error {
 		return nil
 	}
 	return t.Close()
+}
+
+// Health is how the way out has been answering, read from the traffic it
+// carried rather than from anything sent to find out.
+type Health struct {
+	// Connections in a row the way itself failed - no TCP, no TLS, no answer
+	// to CONNECT. A refusal is an answer and resets it.
+	Fails int
+	// How long since the way last answered anything, in milliseconds.
+	SinceOKMs int
+}
+
+// Health is nil when no tunnel is up. Cheap enough to ask every few seconds:
+// two numbers, nothing on the wire.
+func (c *Client) Health() *Health {
+	c.mu.Lock()
+	t := c.tunnel
+	c.mu.Unlock()
+	if t == nil {
+		return nil
+	}
+	fails, since := t.Health()
+	return &Health{Fails: fails, SinceOKMs: int(since.Milliseconds())}
+}
+
+// Check is one real request through whatever is carrying, and how long it
+// took in milliseconds.
+//
+// The question the counts above cannot answer on their own: an idle phone
+// opens nothing, so nothing fails, and an exit that accepts CONNECT and then
+// forwards nothing passes every count. This goes all the way - CONNECT, TLS
+// inside it, an HTTP answer back - so a success means bytes came home.
+//
+// Asked of the way directly, not through the tun, and so not counted in
+// Health: a check that failed would otherwise be counted twice.
+func (c *Client) Check(timeoutMs int) (int, error) {
+	c.mu.Lock()
+	t := c.tunnel
+	c.mu.Unlock()
+	if t == nil {
+		return 0, errors.New("no tunnel is up")
+	}
+	start := time.Now()
+	if _, err := core.SeenAsThrough(t.Way(), time.Duration(timeoutMs)*time.Millisecond); err != nil {
+		return 0, err
+	}
+	return int(time.Since(start).Milliseconds()), nil
+}
+
+// Avoid keeps one exit out of every race this Client runs from now on. What
+// the phone calls on an exit that stopped carrying, before racing for its
+// replacement.
+func (c *Client) Avoid(addr string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.avoid == nil {
+		c.avoid = map[string]bool{}
+	}
+	c.avoid[addr] = true
+}
+
+// SwitchExit moves the running tunnel onto another exit, without taking the
+// interface down. Connections already open finish on the old one; everything
+// after goes through the new.
+//
+// Same arguments as StartTunnel, for the same reason: the caller has the
+// winner of a race, and that winner's own provider is the credential to use.
+func (c *Client) SwitchExit(addr, name, provider string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.tunnel == nil {
+		return errors.New("no tunnel is up")
+	}
+	login := c.login(provider)
+	exit := core.NewExit(addr, name, login.User, login.Password)
+	if err := c.tunnel.SetWay(exit); err != nil {
+		return err
+	}
+	core.SetLive(exit)
+	return nil
+}
+
+// ResetServer drops the session to the user's own server, so the next
+// connection dials a fresh one.
+//
+// What a stalled server path needs. A session whose websocket has gone quiet
+// is not closed until smux's keepalive gives up on it, and until then every
+// stream is opened on a corpse. Closing it here costs one dial, which the
+// next connection pays.
+func (c *Client) ResetServer() {
+	c.mu.Lock()
+	srv := c.server
+	c.mu.Unlock()
+	if srv != nil {
+		srv.Close()
+	}
 }
 
 // TunnelExit is the address traffic is leaving by, or "" when nothing is up.
@@ -429,4 +638,4 @@ func WhereAmIJSON(timeoutMs int) string {
 
 // Version is here so a phone build can prove which core it is carrying
 // without a debugger.
-func Version() string { return "relay-core 0.1" }
+func Version() string { return "relay-core 0.2" }

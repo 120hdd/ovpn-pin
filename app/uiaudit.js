@@ -111,6 +111,16 @@ window.__audit = (function () {
     return null;
   }
 
+  /* Uppercase keys, and the lookup has to uppercase what it is given.
+   *
+   * tagName is uppercased only for HTML elements. An SVG element keeps the
+   * case it was written in, so `svg`, `symbol` and `defs` - the three
+   * entries here that are SVG's - never matched, and the walk went inside
+   * every icon in the window. Mostly that is harmless noise, until it
+   * reaches <title>: an svg <title> is the accessible name, it is never
+   * drawn, and it has text. Which is exactly the shape of the collapsed
+   * check, so every icon carrying a tooltip was reported as a box with
+   * something to say and no size to say it in. */
   var SKIP_TAGS = {SCRIPT: 1, STYLE: 1, SVG: 1, SYMBOL: 1, DEFS: 1,
                    CANVAS: 1, TEMPLATE: 1, BR: 1, HR: 1};
 
@@ -143,7 +153,7 @@ window.__audit = (function () {
     (function walk(el) {
       for (var i = 0; i < el.children.length; i++) {
         var c = el.children[i];
-        if (SKIP_TAGS[c.tagName]) continue;
+        if (SKIP_TAGS[c.tagName.toUpperCase()]) continue;
         if (c.hidden || c.getAttribute('aria-hidden') === 'true') continue;
         if (c.classList.contains('sr')) continue;
 

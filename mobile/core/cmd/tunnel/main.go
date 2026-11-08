@@ -29,10 +29,21 @@ func main() {
 	mode := flag.String("mode", "single", "single, multi or bulk")
 	scan := flag.Bool("scan", true, "measure the edges first")
 	timeout := flag.Duration("timeout", 15*time.Second, "budget per step")
+	passwordFile := flag.String("passwordfile", "", "read the tunnel password from this file instead")
+	upload := flag.Int("upload", 0, "then POST this many bytes through the tunnel, -runs times, and time it")
+	runs := flag.Int("runs", 3, "how many uploads")
 	flag.Parse()
 
+	if *passwordFile != "" {
+		b, err := os.ReadFile(*passwordFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		*password = strings.TrimSpace(string(b))
+	}
 	if *domain == "" || *password == "" {
-		fmt.Fprintln(os.Stderr, "need -domain and -password")
+		fmt.Fprintln(os.Stderr, "need -domain and -password (or -passwordfile)")
 		os.Exit(2)
 	}
 
@@ -101,6 +112,31 @@ func main() {
 		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
 		if ok && (k == "ip" || k == "loc" || k == "colo") {
 			fmt.Printf("  %-8s %s\n", k, v)
+		}
+	}
+
+	// Upload, which is what a shaped line takes away first and what this way
+	// out is meant to give back. A fresh connection each time, as an app
+	// sending a file would make one, and timed from before the dial.
+	if *upload > 0 {
+		payload := make([]byte, *upload)
+		client.Transport.(*http.Transport).DisableKeepAlives = true
+		// The trace endpoint answers a POST with a redirect; the upload is
+		// done by then, and following it would time a second request.
+		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		client.Timeout = 40 * time.Second
+		for i := 1; i <= *runs; i++ {
+			start := time.Now()
+			resp, err := client.Post("https://1.1.1.1/cdn-cgi/trace", "application/octet-stream",
+				strings.NewReader(string(payload)))
+			took := time.Since(start)
+			if err != nil {
+				fmt.Printf("  upload %d failed after %.1fs: %v\n", i, took.Seconds(), err)
+				continue
+			}
+			io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+			resp.Body.Close()
+			fmt.Printf("  upload %d %7.1f KB/s  %.1fs\n", i, float64(*upload)/1024/took.Seconds(), took.Seconds())
 		}
 	}
 }

@@ -84,7 +84,8 @@ def _connected(p):
          "document.getElementById('hero').dataset.state = 'on';"
          "document.getElementById('swap').dataset.state = 'on';"
          "document.getElementById('card').dataset.state = 'on';"
-         "setStatus('CONNECTED', 'on', 'Frankfurt, Germany',"
+         "setStatus('CONNECTED', 'on', 'Frankfurt, Germany"
+         "<span class=\"status__clock mono\" id=\"statusClock\">1:02:33</span>',"
          "          '146.70.160.237:1443');"
          "document.getElementById('exitIp').textContent = '146.70.160.237';"
          "document.getElementById('exitPlace').textContent = 'Frankfurt, DE'")
@@ -201,6 +202,8 @@ def _shut_prefs(p):
     p.do("document.getElementById('prefs').close()")
 
 
+
+
 def _prefs_working(p):
     """The settings sheet with something in flight.
 
@@ -234,6 +237,15 @@ def _shut_prefs_working(p):
          "if (state.tunnel) paintTunnel(state.tunnel);"
          "showScreen(null);"
          "document.getElementById('prefs').close()")
+
+
+def _first(dlg):
+    def enter(p):
+        p.do(f"document.getElementById('{dlg}').showModal()", 2.6)
+
+    def leave(p):
+        p.do(f"document.getElementById('{dlg}').close()")
+    return enter, leave
 
 
 def _log(p):
@@ -347,6 +359,20 @@ SCENES = [
     ('prefs', _prefs, _shut_prefs),
     ('prefs-working', _prefs_working, _shut_prefs_working),
     ('log', _log, _shut_log),
+    ('ask-close', lambda p: p.do("askClose()", 0.6),
+     lambda p: p.do("document.getElementById('askClose').close()")),
+    # The light theme is the one that turns colours over rather than
+    # tinting them, so it is the one that can lose a word against its page.
+    ('main-white', lambda p: p.do("applyTheme('white'); window.pywebview.api.setTheme('white')", 0.6),
+     lambda p: p.do("applyTheme('midnight'); window.pywebview.api.setTheme('midnight')", 0.4)),
+    ('main-on-white', lambda p: (p.do("applyTheme('white'); window.pywebview.api.setTheme('white')", 0.4), _connected(p)),
+     lambda p: (_idle(p), p.do("applyTheme('midnight'); window.pywebview.api.setTheme('midnight')", 0.4))),
+    ('prefs-white', lambda p: (p.do("applyTheme('white'); window.pywebview.api.setTheme('white')", 0.4), _prefs(p)),
+     lambda p: (_shut_prefs(p), p.do("applyTheme('midnight'); window.pywebview.api.setTheme('midnight')", 0.4))),
+    ('intro', lambda p: p.do("runIntro()", 2.6),
+     lambda p: p.do("document.getElementById('introDlg').close()")),
+    ('welcome', *_first('welcomeDlg')),
+    ('setup', *_first('setupDlg')),
     ('source', _source, _shut_source),
     ('dropped', _dropped, _shut_dropped),
 ]
@@ -468,9 +494,12 @@ def run(window, only=None, verbose=False):
     time.sleep(2.5)
     try:
         import ctypes
-        handle = ctypes.windll.user32.FindWindowW(None, 'Relay')
-        ctypes.windll.user32.SetForegroundWindow(handle)
-        time.sleep(0.4)
+        import vdesk
+        # Not on another desktop: forward there takes the person with it.
+        if not vdesk.wanted():
+            handle = ctypes.windll.user32.FindWindowW(None, 'Relay')
+            ctypes.windll.user32.SetForegroundWindow(handle)
+            time.sleep(0.4)
     except Exception:
         pass
 
@@ -529,6 +558,14 @@ def run(window, only=None, verbose=False):
         _out(f"  {'self-test':<22} "
              + (f"all {len(WANTED)} kinds of fault caught"
                 if ok else f"BROKEN - did not catch: {', '.join(missed)}"))
+
+        # A copy with no account opens Settings by itself at boot. Left open,
+        # every main-screen state below was a photograph of the sheet, and
+        # its audit was of the sheet - clean, and about the wrong thing.
+        # Twice: closing the intro lets boot go on, and boot then opens the
+        # welcome on a copy with nothing set up.
+        for _ in range(2):
+            p.do("for (const d of document.querySelectorAll('dialog[open]')) d.close()", 1.0)
 
         for name, enter, leave in SCENES:
             visit(name, enter, leave)

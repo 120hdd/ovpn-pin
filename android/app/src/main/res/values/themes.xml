@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        The window behind Compose: the app's own background from the first
+        frame, so there is no white flash before the first composition.
+    -->
+    <style name="Theme.Relay" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/relay_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@color/relay_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <color name="relay_bg">#FF09090E</color>
+</resources>

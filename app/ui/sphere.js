@@ -478,15 +478,18 @@ void main() {
         noise: want.noise, density: want.density,
       };
       new MutationObserver(() => { want = targets(); })
-        .observe(hero, { attributes: true, attributeFilter: ['data-state'] });
+        .observe(hero, { attributes: true, attributeFilter: ['data-state', 'data-scheme'] });
 
       const pal = { a: [0, 0, 0], b: [0, 0, 0], c: [0, 0, 0], d: [0, 0, 0] };
 
       function resize() {
         const dpr = Math.min(devicePixelRatio || 1, 2);
-        const box = canvas.getBoundingClientRect();
-        if (!box.width || !box.height) return false;
-        const w = Math.round(box.width * dpr), h = Math.round(box.height * dpr);
+        /* the laid-out size, not the drawn one: the stage shrinks by a
+           transform when the meter opens, and following it would reallocate
+           the buffers on every frame of the shrink */
+        const bw = canvas.clientWidth, bh = canvas.clientHeight;
+        if (!bw || !bh) return false;
+        const w = Math.round(bw * dpr), h = Math.round(bh * dpr);
         if (canvas.width !== w || canvas.height !== h) {
           canvas.width = w; canvas.height = h;
           gl.viewport(0, 0, w, h);

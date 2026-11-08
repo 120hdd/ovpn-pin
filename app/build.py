@@ -371,6 +371,9 @@ def _safe_public_server(path):
 def version_string():
     """Product version used both in the PE metadata and by SignPath policy."""
     value = os.environ.get('RELAY_VERSION', '0.0.0-dev').strip()
+    # Release tags are desktop-v1.2.3; the app's own version is the 1.2.3.
+    if value.lower().startswith('desktop-'):
+        value = value[len('desktop-'):]
     return value[1:] if value.lower().startswith('v') else value
 
 
@@ -519,6 +522,11 @@ def main():
     for path in (DIST, WORK):
         shutil.rmtree(path, ignore_errors=True)
     version_file = write_version_file()
+    # The same version, as text the running app can read for its About
+    # screen - the EXE's own version resource is for Explorer, not for it.
+    version_txt = os.path.join(WORK, 'version.txt')
+    with open(version_txt, 'w', encoding='utf-8') as f:
+        f.write(version_string())
 
     sep = ';'          # PyInstaller's --add-data separator on Windows
     proxy_source = os.path.join(ROOT, 'core', 'ovpn-proxy.py')
@@ -537,7 +545,10 @@ def main():
         # The proxy lives in core/ in the repo and at the top of the bundle
         # once frozen; paths.py knows the difference.
         '--add-data', f'{proxy_source}{sep}.',
+        '--add-data', f'{version_txt}{sep}.',
         '--hidden-import', 'winproxy',
+        '--hidden-import', 'winwindow',
+        '--hidden-import', 'oneinstance',
         '--hidden-import', 'windscribe',
         '--hidden-import', 'engine',
         '--hidden-import', 'countries',

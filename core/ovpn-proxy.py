@@ -52,6 +52,7 @@ import collections
 import concurrent.futures as cf
 import difflib
 import glob
+import ipaddress
 import json
 import os
 import re
@@ -3144,6 +3145,10 @@ def tunnel_edges(state_dir, domain, rescan=False, quiet=False):
     common case - the one where nothing is wrong - to save them in the rare
     one, and the rare one is already asking somebody to wait.
     """
+    # A server reached by its address is not behind Cloudflare: there are no
+    # edges to find, and the address goes in as itself.
+    if is_address(domain):
+        return []
     if not rescan:
         cached = edge_cache_load(state_dir, domain)
         if cached:
@@ -3170,7 +3175,16 @@ def tunnel_edges(state_dir, domain, rescan=False, quiet=False):
     return found
 
 
-def tunnel_config_text(domain, password, edges=None):
+def is_address(host):
+    """Whether the server is named by an IPv4 address rather than a domain."""
+    try:
+        ipaddress.IPv4Address((host or '').strip())
+        return True
+    except ValueError:
+        return False
+
+
+def tunnel_config_text(domain, password, edges=None, ca_file=None):
     """The gost client's configuration, as gost wants it.
 
     Written rather than shipped: the domain and the password are the only
@@ -3206,6 +3220,12 @@ def tunnel_config_text(domain, password, edges=None):
                 f'              type: {dialer}\n')
             if edges:
                 nodes += f'              tls: {{serverName: {domain}}}\n'
+            elif ca_file:
+                # A server by address has its own certificate, kept the first
+                # time it was seen: that one is trusted, and nothing else.
+                ca = ca_file.replace('\\', '/')
+                nodes += (f'              tls: {{secure: true, serverName: {domain}, '
+                          f"caFile: '{ca}'}}\n")
             nodes += (
                 f'              metadata: {{path: {TUNNEL_PATHS[mode]}, '
                 + (f'host: {domain}, dial.timeout: 4s, ' if edges else '')

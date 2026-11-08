@@ -255,9 +255,18 @@ function Select-DohRoute {
         throw '-Proxy and -NoProxy ask for opposite things. Pass one of them.'
     }
 
+    # Named, and still probed once. A proxy can be listening and refuse every
+    # request - one that wants a password answers 407 to each - and without
+    # this that is a "could not resolve" per hostname and an empty folder,
+    # with the one useful sentence never said.
     if ($Explicit) {
         Write-Info "using the proxy you named: $Explicit"
-        return $Explicit
+        try {
+            if (@(Resolve-Doh 'example.com' $Explicit).Count -gt 0) { return $Explicit }
+            $why = 'it answered, but with no addresses'
+        }
+        catch { $why = $_.Exception.GetBaseException().Message }
+        throw "DoH did not answer through $Explicit ($why). Nothing was resolved. Check that proxy - one that asks for a password will not do - or resolve directly with -NoProxy."
     }
 
     # Direct, and told so. Still probed once - not to decide anything, but so
