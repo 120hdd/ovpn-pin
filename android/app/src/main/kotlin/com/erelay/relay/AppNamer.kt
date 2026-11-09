@@ -25,8 +25,14 @@ import java.net.InetSocketAddress
  *
  *   uid -> label   a PackageManager lookup is a binder call and a disk read
  *   nothing else   the five-tuple is never cached; it is different every time
+ *
+ * The same lookup, stopped at the number, is [relay.Owner]: split tunnelling
+ * by app on a tun that admits every app, where the core asks whose each
+ * connection is before deciding whether it goes through the exit. That is
+ * the one question the uid answers better than the label - two apps can share
+ * a name, and a uid is what the list of apps was turned into.
  */
-class AppNamer(private val ctx: Context) : relay.Namer {
+class AppNamer(private val ctx: Context) : relay.Namer, relay.Owner {
 
     private val cm by lazy {
         ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -34,10 +40,33 @@ class AppNamer(private val ctx: Context) : relay.Namer {
     private val labels = HashMap<Int, String>()
 
     override fun name(protocol: Long, source: String?, destination: String?): String {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return ""
-        val src = parse(source) ?: return ""
-        val dst = parse(destination) ?: return ""
-        val manager = cm ?: return ""
+        val uid = ownerOf(protocol, source, destination)
+        if (uid < 0) return ""
+
+        synchronized(labels) { labels[uid] }?.let { return it }
+
+        val label = labelFor(uid)
+        synchronized(labels) { labels[uid] = label }
+        return label
+    }
+
+    /** Whose connection this is, as a uid; -1 when the platform will not say. */
+    override fun uid(protocol: Long, source: String?, destination: String?): Long =
+        ownerOf(protocol, source, destination).toLong()
+
+    /**
+     * The uid that owns a five-tuple, or -1.
+     *
+     * Android 10 and later only. Below that there is no way to ask, and -1 is
+     * what the core treats as "not one of the listed apps" - which is why the
+     * service never relies on this below Android 10, and admits the listed
+     * apps to the interface by name instead.
+     */
+    private fun ownerOf(protocol: Long, source: String?, destination: String?): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return -1
+        val src = parse(source) ?: return -1
+        val dst = parse(destination) ?: return -1
+        val manager = cm ?: return -1
 
         val uid = try {
             manager.getConnectionOwnerUid(protocol.toInt(), src, dst)
@@ -45,15 +74,9 @@ class AppNamer(private val ctx: Context) : relay.Namer {
             // A SecurityException here is the platform declining, not a bug.
             // It happens for sockets that are not ours to ask about, and the
             // answer to that is the same as not knowing.
-            return ""
+            return -1
         }
-        if (uid == -1 || uid == android.os.Process.INVALID_UID) return ""
-
-        synchronized(labels) { labels[uid] }?.let { return it }
-
-        val label = labelFor(uid)
-        synchronized(labels) { labels[uid] = label }
-        return label
+        return if (uid == android.os.Process.INVALID_UID) -1 else uid
     }
 
     /**

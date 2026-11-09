@@ -9,177 +9,177 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.erelay.relay.R
 import com.erelay.relay.data.Mode
 
-/**
- * The surfaces a theme changes. Everything else - text, the state colours,
- * jade - stays the same in all of them, so a status reads the same however
- * dark the page behind it is.
+/*
+ * "Instrument": three themes, no brand accent. The only colour that means
+ * anything is the connection state (off / work / ok / fail), and it is the
+ * accent. The tokens are .claude/DESIGN.md's table, name for name.
  */
+
+/** The three themes. Every older theme name maps to [GRAPHITE], except white / light. */
 enum class Palette(
     val key: String,
     val label: String,
     val bg: Color,
     val surface: Color,
-    val control: Color,
-    val controlHover: Color,
-    val controlActive: Color,
-    /** The faint violet light at the top of every page. */
-    val glow: Color,
-    /** A light page: dark text, dark hairlines, deeper status colours. */
+    val surface2: Color,
+    val stroke: Color,
+    val strokeStrong: Color,
+    val text: Color,
+    val text2: Color,
+    val text3: Color,
+    val off: Color,
+    val work: Color,
+    val ok: Color,
+    val fail: Color,
     val light: Boolean = false,
 ) {
-    /** app.css's dark theme: near-black with violet in it. */
-    MIDNIGHT("midnight", "Midnight", Color(0xFF09090E), Color(0xFF17171F), Color(0xFF20212B),
-        Color(0xFF292B37), Color(0xFF313440), Color(0x2E483AC2)),
-    /** app.css's other dark set: neutral grey, no colour cast. */
-    GRAPHITE("graphite", "Graphite", Color(0xFF111113), Color(0xFF18191B), Color(0xFF212225),
-        Color(0xFF272A2D), Color(0xFF2E3135), Color(0x14FFFFFF)),
+    /** The default: dark, neutral. */
+    GRAPHITE("graphite", "Graphite",
+        bg = Color(0xFF121316), surface = Color(0xFF1A1B1F), surface2 = Color(0xFF24252A),
+        stroke = Color(0x14FFFFFF), strokeStrong = Color(0x29FFFFFF),
+        text = Color(0xFFECEDEF), text2 = Color(0xFFA3A6AE), text3 = Color(0xFF6E717A),
+        off = Color(0xFF8A8D96), work = Color(0xFFE8B24A), ok = Color(0xFF3FCF8E), fail = Color(0xFFF0646E)),
+
+    /** A light page. */
+    WHITE("white", "White",
+        bg = Color(0xFFF6F6F7), surface = Color(0xFFFFFFFF), surface2 = Color(0xFFECECEF),
+        stroke = Color(0x17000000), strokeStrong = Color(0x29000000),
+        text = Color(0xFF16171A), text2 = Color(0xFF555862), text3 = Color(0xFF8A8D96),
+        off = Color(0xFF6E717A), work = Color(0xFFB7791F), ok = Color(0xFF1F9D63), fail = Color(0xFFD1434F),
+        light = true),
+
     /** True black: the pixels of an OLED screen switched off. */
-    BLACK("black", "Black", Color(0xFF000000), Color(0xFF0E0E12), Color(0xFF18181F),
-        Color(0xFF202029), Color(0xFF2A2A34), Color(0x1A483AC2)),
-    /** Deep navy, a cold blue light at the top. */
-    OCEAN("ocean", "Ocean", Color(0xFF060B16), Color(0xFF0F1828), Color(0xFF172236),
-        Color(0xFF1E2B42), Color(0xFF26344E), Color(0x332A6FDB)),
-    /** Near-black green. */
-    FOREST("forest", "Forest", Color(0xFF060E0B), Color(0xFF0F1A16), Color(0xFF16241F),
-        Color(0xFF1D2D27), Color(0xFF25372F), Color(0x2E1F9D6B)),
-    /** Aubergine. */
-    PLUM("plum", "Plum", Color(0xFF0E0812), Color(0xFF1B1222), Color(0xFF261A2F),
-        Color(0xFF30213B), Color(0xFF3A2946), Color(0x38A23AC2)),
-    /** Warm, embers in a dark room. */
-    EMBER("ember", "Ember", Color(0xFF110A08), Color(0xFF1E1512), Color(0xFF2A1D18),
-        Color(0xFF34241E), Color(0xFF3F2C25), Color(0x33D9622B)),
-    /** Blue-grey, like slate in the rain. */
-    SLATE("slate", "Slate", Color(0xFF0C0F13), Color(0xFF161B21), Color(0xFF1F262E),
-        Color(0xFF27303A), Color(0xFF303A45), Color(0x24607D9B)),
-    /** Paper: an off-white page with white cards, for daylight. */
-    WHITE("white", "White", Color(0xFFF4F5F8), Color(0xFFFFFFFF), Color(0xFFECEEF2),
-        Color(0xFFE4E7EC), Color(0xFFDCE0E7), Color(0x266C5CE7), light = true);
+    BLACK("black", "Black",
+        bg = Color(0xFF000000), surface = Color(0xFF0D0D0F), surface2 = Color(0xFF18181B),
+        stroke = Color(0x17FFFFFF), strokeStrong = Color(0x2EFFFFFF),
+        text = Color(0xFFF2F2F3), text2 = Color(0xFFA3A6AE), text3 = Color(0xFF6E717A),
+        off = Color(0xFF8A8D96), work = Color(0xFFE8B24A), ok = Color(0xFF3FCF8E), fail = Color(0xFFF0646E));
 
     companion object {
-        fun of(key: String?) = entries.firstOrNull { it.key == key } ?: MIDNIGHT
+        fun of(key: String?) = when (key?.lowercase()) {
+            "white", "light" -> WHITE
+            "black" -> BLACK
+            else -> GRAPHITE
+        }
     }
 }
 
 /**
- * The desktop's palette, `app/ui/app.css` in its dark theme, name for name.
- * A colour changed there should be findable here by searching for the word.
+ * The palette in use. It is Compose state: switching the theme repaints every
+ * screen that drew with it, with nothing passed down.
  *
- * The surfaces read [palette], which is Compose state: switching the theme
- * repaints every screen that drew with them, with nothing passed down.
+ * [mode] is the connection state, set once at the root ([com.erelay.relay.ui.Root]);
+ * [state] is its colour, the one accent the app has.
  */
 object Tone {
-    var palette by mutableStateOf(Palette.MIDNIGHT)
+    var palette by mutableStateOf(Palette.GRAPHITE)
 
-    /** Traffic-light orb colours rather than the desktop's. */
-    var signal by mutableStateOf(true)
+    /** What the tunnel is doing, for everything that colours itself by it. */
+    var mode by mutableStateOf(Mode.OFF)
+
+    val light get() = palette.light
 
     val bg get() = palette.bg
     val surface get() = palette.surface
-    val control get() = palette.control
-    val controlHover get() = palette.controlHover
-    val controlActive get() = palette.controlActive
-    val glow get() = palette.glow
-    val light get() = palette.light
+    val surface2 get() = palette.surface2
+    val stroke get() = palette.stroke
+    val strokeStrong get() = palette.strokeStrong
 
-    // Text, hairlines and the state colours turn over with the page. The
-    // dark set is app.css's; the light set keeps the same hues a step deeper,
-    // because mint and amber that glow on near-black wash out on white.
-    val divider get() = if (light) Color(0x17000000) else Color(0x17FFFFFF)
-    val border get() = if (light) Color(0x24000000) else Color(0x21FFFFFF)
+    val text get() = palette.text
+    val text2 get() = palette.text2
+    val text3 get() = palette.text3
 
-    val text get() = if (light) Color(0xFF16171D) else Color(0xFFF5F5F8)
-    val textMuted get() = if (light) Color(0xFF474B57) else Color(0xFFB9BAC6)
-    val textOff get() = if (light) Color(0xFF7A7F8E) else Color(0xFF777987)
+    val off get() = palette.off
+    val work get() = palette.work
+    val ok get() = palette.ok
+    val fail get() = palette.fail
 
-    val ok get() = if (light) Color(0xFF0C9C72) else Color(0xFF61EFBF)
-    val work get() = if (light) Color(0xFFB7791F) else Color(0xFFFFC761)
-    val fail get() = if (light) Color(0xFFD23B54) else Color(0xFFFF8F9B)
-    val failBg = Color(0x80651D2C)
-    val focus get() = if (light) Color(0xFF0C9C72) else Color(0xFF74E4C2)
-    val accent get() = if (light) Color(0xFF5B4FE0) else Color(0xFF8C82FF)
+    /** The state colour: the accent. */
+    val state get() = stateOf(mode)
+    fun stateOf(m: Mode): Color = when (m) {
+        Mode.OFF -> palette.off
+        Mode.BUSY -> palette.work
+        Mode.ON -> palette.ok
+        Mode.FAIL -> palette.fail
+    }
 
+    /** Text on a fill in the state colour. */
+    val ink get() = if (light) Color.White else Color(0xFF0B0C0E)
+
+    /** Focus rings stay text-coloured. */
+    val focus get() = palette.text
+    val failBg get() = palette.fail.copy(alpha = 0.16f)
     /** What a press lights a control with: white on a dark page, black on a light one. */
     val wash get() = if (light) Color.Black else Color.White
-
-    val jade2 = Color(0xFF4AE5C3)
-    val jadeDeep = Color(0xFF0B6B52)
-    val ink = Color(0xFF06281D)
-
-    val fluxDown get() = ok
-    val fluxUp get() = if (light) Color(0xFF6A5AE0) else Color(0xFF9C8CFF)
-
-    val surfshark = Color(0xFF3BC1C9)
-    val windscribe get() = ok
 }
 
-/** The orb's colours per state: `--blob-a/b/c`, `--blob-glow`, `--state-accent`. */
-data class StateTone(val a: Color, val b: Color, val c: Color, val glow: Color, val accent: Color)
-
-private fun glow(r: Int, g: Int, b: Int, a: Float) = Color(r, g, b, (a * 255).toInt())
+/** The line colour of the hologram globe for one state. */
+data class StateTone(val line: Color)
 
 /**
- * The look per state. Two sets: the traffic light (silver off, yellow
- * working, green on, red failed - read at a glance, across a room) and the desktop's own app.css
- * colours, lavender at rest. Which one is Look and feel's choice, read from
- * [Tone.signal] so a change repaints at once.
+ * The globe's line colour per state: the Kootaj hologram's own cyan while
+ * disconnected, then the state colour itself (amber working, green connected,
+ * red failed) so the globe says the same thing the status word does. On a
+ * light page the cyan is deepened so it reads as ink. Read from the current
+ * palette, so call it where a palette change should recompose.
  */
-fun toneOf(mode: Mode): StateTone = if (Tone.signal) when (mode) {
-    // Silver at rest: not connected is the ordinary state, not an alarm. Red
-    // is kept for a connection that failed, so it still means something.
-    Mode.OFF -> StateTone(Color(0xFFDDE1E8), Color(0xFF9AA1AE), Color(0xFF454B58),
-        glow(170, 178, 192, 0.30f), Color(0xFFB4BBC7))
-    Mode.BUSY -> StateTone(Color(0xFFFFE27A), Color(0xFFFFC24B), Color(0xFFB9791A),
-        glow(255, 200, 70, 0.42f), Color(0xFFFFD261))
-    Mode.ON -> StateTone(Color(0xFF71F1BD), Color(0xFF3DD4EE), Color(0xFF087E6A),
-        glow(48, 218, 171, 0.42f), Color(0xFF61EFBF))
-    Mode.FAIL -> StateTone(Color(0xFFFF4D7A), Color(0xFFC2185B), Color(0xFF4E0A26),
-        glow(220, 40, 90, 0.42f), Color(0xFFFF4D7A))
-} else when (mode) {
-    Mode.OFF -> StateTone(Color(0xFF9C8CFF), Color(0xFF4CE2D2), Color(0xFF483AC2),
-        glow(102, 90, 231, 0.48f), Color(0xFF8C82FF))
-    Mode.BUSY -> StateTone(Color(0xFFFFCB67), Color(0xFFFF778E), Color(0xFF9B4BDA),
-        glow(255, 156, 83, 0.42f), Color(0xFFFFC761))
-    Mode.ON -> StateTone(Color(0xFF71F1BD), Color(0xFF3DD4EE), Color(0xFF087E6A),
-        glow(48, 218, 171, 0.42f), Color(0xFF61EFBF))
-    Mode.FAIL -> StateTone(Color(0xFFFF8495), Color(0xFFB968E7), Color(0xFF8B2849),
-        glow(223, 70, 106, 0.36f), Color(0xFFFF8F9B))
-}
+fun toneOf(mode: Mode): StateTone = StateTone(
+    when (mode) {
+        Mode.OFF -> if (Tone.light) Color(0xFF0A8C94) else Color(0xFF19D3CB)
+        else -> Tone.stateOf(mode)
+    })
 
-/**
- * The orb's colours when it is not showing a connection at all - the intro,
- * the welcome, the setup. The desktop's own resting lavender and teal: red
- * would say "not connected" to somebody who has not been asked to connect.
- */
-fun restTone(): StateTone = StateTone(Color(0xFF9C8CFF), Color(0xFF4CE2D2), Color(0xFF483AC2),
-    glow(102, 90, 231, 0.48f), Color(0xFF8C82FF))
+/** The globe when it is not showing a connection at all - the welcome, the setup. */
+fun restTone(): StateTone = toneOf(Mode.OFF)
 
-/** Radii and timings, also the desktop's. */
+/** Radii, and the timings the motion spec names. */
 object Shape {
-    val card = 20.dp
+    /** Top corners of a bottom sheet. */
+    val sheet = 28.dp
+    /** A card: rare. */
+    val card = 16.dp
+    /** Controls, chips, a row's pressed backplate. */
     val control = 12.dp
-    const val ENTER_MS = 167
+    const val ENTER_MS = 250
     const val FADE_MS = 83
-    const val SINK_MS = 130
+    const val SINK_MS = 167
+    /** The big moments: the backdrop, a screen change. */
+    const val LARGE_MS = 333
     /** cubic-bezier(0, 0, 0, 1): leaves at once, arrives slowly. */
     val ease = CubicBezierEasing(0f, 0f, 0f, 1f)
-    /** --swing: cubic-bezier(0.22, 1, 0.36, 1). */
-    val swing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
+    /** cubic-bezier(0.55, 0.55, 0, 1): point to point. */
+    val swing = CubicBezierEasing(0.55f, 0.55f, 0f, 1f)
+}
+
+/** The 4-pt ramp. Nothing else is a gap. */
+object Space {
+    val x1 = 4.dp
+    val x2 = 8.dp
+    val x3 = 12.dp
+    val x4 = 16.dp
+    val x5 = 20.dp
+    val x6 = 24.dp
+    val x8 = 32.dp
+    val x10 = 40.dp
+    val x12 = 48.dp
+    val x16 = 64.dp
 }
 
 /**
- * IBM Plex Sans, the desktop's face, as one static file per weight cut from
- * its variable font. Not the variable font itself: MIUI and some other skins
- * ignore the weight axis and draw every weight at the lightest, which turned
- * every heading on a Poco F3 into body text.
+ * IBM Plex Sans as one static file per weight cut from its variable font.
+ * Not the variable font itself: MIUI and some other skins ignore the weight
+ * axis and draw every weight at the lightest. The app uses 400 and 600 only.
  */
 val Sans = FontFamily(
     Font(R.font.plex_sans_400, FontWeight.W400),
@@ -194,50 +194,65 @@ val Mono = FontFamily(
     Font(R.font.plex_mono_medium, FontWeight.Medium),
 )
 
+/**
+ * The scale: 12 / 14 / 16 / 20 / 28 / 44 sp, weights 400 and 600, no
+ * uppercase and no wide tracking. Anything that updates live is tabular.
+ */
 object Type {
-    val eyebrow get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W600, fontSize = 10.sp,
-        letterSpacing = 1.4.sp, color = Tone.textOff)
-    val kicker get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W700, fontSize = 10.sp,
-        letterSpacing = 1.6.sp, color = Tone.ok)
-    val title get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W700, fontSize = 20.sp,
-        color = Tone.text)
-    val status get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W700, fontSize = 20.sp,
-        letterSpacing = 0.4.sp, color = Tone.text)
+    /** 12/16 - metadata, counts, helper text. */
+    val caption get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W400, fontSize = 12.sp,
+        lineHeight = 16.sp, color = Tone.text2)
+    /** 14/20 - rows, labels, paragraphs. */
     val body get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W400, fontSize = 14.sp,
-        lineHeight = 20.sp, color = Tone.textMuted)
-    val strong get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W600, fontSize = 15.sp,
-        color = Tone.text)
-    val small get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W400, fontSize = 12.5.sp,
-        lineHeight = 18.sp, color = Tone.textOff)
+        lineHeight = 20.sp, color = Tone.text2)
+    /** 14/20 600 - row titles. */
+    val strong get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W600, fontSize = 14.sp,
+        lineHeight = 20.sp, color = Tone.text)
+    /** 16/22 600 - a heading inside a screen. */
+    val subtitle get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W600, fontSize = 16.sp,
+        lineHeight = 22.sp, color = Tone.text)
+    /** 20/28 600 - screen titles, the location line on home. */
+    val title get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W600, fontSize = 20.sp,
+        lineHeight = 28.sp, color = Tone.text)
+    /** 28/36 600 - a big value when one is needed. */
+    val display get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W600, fontSize = 28.sp,
+        lineHeight = 36.sp, color = Tone.text)
+    /** 44/48 600, tight - the one big word on home. */
+    val status get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W600, fontSize = 44.sp,
+        lineHeight = 48.sp, letterSpacing = (-0.02).em, color = Tone.text)
+
+    /** 12/16 mono, tabular - ping, hosts, ports. */
     val mono get() = TextStyle(fontFamily = Mono, fontWeight = FontWeight.Normal, fontSize = 12.sp,
-        color = Tone.textOff)
-    val ip get() = TextStyle(fontFamily = Mono, fontWeight = FontWeight.Medium, fontSize = 16.sp,
-        color = Tone.text)
-    val button get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W600, fontSize = 15.sp,
-        color = Tone.text)
+        lineHeight = 16.sp, fontFeatureSettings = "tnum", color = Tone.text2)
+    /** 14/20 mono, tabular - the timer. */
+    val monoBody get() = TextStyle(fontFamily = Mono, fontWeight = FontWeight.Normal, fontSize = 14.sp,
+        lineHeight = 20.sp, fontFeatureSettings = "tnum", color = Tone.text)
+    /** An address that has to be read: 14/20 mono. */
+    val ip get() = TextStyle(fontFamily = Mono, fontWeight = FontWeight.Normal, fontSize = 14.sp,
+        lineHeight = 20.sp, fontFeatureSettings = "tnum", color = Tone.text)
+    /** Buttons: 16/24 600. */
+    val button get() = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W600, fontSize = 16.sp,
+        lineHeight = 24.sp, color = Tone.text)
 }
 
 @Composable
 fun RelayTheme(content: @Composable () -> Unit) {
+    val p = Tone.palette
     MaterialTheme(
-        colorScheme = if (Tone.light) lightColorScheme(
-            background = Tone.bg,
-            surface = Tone.surface,
-            primary = Tone.ok,
-            onPrimary = Tone.ink,
-            secondary = Tone.accent,
-            error = Tone.fail,
-            onSurface = Tone.text,
-            onBackground = Tone.text,
+        colorScheme = if (p.light) lightColorScheme(
+            background = p.bg, surface = p.surface, onSurface = p.text, onBackground = p.text,
+            onSurfaceVariant = p.text2, outline = p.strokeStrong, outlineVariant = p.stroke,
+            primary = Tone.state, onPrimary = Tone.ink, error = p.fail,
+            surfaceContainer = p.surface, surfaceContainerHigh = p.surface2,
+            surfaceContainerHighest = p.surface2, surfaceVariant = p.surface2,
+            secondaryContainer = p.surface2, onSecondaryContainer = p.text,
         ) else darkColorScheme(
-            background = Tone.bg,
-            surface = Tone.surface,
-            primary = Tone.ok,
-            onPrimary = Tone.ink,
-            secondary = Tone.accent,
-            error = Tone.fail,
-            onSurface = Tone.text,
-            onBackground = Tone.text,
+            background = p.bg, surface = p.surface, onSurface = p.text, onBackground = p.text,
+            onSurfaceVariant = p.text2, outline = p.strokeStrong, outlineVariant = p.stroke,
+            primary = Tone.state, onPrimary = Tone.ink, error = p.fail,
+            surfaceContainer = p.surface, surfaceContainerHigh = p.surface2,
+            surfaceContainerHighest = p.surface2, surfaceVariant = p.surface2,
+            secondaryContainer = p.surface2, onSecondaryContainer = p.text,
         ),
         content = content,
     )

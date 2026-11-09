@@ -1,0 +1,102 @@
+# Domains of Iranian services. Each line means that domain and everything
+# under it: digikala.com covers www.digikala.com and dkstatics-public.digikala.com.
+#
+# Written by hand, one line per service a person checked is Iranian. The
+# address ranges in iran-ipv4.txt already catch whatever is hosted inside
+# Iran under any name; this list is for what that misses - an Iranian site
+# behind a foreign CDN, and the proxy setting on Windows, where a program
+# hands over a name and never an address.
+
+# The country's own top-level domains: .ir and .ایران
+ir
+xn--mgba3a4f16a
+
+# Shops and marketplaces
+digikala.com
+digistyle.com
+torob.com
+basalam.com
+sheypoor.com
+okala.com
+timcheh.com
+banimode.com
+modiseh.com
+khanoumi.com
+kilid.com
+
+# Travel
+snapptrip.com
+mrbilit.com
+flightio.com
+safarmarket.com
+jabama.com
+jajiga.com
+otaghak.com
+eligasht.com
+ghasedak24.com
+iranhotelonline.com
+
+# Video, music and books
+aparat.com
+filimo.com
+telewebion.com
+beeptunes.com
+taaghche.com
+fidibo.com
+
+# Messengers
+eitaa.com
+bale.ai
+igap.net
+gap.im
+
+# Payments and banking
+zarinpal.com
+nextpay.org
+vandar.io
+mydigipay.com
+irankish.com
+behpardakht.com
+
+# Maps
+neshan.org
+
+# News, sport and magazines
+varzesh3.com
+tasnimnews.com
+mehrnews.com
+asriran.com
+khabarfoori.com
+eghtesadnews.com
+donya-e-eqtesad.com
+ecoiran.com
+tehrantimes.com
+fararu.com
+rokna.net
+tebyan.net
+ninisite.com
+namnak.com
+beytoote.com
+digiato.com
+sakhtafzarmag.com
+
+# Learning, jobs and blogs
+maktabkhooneh.org
+faradars.org
+quera.org
+virgool.io
+blogfa.com
+mihanblog.com
+e-estekhdam.com
+civilica.com
+magiran.com
+paziresh24.com
+
+# Hosting and cloud
+arvancloud.com
+parspack.com
+iranserver.com
+hostiran.net
+hamravesh.com
+chabokan.net
+parsonline.com

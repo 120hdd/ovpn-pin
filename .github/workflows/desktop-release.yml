@@ -19,6 +19,8 @@ env:
   PYTHON_VERSION: '3.12'
   GOST_VERSION: '3.3.0'
   GOST_ARCHIVE_SHA256: 'cc8ac946f86994a3aed47ef1f838cfb6b7649d9245c91fcb9899654b33d61170'
+  SINGBOX_VERSION: '1.14.4'
+  SINGBOX_ARCHIVE_SHA256: '99185d75d314a07dbba4a130c8ad986cbeb629a07927975636b341ca61f991df'
 
 jobs:
   windows:
@@ -51,6 +53,26 @@ jobs:
           if (-not $exe) { throw 'gost.exe was not present in the verified archive' }
           Copy-Item -LiteralPath $exe.FullName -Destination tunnel/gost.exe
 
+      - name: Fetch the pinned TUN engine
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'sing-box.zip'
+          $unpacked = Join-Path $env:RUNNER_TEMP 'sing-box'
+          $url = "https://github.com/SagerNet/sing-box/releases/download/v$env:SINGBOX_VERSION/sing-box-$env:SINGBOX_VERSION-windows-amd64.zip"
+          Invoke-WebRequest -UseBasicParsing $url -OutFile $archive
+          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:SINGBOX_ARCHIVE_SHA256) {
+            throw "sing-box checksum mismatch: $actual"
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $unpacked
+          $exe = Get-ChildItem -LiteralPath $unpacked -Recurse -File -Filter sing-box.exe | Select-Object -First 1
+          if (-not $exe) { throw 'sing-box.exe was not present in the verified archive' }
+          Copy-Item -LiteralPath $exe.FullName -Destination tunnel/sing-box.exe
+          # GPL-3.0: the licence goes out with the binary.
+          $license = Get-ChildItem -LiteralPath $unpacked -Recurse -File -Filter LICENSE | Select-Object -First 1
+          if (-not $license) { throw 'sing-box LICENSE was not present in the verified archive' }
+          Copy-Item -LiteralPath $license.FullName -Destination tunnel/sing-box-LICENSE.txt
+
       - name: Test
         shell: pwsh
         run: |
@@ -63,6 +85,11 @@ jobs:
             'app/accounts-permissions-test.py',
             'app/pin-test.py',
             'app/sweep-test.py',
+            'app/tun-test.py',
+            'app/key-test.py',
+            'app/split-test.py',
+            'app/share-test.py',
+            'app/export-test.py',
             'core/ovpn-proxy-test.py'
           )
           foreach ($test in $tests) {
@@ -88,6 +115,7 @@ jobs:
           $out = Resolve-Path 'release-build/dist/Relay'
           $required = @(
             'Relay.exe', 'gost.exe', 'install-server.sh', 'README.md',
+            'sing-box.exe', 'sing-box-LICENSE.txt',
             'Sweep-OvpnExits.ps1', 'Resolve-OvpnRemote.ps1',
             'servers/lt-vno.prod.surfshark.com_tcp_62.197.149.105.ovpn',
             'servers/tr-ist.ws.tr-022.totallyacdn.com_149.50.208.46.ovpn',

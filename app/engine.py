@@ -14,6 +14,7 @@ instead of a terminal.
 
 import concurrent.futures as cf
 import importlib.util
+import ipaddress
 import json
 import os
 import re
@@ -26,8 +27,11 @@ import urllib.request
 
 import accounts
 import paths
+import split
+import tun
 import windscribe
-from countries import aliases, canon, city_name, country_name
+from sweep import CREATE_NO_WINDOW, _ps_array, _ps_string
+from countries import aliases, canon, city_name, continent, country_name
 
 HERE = paths.APP_DIR
 ROOT = paths.DATA_DIR
@@ -160,11 +164,272 @@ class Server:
                          else accounts.SURFSHARK)
 
 
+# -- sharing it on the Wi-Fi -------------------------------------------------
+#
+# "Share on Wi-Fi" is two things that have to agree. The worker has to listen
+# on more than the loopback (paths.worker_argv, Engine.set_lan_share), and
+# Windows Firewall has to let another device reach that port, which it does
+# not by default: an unknown inbound TCP port is dropped without a word, and
+# from the phone's side that looks exactly like the proxy being down.
+#
+# The rule is as narrow as it can be made and still do the job:
+#
+#     inbound, TCP, this port only, from the local subnet only,
+#     on Private networks only.
+#
+# Not "Any" remote address, because a rule that works on a hotel's Wi-Fi is
+# an open proxy on a hotel's Wi-Fi. Not the Public profile, because Windows
+# puts every network it does not recognise there and the person has not said
+# that this one is theirs; where the network is Public the answer is to say
+# so and let them decide to call it Private, not to widen the rule until it
+# works. And the firewall itself, and every rule that is not ours by exact
+# name, is left exactly as it was.
+#
+# Adding it needs administrator rights, so one UAC prompt, through the same
+# elevated-PowerShell pattern the sweep and the adapter use.
+
+FIREWALL_RULE = 'Relay LAN share ({port})'
+FIREWALL_STATES = ('ok', 'missing', 'public-network', 'unknown')
+
+# Adapters that are not "the Wi-Fi": the adapter this app creates, Hyper-V and
+# WSL's switches, VM hosts, other VPNs. An address on one of those would be
+# offered to the person as the thing to type into the phone, and a phone can
+# never reach it. ("Local Area Connection*" is Windows' own name for the
+# virtual Wi-Fi Direct adapters behind Mobile Hotspot.)
+VIRTUAL_ADAPTERS = re.compile(
+    r'relaytun|sing-?tun|\btun\d*\b|local area connection\*|vethernet|hyper-v|wsl|virtualbox|vmware|vmnet|'
+    r'loopback|bluetooth|\btap\b|tap-|tailscale|wireguard|zerotier|docker|'
+    r'npcap|openvpn|tunnel|vpn|isatap|teredo', re.I)
+
+
+def firewall_rule_name(port):
+    return FIREWALL_RULE.format(port=int(port))
+
+
+def firewall_script(action, port):
+    """The PowerShell that adds or removes the rule, as text.
+
+    Built, not run, here - so it can be read and tested without a firewall.
+    Only a rule with the exact name is ever touched: no wildcards, so a
+    cleanup for port 8877 cannot take out the rule for 8878 or anyone else's.
+    """
+    port = clean_port(port)
+    name = _ps_string(firewall_rule_name(port))
+    gone = ('Get-NetFirewallRule -DisplayName ' + name +
+            ' -ErrorAction SilentlyContinue | Remove-NetFirewallRule\n')
+    if action == 'remove':
+        return gone
+    if action != 'add':
+        raise ValueError(action)
+    # Replaced rather than stacked: pressing the switch twice, or a rule left
+    # by an older run with a different scope, must end as one rule that says
+    # what this says.
+    return gone + (
+        'New-NetFirewallRule -DisplayName ' + name + ' -Direction Inbound '
+        '-Action Allow -Protocol TCP -LocalPort ' + str(port) + ' '
+        '-RemoteAddress LocalSubnet -Profile Private -Enabled True '
+        "-Description 'Relay: lets devices on your own Wi-Fi use this PC as "
+        "their proxy. Removed when Share on Wi-Fi is turned off.' | Out-Null\n")
+
+
+def firewall_probe_script(port):
+    """Reads, never changes: whether our rule is there, and what each
+    network adapter with an IPv4 address is - its name, address and whether
+    Windows calls its network Private or Public. One call because a
+    PowerShell start costs most of a second."""
+    port = clean_port(port)
+    return (
+        "$ErrorActionPreference = 'SilentlyContinue'\n"
+        '$name = ' + _ps_string(firewall_rule_name(port)) + '\n'
+        '$found = @(Get-NetFirewallRule -DisplayName $name)\n'
+        '$good = $false\n'
+        'foreach ($r in $found) {\n'
+        '  $pf = $r | Get-NetFirewallPortFilter\n'
+        '  if ("$($r.Enabled)" -eq "True" -and "$($r.Direction)" -eq "Inbound" '
+        '-and "$($r.Action)" -eq "Allow" -and "$($pf.Protocol)" -eq "TCP" '
+        '-and "$($pf.LocalPort)" -eq "' + str(port) + '") { $good = $true }\n'
+        '}\n'
+        '$ads = @(Get-NetIPAddress -AddressFamily IPv4 | '
+        "Where-Object { $_.IPAddress -notlike '127.*' } | ForEach-Object {\n"
+        '  $p = Get-NetConnectionProfile -InterfaceIndex $_.InterfaceIndex\n'
+        '  [pscustomobject]@{ip = $_.IPAddress; alias = $_.InterfaceAlias; '
+        'category = "$($p.NetworkCategory)"}\n'
+        '})\n'
+        '[pscustomobject]@{rule = $good; found = ($found.Count -gt 0); '
+        'adapters = $ads} | ConvertTo-Json -Compress -Depth 4\n')
+
+
+def usable_lan_adapters(adapters):
+    """[(address, alias, category)] for the addresses worth giving to a phone:
+    private IPv4 on a real adapter. Not loopback, not link-local (what an
+    adapter gives itself when it has no network), not CGNAT (a VPN's), and not
+    anything on an adapter that is plainly virtual. The Wi-Fi first."""
+    out = []
+    for a in adapters or []:
+        try:
+            ip = ipaddress.ip_address(str(a.get('ip', '')))
+        except ValueError:
+            continue
+        alias = str(a.get('alias') or '')
+        if (ip.version != 4 or not ip.is_private or ip.is_loopback
+                or ip.is_link_local
+                or ip in ipaddress.ip_network('100.64.0.0/10')
+                or VIRTUAL_ADAPTERS.search(alias)):
+            continue
+        out.append((str(ip), alias, str(a.get('category') or '')))
+    out.sort(key=lambda t: 0 if re.search(r'wi-?fi|wlan|wireless', t[1], re.I)
+             else 1)
+    return out
+
+
+def firewall_verdict(info):
+    """'ok' | 'missing' | 'public-network' | 'unknown', from the probe's JSON.
+
+    Public wins over missing: adding the rule on a Public network would
+    succeed and still do nothing, because it is scoped to Private, so
+    offering to add it would be offering a prompt that cannot help.
+    """
+    if not isinstance(info, dict):
+        return 'unknown'
+    adapters = info.get('adapters')
+    if isinstance(adapters, dict):                 # ConvertTo-Json of one item
+        adapters = [adapters]
+    lan = usable_lan_adapters(adapters)
+    if not lan:
+        return 'unknown'
+    kinds = {c.lower() for _, _, c in lan if c}
+    if kinds and kinds <= {'public'}:
+        return 'public-network'
+    return 'ok' if info.get('rule') else 'missing'
+
+
+_PROBE = {'at': 0.0, 'port': None, 'info': None}
+PROBE_FRESH = 4.0
+
+
+def probe_network(port, fresh=False):
+    """The probe's answer as a dict, or None if PowerShell would not say.
+    Held for a few seconds so a window that asks twice a second does not
+    start PowerShell twice a second."""
+    if os.name != 'nt':
+        return None
+    if (not fresh and _PROBE['port'] == port
+            and time.time() - _PROBE['at'] < PROBE_FRESH):
+        return _PROBE['info']
+    info = None
+    try:
+        done = subprocess.run(
+            ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+             '-Command', firewall_probe_script(port)],
+            capture_output=True, text=True, timeout=25,
+            creationflags=CREATE_NO_WINDOW)
+        text = (done.stdout or '').strip()
+        info = json.loads(text) if text else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        info = None
+    _PROBE.update(at=time.time(), port=port, info=info)
+    return info
+
+
+def socket_addresses():
+    """Private IPv4 addresses of this machine without asking PowerShell: what
+    the hostname resolves to, plus the address the default route would use.
+    Cannot tell a Wi-Fi from a virtual switch, so it is the fallback."""
+    found = []
+    try:
+        for _, _, _, _, sa in socket.getaddrinfo(
+                socket.gethostname(), None, socket.AF_INET):
+            found.append(sa[0])
+    except OSError:
+        pass
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(('10.255.255.255', 9))   # nothing is sent
+            found.append(probe.getsockname()[0])
+        finally:
+            probe.close()
+    except OSError:
+        pass
+    seen = []
+    for ip in found:
+        if ip not in seen:
+            seen.append(ip)
+    return usable_lan_adapters([{'ip': ip, 'alias': '', 'category': ''}
+                                for ip in seen])
+
+
+def change_firewall(action, port, timeout=180):
+    """Add or remove the rule, elevated. (ok, message).
+
+    The script is written to a file and run as administrator by a second
+    PowerShell started with -Verb RunAs, which is the only way to get a UAC
+    prompt - and the only way to learn what happened is a file, since an
+    elevated process does not hand its output back (see sweep.py). A prompt
+    that is dismissed makes the outer call fail, and is reported as that.
+    """
+    if os.name != 'nt':
+        return False, 'Windows Firewall is a Windows thing.'
+    script = firewall_script(action, port)
+    os.makedirs(paths.STATE_DIR, exist_ok=True)
+    ps1 = os.path.join(paths.STATE_DIR, f'share-{action}.ps1')
+    result = os.path.join(paths.STATE_DIR, f'share-{action}.result')
+    try:
+        os.remove(result)
+    except OSError:
+        pass
+    wrapper = (
+        "$ErrorActionPreference = 'Stop'\n"
+        'try {\n' + script +
+        '  Set-Content -LiteralPath ' + _ps_string(result) +
+        " -Value 'ok' -Encoding ascii\n"
+        '} catch {\n'
+        '  Set-Content -LiteralPath ' + _ps_string(result) +
+        ' -Value ("error: " + $_.Exception.Message) -Encoding utf8\n'
+        '}\n')
+    with open(ps1, 'w', encoding='utf-8') as f:
+        f.write(wrapper)
+    argv = ['-NoProfile', '-ExecutionPolicy', 'Bypass',
+            '-WindowStyle', 'Hidden', '-File', ps1]
+    try:
+        if tun.is_admin():
+            subprocess.run(['powershell'] + argv, stdin=subprocess.DEVNULL,
+                           capture_output=True, timeout=timeout,
+                           creationflags=CREATE_NO_WINDOW)
+        else:
+            raise_it = ('Start-Process powershell -Verb RunAs -Wait '
+                        '-WindowStyle Hidden -ArgumentList ' + _ps_array(argv))
+            done = subprocess.run(
+                ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                 '-Command', raise_it],
+                capture_output=True, text=True, timeout=timeout,
+                creationflags=CREATE_NO_WINDOW)
+            if done.returncode != 0:
+                # The one that actually happens: the UAC prompt was dismissed.
+                return False, ('Administrator rights were refused, so '
+                               'Windows Firewall was not changed.')
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, f'could not start the firewall change: {e}'
+    finally:
+        _PROBE['at'] = 0.0
+    try:
+        with open(result, encoding='utf-8-sig') as f:
+            said = f.read().strip()
+    except OSError:
+        said = ''
+    if said == 'ok':
+        return True, ''
+    if said.startswith('error:'):
+        said = said[6:].strip()
+    return False, said or 'Windows Firewall did not report back.'
+
+
 class Engine:
     """One connection at a time, and always able to say what state it is in."""
 
     def __init__(self, sysproxy, folder=None, auth_file=None,
-                 set_system_proxy=True, port=None):
+                 set_system_proxy=True, port=None, route_with='proxy',
+                 split_settings=None, lan_share=False):
         self.sysproxy = sysproxy
         self.folder = folder or paths.servers_dir()
         # Every folder worth looking in, the primary one first. A list rather
@@ -195,6 +460,18 @@ class Engine:
         # who would rather point one browser at the port by hand than have
         # every program on the machine moved at once.
         self.set_system_proxy = set_system_proxy
+        # And when it is moved, how: the proxy setting, which a program may
+        # ignore, or an adapter, which it cannot. See tun.py.
+        self.route_with = route_with if route_with in tun.KINDS else 'proxy'
+        # Which connections go around the exit (split.py), as the settings
+        # keep it. Carried by whichever of the two is routing Windows.
+        self.split = split_settings
+        # Whether the proxy is offered to other devices on the Wi-Fi: the
+        # worker listens on 0.0.0.0 instead of 127.0.0.1 and an iPhone can
+        # set this machine as its HTTP proxy. Off, the port is reachable
+        # from this machine alone, which is what it always was.
+        self.lan_share = bool(lan_share)
+        self.tun = tun.Tun(px.alive)
         self.child = None
         self.exit_info = None
         self.lock = threading.Lock()
@@ -346,6 +623,8 @@ class Engine:
         for code, c in by_country.items():
             out.append({'code': code,
                         'name': country_name(code),
+                        # Which group of the list it sits in.
+                        'continent': continent(code),
                         'alias': aliases(code),
                         'cities': len(c['cities']),
                         # The cities themselves, quickest first, so that
@@ -1030,6 +1309,11 @@ class Engine:
 
     # -- holding it --------------------------------------------------------
 
+    def listen_host(self):
+        """The address the worker binds: every interface while sharing,
+        otherwise the loopback and nothing else."""
+        return paths.LAN_HOST if self.lan_share else paths.LOOPBACK_HOST
+
     def _spawn(self, ip, host, auth_file=None, tunnel=None):
         """The proxy runs as its own process, exactly as `--detach` starts
         it. Keeping it out of this one means a wedged connection cannot take
@@ -1043,7 +1327,8 @@ class Engine:
         out_path = os.path.join(paths.STATE_DIR, f'proxy-{self.port}.out')
         os.makedirs(paths.STATE_DIR, exist_ok=True)
         argv = paths.worker_argv(ip, host, self.port,
-                                 auth_file or self.auth_file, tunnel)
+                                 auth_file or self.auth_file, tunnel,
+                                 listen=self.listen_host())
         flags = 0x08 | 0x200 if os.name == 'nt' else 0   # DETACHED, NEW_GROUP
         with open(out_path, 'w', encoding='utf-8') as out:
             return subprocess.Popen(
@@ -1099,9 +1384,7 @@ class Engine:
             self._wait_listening(child, out_path)
             self.child = child
 
-            if self.set_system_proxy:
-                progress({'phase': 'routing'})
-                self.sysproxy.engage('127.0.0.1', self.port)
+            self._engage(progress, keep=ip, watch=child.pid)
 
             self.exit_info = {'ip': ip, 'host': host, 'country': server.country,
                               'city': server.city, 'provider': server.provider,
@@ -1132,9 +1415,7 @@ class Engine:
             self._wait_listening(child, out_path)
             self.child = child
 
-            if self.set_system_proxy:
-                progress({'phase': 'routing'})
-                self.sysproxy.engage('127.0.0.1', self.port)
+            self._engage(progress, watch=child.pid)
 
             self.exit_info = {'ip': address, 'host': '', 'country': label,
                               'city': '', 'answered': 0.0,
@@ -1157,9 +1438,9 @@ class Engine:
         # touched them. A second copy running on its own port would otherwise
         # find that stash on disconnect and "restore" it - taking the machine
         # off the first copy's connection, which is somebody's actual VPN.
-        # Ours to put back means ours to have changed.
-        if self.sysproxy.engaged_for(self.port):
-            self.sysproxy.restore()
+        # Ours to put back means ours to have changed. The adapter is held to
+        # the same rule.
+        self.release()
         rec = px.read_state(self.port)
         if rec:
             try:
@@ -1205,6 +1486,71 @@ class Engine:
         if not quiet:
             return self.status()
 
+    # -- pointing the machine at it ----------------------------------------
+
+    def _engage(self, progress=None, keep=None, watch=None):
+        """Point Windows at the worker, the way the settings say to.
+
+        Not at all when the machine is to be left alone, and otherwise one
+        way or the other, never both: an adapter carrying everything with
+        the proxy setting still pointing at the same port would send each
+        browser request through the worker twice.
+
+        `keep` is the exit the worker dials, which the adapter must route
+        around; `watch` is the worker, which the adapter goes down with.
+        """
+        adapter = self.set_system_proxy and self.route_with == 'tun'
+        self.hand_split(adapter)
+        if not self.set_system_proxy:
+            return
+        if adapter:
+            if progress:
+                progress({'phase': 'adapter'})
+            self.tun.start(self.port, keep=[keep] if keep else [],
+                           watch=watch, own=[sys.executable],
+                           carriers=[paths.gost_exe()],
+                           split_rules=split.rules(self.split))
+        else:
+            if progress:
+                progress({'phase': 'routing'})
+            self.sysproxy.engage('127.0.0.1', self.port)
+
+    def hand_split(self, adapter=None):
+        """Give the split rules to whichever is deciding: the worker, by its
+        file, unless the adapter is - then the worker is told "off", so a
+        connection sing-box already decided is not decided again by
+        something that sees less of it.
+        """
+        if adapter is None:
+            adapter = self.set_system_proxy and self.route_with == 'tun'
+        split.write_worker_file(None if adapter else self.split)
+
+    def release(self):
+        """Take Windows off the worker, whichever way it was put on - and
+        only if it was put on for this port (see disconnect)."""
+        if self.tun.engaged_for(self.port):
+            self.tun.stop()
+        if self.sysproxy.engaged_for(self.port):
+            self.sysproxy.restore()
+        # Whatever still reaches the worker now - a program pointed at the
+        # port by hand - is the worker's to decide again.
+        self.hand_split(adapter=False)
+
+    def reroute(self):
+        """A changed setting, applied to a connection that is already up.
+
+        The machine comes off whichever way it is on and goes back on the
+        way the settings now say. The worker is not touched, so the exit
+        that was raced for stays the exit.
+        """
+        rec = self.running()
+        if not rec:
+            return False
+        keep = (self.exit_info or {}).get('ip') or rec.get('ip')
+        self.release()
+        self._engage(keep=keep, watch=rec['pid'])
+        return True
+
     # -- moving it ---------------------------------------------------------
 
     def set_port(self, port):
@@ -1247,7 +1593,7 @@ class Engine:
             # Connected, the same tolerance would be a working connection
             # traded for one that cannot come up. Checked before anything is
             # torn down, so a refusal costs nothing.
-            held = port_holder(port)
+            held = port_holder(port, self.listen_host())
             if held is not None:
                 raise RuntimeError(
                     f'Something is already on 127.0.0.1:{port}'
@@ -1260,13 +1606,79 @@ class Engine:
             child, out_path = self._spawn(info['ip'], info['host'])
             self._wait_listening(child, out_path)
             self.child = child
-            if self.set_system_proxy:
-                self.sysproxy.engage('127.0.0.1', self.port)
+            self._engage(keep=info.get('ip'), watch=child.pid)
             # Everything already known about this exit survives the move -
             # the country, how fast it answered, and the address Cloudflare
             # confirmed. Only the process is new.
             self.exit_info = {**info, 'pid': child.pid}
             return {'moved': True, 'busy': False, **self.status()}
+
+    def set_lan_share(self, on):
+        """Offer the connection to the other devices on the Wi-Fi, or stop.
+
+        Applied now for the same reason set_port is: a switch that says
+        "sharing" while the worker still listens on the loopback is a phone
+        that cannot connect and a window that gives no hint why. The listen
+        address is fixed when the worker binds, so a live connection is a
+        move - the machine goes back, the worker is stopped and the same
+        exit is dialled again, listening on the other address. The exit is
+        not re-chosen, for the reason given there.
+
+        Returns what the window needs: 'now' when a running worker was
+        restarted, 'next' when there was nothing up and it will simply bind
+        the new address when it starts.
+        """
+        on = bool(on)
+        with self.lock:
+            rec = self.running()
+            if not rec:
+                # Nothing is up, so this is only a choice to remember.
+                self.lan_share = on
+                return {'applied': 'next', 'moved': False}
+
+            # What the running worker actually bound, from the record it
+            # wrote, rather than from what this object believes: a copy of
+            # the window that was closed and reopened adopts a worker started
+            # under the old setting, and the two can disagree.
+            wide = rec.get('host') not in (paths.LOOPBACK_HOST, 'localhost')
+            self.lan_share = on
+            if wide == on:
+                return {'applied': 'now', 'moved': False}
+
+            info = self.exit_info or {'ip': rec['ip'], 'host': rec['name']}
+            self.disconnect(quiet=True)
+            if info.get('tunnel'):
+                child, out_path = self._spawn(None, None, tunnel=info['ip'])
+            else:
+                # A Windscribe exit opens with its own credential; the one
+                # that was raced for decides, as it did the first time.
+                auth = (windscribe.AUTH_FILE
+                        if info.get('provider') == accounts.WINDSCRIBE
+                        else None)
+                child, out_path = self._spawn(info['ip'], info['host'], auth)
+            self._wait_listening(child, out_path)
+            self.child = child
+            self._engage(keep=None if info.get('tunnel') else info.get('ip'),
+                         watch=child.pid)
+            self.exit_info = {**info, 'pid': child.pid}
+            return {'applied': 'now', 'moved': True}
+
+    def lan_clients(self):
+        """Distinct devices other than this one that used the shared proxy in
+        the last few minutes, read from the file the worker keeps."""
+        if not self.lan_share:
+            return []
+        try:
+            return px.read_clients(self.port)
+        except Exception:
+            return []
+
+    def lan_listening(self):
+        """Whether the running worker is really bound beyond the loopback -
+        what the record it wrote says, not what this object was told."""
+        rec = self.running()
+        return bool(rec) and rec.get('host') not in (
+            paths.LOOPBACK_HOST, 'localhost')
 
     # -- is it actually working -------------------------------------------
 
@@ -1394,7 +1806,8 @@ class Engine:
 
     def status(self):
         rec = self.running()
-        engaged = self.sysproxy.engaged_for(self.port)
+        adapter = self.tun.engaged_for(self.port)
+        engaged = adapter or self.sysproxy.engaged_for(self.port)
         state = 'off'
         if rec and (engaged or not self.set_system_proxy):
             state = 'on'
@@ -1406,6 +1819,8 @@ class Engine:
         out = {'state': state, 'port': self.port,
                'folder': self.folder,
                'systemProxy': self.set_system_proxy,
+               'routeWith': self.route_with,
+               'tun': adapter,
                'owed_restore': bool(self.sysproxy.stashed())}
         if rec:
             out['exit'] = {'ip': rec['ip'], 'host': rec['name'],

@@ -26,11 +26,14 @@
        .map((l) => ' | ' + l.trim()).join(''))));
 </script>
 <!-- The theme before the first paint, from the last time this window saw
-     it - so a White copy does not open in Midnight and then change. Settings
+     it - so a White copy does not open in Graphite and then change. Settings
      have the real answer and boot puts it back if the two disagree. -->
 <script>
   try {
     var relayTheme = localStorage.getItem('relay.theme');
+    // Three themes now; every older name is Graphite, the default.
+    if (relayTheme === 'white' || relayTheme === 'light') relayTheme = 'white';
+    else if (relayTheme !== 'black') relayTheme = null;
     if (relayTheme) document.documentElement.dataset.theme = relayTheme;
   } catch (e) {}
 </script>
@@ -87,8 +90,21 @@
        shelf it can be taken off again; a bin would promise something the
        code deliberately does not do. -->
   <symbol id="i-archive" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1" /> <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" /> <path d="M10 12h4" /></symbol>
+  <!-- One road becoming two, for the split tunnel. Lucide's, like the rest. -->
+  <symbol id="i-split" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5" /> <path d="M8 3H3v5" /> <path d="M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3" /> <path d="m15 9 6-6" /></symbol>
   <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" /> <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" /> <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" /></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="20" x="5" y="2" rx="2" ry="2" /> <path d="M12 18h.01" /></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" /> <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></symbol>
 </svg>
+
+<!-- The connected country's flag, dim, behind the home screen. app.js puts a
+     layer in here on connect and takes it out on disconnect. -->
+<div class="backdrop" id="backdrop" aria-hidden="true"></div>
+
+<!-- The hologram globe: a wire-grid sphere centred on the right edge, about
+     half of it in view, behind everything (globe.js). It is scenery and the
+     connection's meaning: it turns to the exit country when the route is up. -->
+<canvas class="globe" id="globeCanvas" aria-hidden="true"></canvas>
 
 <main class="app">
 
@@ -145,125 +161,109 @@
     </span>
   </header>
 
-  <!-- The two addresses, side by side. The whole product is the difference
-       between them, so showing one without the other asks the user to
-       remember what their own IP was. -->
-  <section class="hero" id="hero" data-state="off" aria-label="Route overview">
-    <div class="blob-stage">
-      <span class="blob__glow" aria-hidden="true"></span>
-      <span class="blob__orbit blob__orbit--outer" aria-hidden="true"><i></i></span>
-      <span class="blob__orbit blob__orbit--inner" aria-hidden="true"><i></i></span>
-      <span class="blob__halo" aria-hidden="true"></span>
-      <!-- The orb is a button, as on Android: press to connect or
-           disconnect, hold to reconnect. -->
-      <span class="blob__float" id="orb" role="button" tabindex="0" aria-label="Connect">
-        <!-- WebGL2 core; app.js swaps this back to the DOM bead sphere when
-             the GPU is blocked (RDP, SwiftShader denylist). -->
-        <canvas class="blob__body" id="orbCanvas" aria-hidden="true"></canvas>
-      </span>
+  <!-- Home. The status block is left-aligned: the status word, where the exit
+       is, how long it has been up. The globe is the hero, on the right edge,
+       and still the connect control. The flux strip under the status block
+       is the live throughput sparkline. -->
+  <section class="hero" id="hero" data-state="off" aria-label="Connection">
+    <div class="head">
+      <p class="status" id="status" role="status" data-state="off">Disconnected</p>
+      <!-- The location line is the way into the picker. Off: the pick, or
+           "Any country". On: where the traffic really comes out. -->
+      <button class="where" id="pick" type="button" data-any="1">
+        <span class="where__flag" id="pickFlag" aria-hidden="true"></span>
+        <span class="where__label" id="pickLabel">Any country</span>
+        <svg class="ico where__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
+      </button>
+      <p class="status__where" id="statusWhere">&nbsp;</p>
+      <p class="status__host mono" id="statusHost">&nbsp;</p>
+      <p class="clock mono" id="statusClock"></p>
+      <button class="icon head__more" id="more" type="button" hidden
+              aria-label="Connection details" aria-expanded="false">
+        <svg class="ico" aria-hidden="true"><use href="#i-chev-down"/></svg>
+      </button>
     </div>
-    <p class="route-label"><i></i><span id="routeLabel">READY TO RELAY</span></p>
 
-    <!-- Everything below the core is anchored to the bottom of the stage
-         rather than laid out from the top, so the meter can appear and go
-         again without the addresses moving a pixel. -->
+    <!-- The middle band. Left: the live throughput sparkline, under the
+         status block. The rest is the globe's click area: press the visible
+         half to connect or disconnect, hold it to reconnect (app.js tests the
+         press against the globe's disc, so only the sphere answers). -->
+    <div class="mid">
+      <span class="globe-hit" id="globeHit" role="button" tabindex="0" aria-label="Connect"></span>
+        <div class="flux" id="flux" data-live="false">
+          <canvas class="flux__wave" id="fluxWave" aria-hidden="true"></canvas>
+          <p class="flux__leg flux__leg--down">
+            <svg class="flux__arw" aria-hidden="true"><use href="#i-arrow"/></svg>
+            <span class="sr">Downloaded</span>
+            <b class="flux__sum mono" id="fluxDownSum">0 B</b>
+            <span class="flux__rate mono" id="fluxDownRate">idle</span>
+          </p>
+          <p class="flux__leg flux__leg--up">
+            <span class="flux__rate mono" id="fluxUpRate">idle</span>
+            <span class="sr">Uploaded</span>
+            <b class="flux__sum mono" id="fluxUpSum">0 B</b>
+            <svg class="flux__arw" aria-hidden="true"><use href="#i-arrow"/></svg>
+          </p>
+        </div>
+    </div>
+
     <div class="hero__foot">
+      <div class="details" id="details" hidden>
+        <dl class="details__grid">
+          <dt>In</dt><dd class="mono" id="detIn">—</dd>
+          <dt>Out</dt><dd class="mono" id="detOut">—</dd>
+          <dt>Via</dt><dd id="detVia">—</dd>
+        </dl>
+      </div>
 
-    <!-- What has actually gone through. Absent until there is a route:
-         before that there is nothing to measure, and a pair of zeroes on
-         screen reads as a broken instrument rather than a quiet line.
-
-         Down is the loud one - it is the number anyone means by "how much
-         have I used" - so it is set larger, given the deeper half of the
-         wave, and reads left to right. Up answers it from the other end. -->
-    <div class="flux" id="flux" data-live="false">
-      <canvas class="flux__wave" id="fluxWave" aria-hidden="true"></canvas>
-      <p class="flux__leg flux__leg--down">
-        <svg class="flux__arw" aria-hidden="true"><use href="#i-arrow"/></svg>
-        <span class="sr">Downloaded</span>
-        <b class="flux__sum mono" id="fluxDownSum">0 B</b>
-        <span class="flux__rate mono" id="fluxDownRate">idle</span>
-      </p>
-      <p class="flux__leg flux__leg--up">
-        <span class="flux__rate mono" id="fluxUpRate">idle</span>
-        <span class="sr">Uploaded</span>
-        <b class="flux__sum mono" id="fluxUpSum">0 B</b>
-        <svg class="flux__arw" aria-hidden="true"><use href="#i-arrow"/></svg>
-      </p>
-    </div>
-
-    <div class="swap" id="swap" data-state="off">
-    <div class="side">
-      <p class="side__cap"><i></i>Your address</p>
-      <p class="side__ip mono" id="realIp" title="Click to copy">…</p>
-      <p class="side__place" id="realPlace">checking…</p>
-    </div>
-
-    <div class="arrow" aria-hidden="true">
-      <svg viewBox="0 0 30 14" width="30" height="14">
-        <path id="arrowPath" d="M1 7h26M22.5 2.5 27 7l-4.5 4.5" fill="none"
-              stroke="currentColor" stroke-width="1.5"
-              stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-    </div>
-
-    <div class="side side--exit">
-      <p class="side__cap">Seen as<i></i></p>
-      <p class="side__ip mono" id="exitIp" title="Click to copy">—</p>
-      <p class="side__place" id="exitPlace">not connected</p>
-    </div>
-    </div>
+      <!-- The two addresses. The whole product is the difference between
+           them, so showing one without the other asks the user to remember
+           what their own IP was. -->
+      <dl class="ips" id="swap" data-state="off">
+        <div class="ips__row">
+          <dt>Your address</dt>
+          <dd><span class="ips__ip mono" id="realIp" title="Click to copy">…</span><span class="ips__place" id="realPlace">checking…</span></dd>
+        </div>
+        <div class="ips__row ips__row--exit">
+          <dt>Seen as</dt>
+          <dd><span class="ips__ip mono" id="exitIp" title="Click to copy">—</span><span class="ips__place" id="exitPlace">not connected</span></dd>
+        </div>
+      </dl>
     </div>
   </section>
 
   <section class="card" id="card" data-state="off">
-    <button class="icon card__more" id="more" type="button" hidden
-            aria-label="Connection details" aria-expanded="false">
-      <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
-        <path d="M2.5 4.5 L6 8 L9.5 4.5" fill="none" stroke="currentColor"
-              stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-    </button>
-
-    <p class="card__eyebrow">CONNECTION STATUS</p>
-    <div class="status-line">
-      <i class="status-dot" aria-hidden="true"></i>
-      <p class="status" id="status" role="status" data-state="off">DISCONNECTED</p>
-    </div>
-    <div class="status-meta">
-      <p class="status__where" id="statusWhere">&nbsp;</p>
-      <p class="status__host mono" id="statusHost">&nbsp;</p>
-    </div>
-
-    <div class="details" id="details" hidden>
-      <dl class="details__grid">
-        <dt>In</dt><dd class="mono" id="detIn">—</dd>
-        <dt>Out</dt><dd class="mono" id="detOut">—</dd>
-        <dt>Via</dt><dd id="detVia">—</dd>
-      </dl>
-    </div>
-
-    <div class="stack">
-      <!-- Which way out, above the exit picker because it decides whether
-           that picker means anything. Three, and deliberately not three
-           flavours of one thing: the first needs nothing set up and cannot
-           carry an upload, the second is a machine of your own abroad, the
-           third is that machine handing the last leg to an exit so the
-           country is still a choice. The line underneath says which of those
-           you are looking at - the strip alone would be three words and a
-           guess. -->
       <div class="way" id="wayWrap" data-way="surfshark">
-        <!-- What the chosen way is, behind an (i) beside the strip, as on
-             Android; the line under it is only for what needs doing. -->
         <div class="way__row">
-          <div class="seg seg--three" id="way" data-way="surfshark">
-            <i class="seg__slide" aria-hidden="true"></i>
-            <button class="seg__opt" type="button" data-way="surfshark"
-                    aria-pressed="true">Provider</button>
-            <button class="seg__opt" type="button" data-way="single"
-                    aria-pressed="false">Your server</button>
-            <button class="seg__opt" type="button" data-way="multi"
-                    aria-pressed="false">Server + exit</button>
+          <div class="dd" id="way" data-way="surfshark" data-open="0">
+            <button class="dd__field" id="wayField" type="button"
+                    aria-haspopup="listbox" aria-expanded="false"
+                    aria-controls="wayList" aria-labelledby="wayCap wayValue">
+              <span class="dd__cap" id="wayCap">Way out</span>
+              <span class="dd__value" id="wayValue">Provider</span>
+              <svg class="ico dd__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
+            </button>
+            <ul class="dd__list" id="wayList" role="listbox"
+                aria-labelledby="wayCap" hidden>
+              <li class="dd__opt" role="option" data-way="surfshark"
+                  aria-selected="true" tabindex="-1">
+                <span class="dd__name">Provider</span>
+                <span class="dd__hint">Straight to the provider’s exit</span>
+                <svg class="ico dd__check" aria-hidden="true"><use href="#i-check"/></svg>
+              </li>
+              <li class="dd__opt" role="option" data-way="single"
+                  aria-selected="false" tabindex="-1">
+                <span class="dd__name">Your server</span>
+                <span class="dd__hint">Comes out at your own server</span>
+                <svg class="ico dd__check" aria-hidden="true"><use href="#i-check"/></svg>
+              </li>
+              <li class="dd__opt" role="option" data-way="multi"
+                  aria-selected="false" tabindex="-1">
+                <span class="dd__name">Server + exit</span>
+                <span class="dd__hint">Your server, then any location — uploads stay fast</span>
+                <svg class="ico dd__check" aria-hidden="true"><use href="#i-check"/></svg>
+              </li>
+            </ul>
           </div>
           <button class="info info--right" id="wayInfo" type="button"
                   aria-label="What this way out is">
@@ -274,37 +274,11 @@
         <p class="note way__note" id="wayNote"></p>
       </div>
 
-      <button class="btn btn--quiet" id="pick" type="button">
-        <span class="pick__flag" id="pickFlag" aria-hidden="true">
-          <svg viewBox="0 0 20 20" width="16" height="16">
-            <path d="M10 2.2a7.8 7.8 0 1 0 0 15.6 7.8 7.8 0 0 0 0-15.6Zm0 0c2 2.2 3 4.8 3 7.8s-1 5.6-3 7.8m0-15.6C8 4.4 7 7 7 10s1 5.6 3 7.8M2.5 10h15"
-                  fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>
-          </svg>
-        </span>
-        <span class="pick__copy">
-          <span class="pick__cap">EXIT LOCATION</span>
-          <span class="btn__label" id="pickLabel">Whichever answers first</span>
-        </span>
-        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" class="btn__chev">
-          <path d="M4.5 2.5 L8 6 L4.5 9.5" fill="none" stroke="currentColor"
-                stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </button>
-
-      <!-- Two blurred lights behind a dark face. They sit tucked into the top
-           right at rest and swing apart when the pointer is over it - and
-           connected, they stay apart, because the state the button describes
-           is the state it should look like. -->
-      <button class="go" id="act" type="button" data-mode="off">
-        <i class="go__near" aria-hidden="true"></i>
-        <i class="go__far" aria-hidden="true"></i>
-        <span class="go__track">
-          <span class="go__word" data-for="off">Connect</span>
-          <span class="go__word" data-for="busy">Cancel</span>
-          <span class="go__word" data-for="on">Disconnect</span>
-        </span>
-      </button>
-    </div>
+    <button class="go" id="act" type="button" data-mode="off">
+      <span class="go__word" data-for="off">Connect</span>
+      <span class="go__word" data-for="busy">Cancel</span>
+      <span class="go__word" data-for="on">Disconnect</span>
+    </button>
 
     <div class="progress" id="progress" aria-hidden="true"></div>
   </section>
@@ -315,58 +289,23 @@
 <dialog class="sheet" id="picker">
   <header class="sheet__top">
     <span class="sheet__heading">
-      <span class="sheet__kicker">RELAY NETWORK</span>
-      <span class="sheet__title">Choose an exit</span>
+      <span class="sheet__title">Choose a location</span>
     </span>
+    <!-- The way back to "no preference", now that the list has no row for it.
+         Only there while something is picked. -->
+    <button class="textbtn" id="pickAny" type="button" hidden>Any country</button>
     <button class="icon" id="pickerClose" type="button" aria-label="Close">
-      <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
-        <path d="M3 3 L11 11 M11 3 L3 11" fill="none" stroke="currentColor"
-              stroke-width="1.5" stroke-linecap="round"/>
-      </svg>
+      <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
     </button>
   </header>
-  <!-- A stack of blurred conic gradients behind one dark field. Each layer is
-       a different radius and blur, and each turns by a different amount, so
-       hovering and focusing rake a light around the border at slightly
-       different speeds rather than all sliding together. -->
-  <div class="rig" id="poda">
-    <div class="rig__glow"></div>
-    <div class="rig__dark"></div>
-    <div class="rig__pale"></div>
-    <div class="rig__edge"></div>
-    <div class="rig__main" id="searchMain">
-      <input class="rig__in" id="search" type="text"
-             autocomplete="off" spellcheck="false" aria-label="Search a country or city">
-      <!-- The hint is ours rather than the field's, so the fade can be taken
-           off the end of the words instead of out of a fixed-width band that
-           landed across the middle of them. -->
-      <span class="rig__hint" id="inputMask" aria-hidden="true">Search a country or city</span>
-      <span class="rig__spark" id="inputSpark"></span>
-      <span class="rig__lens" aria-hidden="true">
-        <svg class="ico" aria-hidden="true"><use href="#i-search"/></svg>
-      </span>
-      <span class="rig__keyring"></span>
-      <span class="rig__key" aria-hidden="true">/</span>
-    </div>
+  <div class="find" id="searchMain">
+    <svg class="ico find__lens" aria-hidden="true"><use href="#i-search"/></svg>
+    <input class="find__in" id="search" type="text" placeholder="Search a country or city"
+           autocomplete="off" spellcheck="false" aria-label="Search a country or city">
+    <kbd class="find__key" aria-hidden="true">/</kbd>
   </div>
-  <!-- Which of them actually answer.
-
-       An exit filtered on this line looks exactly like one that is merely
-       slow, and the only way to tell them apart is to ask. The connect race
-       asks every time and throws the answer away; this asks once and keeps
-       it, so the list can be ordered by what works instead of by name. -->
   <div class="reach" id="reach">
-    <!-- The bolt that was here asked every exit in the list at once. It has
-         moved onto the rows: one per country, so the question is asked about
-         the place somebody is already looking at rather than about ninety
-         they are not. Four hundred addresses in one run is also where this
-         line starts dropping connections, which made the answers about the
-         moment rather than about the exits. -->
-    <!-- Answering-first sits underneath all three: a blocked exit is not a
-         good answer to "sort by name" either. -->
     <div class="pair pair--sort" id="sortBy" role="tablist">
-      <!-- The phone's chips: each one an icon and the word, so a sort always
-           says what it is. -->
       <button class="pair__opt" type="button" data-sort="ping" role="tab"
               aria-selected="true" aria-label="Fastest first" title="Fastest first">
         <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg><span>Ping</span>
@@ -381,27 +320,14 @@
       </button>
       <i class="pair__slide" aria-hidden="true"></i>
     </div>
-    <!-- Where the exits come from, as a chip at the end of the sorts - the
-         phone's "Everything". The count is the list's first line now. -->
     <button class="listhead listhead--pick" id="sourcePick" type="button"
             aria-haspopup="dialog">
       <span id="sourceName">All locations</span>
       <svg class="listhead__chev ico ico--sm" aria-hidden="true"><use href="#i-chev-down"/></svg>
     </button>
-    <!-- One exit per country, six at a time: a time on every row, so that
-         Fastest first is about what was measured. Stop while it runs. A bolt
-         at the end of the chips rather than a line of its own: that line was
-         40px of a list that showed three countries. The word stays, for a
-         screen reader and for paintTesting(), out of sight. -->
-    <button class="reach__all" id="testAll" type="button"
-            title="Test all: time one exit in every country. Times are from the last test.">
-      <svg class="ico ico--sm" aria-hidden="true"><use href="#i-bolt"/></svg>
-      <span class="sr" id="testAllLabel">Test all</span>
-    </button>
+
     <i class="reach__bar" id="reachBar" aria-hidden="true"></i>
   </div>
-  <!-- How a test is going, and what it found. Empty, and gone, until there
-       is something to say. -->
   <div class="reach__line">
     <p class="note reach__said" id="reachSaid"></p>
   </div>
@@ -414,7 +340,6 @@
 <dialog class="sheet sheet--source" id="srcDlg">
   <header class="sheet__top">
     <span class="sheet__heading">
-      <span class="sheet__kicker">CONNECT FROM</span>
       <span class="sheet__title">Which exits to offer</span>
     </span>
     <button class="icon" id="srcClose" type="button" aria-label="Close">
@@ -426,7 +351,7 @@
     <!-- The same shape as the Server folder pane in Settings, which is the
          other place in the app that names a folder and offers to change it.
          A head, the sentence, then the row of controls. -->
-    <section class="pane pane--strip" style="--i:1">
+    <section class="pane pane--strip">
       <div class="pane__head">
         <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg></span>
         <h3 class="pane__title">A folder of your own</h3>
@@ -448,7 +373,6 @@
 <dialog class="sheet sheet--confirm" id="dropDlg">
   <header class="sheet__top">
     <span class="sheet__heading">
-      <span class="sheet__kicker">SET ASIDE</span>
       <span class="sheet__title">Exits that stopped answering</span>
     </span>
     <button class="icon" id="dropClose" type="button" aria-label="Close">
@@ -458,7 +382,7 @@
   <div class="sheet__body">
     <p class="pane__why drop__lede" id="dropLede"></p>
 
-    <section class="pane pane--major" style="--i:0">
+    <section class="pane pane--major">
       <span class="pane__copy">
         <h3 class="pane__title">Which folders to take them out of</h3>
         <p class="pane__why">The same exit can sit in more than one folder,
@@ -475,7 +399,7 @@
       </div>
     </section>
 
-    <section class="pane pane--strip" id="dropBack" style="--i:1" hidden>
+    <section class="pane pane--strip" id="dropBack" hidden>
       <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg></span>
       <span class="pane__copy">
         <h3 class="pane__title">Put back what was set aside</h3>
@@ -494,7 +418,6 @@
   <div class="floor" id="prefsFloor" aria-hidden="true"></div>
   <header class="sheet__top">
     <span class="sheet__heading">
-      <span class="sheet__kicker">THIS COPY</span>
       <span class="sheet__title" id="prefsTitle">Settings</span>
     </span>
     <!-- Back sits where it is looked for: on the left of the title, not
@@ -531,44 +454,61 @@
          read in a second instead of on the middle of a form. -->
     <nav class="menu" id="prefsMenu">
       <button class="menu__row" type="button" data-goto="accounts">
+        <svg class="ico menu__ico" aria-hidden="true"><use href="#i-key"/></svg>
         <span class="menu__copy">
           <span class="menu__name">Accounts</span>
-          <span class="menu__note">your providers, sign-ins and servers</span>
+          <span class="menu__note">providers and sign-ins</span>
         </span>
         <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
       </button>
       <button class="menu__row" type="button" data-goto="connection">
+        <svg class="ico menu__ico" aria-hidden="true"><use href="#i-route"/></svg>
         <span class="menu__copy">
           <span class="menu__name">Connection</span>
-          <span class="menu__note">where it listens, and what it moves</span>
+          <span class="menu__note">routing, split tunnel, port, Wi-Fi sharing</span>
+        </span>
+        <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
+      </button>
+      <!-- Under Connection because that is where the server it shares is set
+           up, and only once that is done is there anything here to do. Taken
+           off by the page on a backend that does not describe it. -->
+      <button class="menu__row" type="button" data-goto="share" id="shareRow">
+        <svg class="ico menu__ico" aria-hidden="true"><use href="#i-phone"/></svg>
+        <span class="menu__copy">
+          <span class="menu__name">Other devices</span>
+          <span class="menu__note">your own server, by QR code</span>
         </span>
         <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
       </button>
       <button class="menu__row" type="button" data-goto="servers">
+        <svg class="ico menu__ico" aria-hidden="true"><use href="#i-tower"/></svg>
         <span class="menu__copy">
           <span class="menu__name">Servers</span>
-          <span class="menu__note">finding them, pinning them, timing them</span>
+          <span class="menu__note">finding, pinning and timing</span>
         </span>
         <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
       </button>
       <button class="menu__row" type="button" data-goto="look">
+        <svg class="ico menu__ico" aria-hidden="true"><use href="#i-layers"/></svg>
         <span class="menu__copy">
           <span class="menu__name">Look</span>
-          <span class="menu__note">theme, the orb's colours</span>
+          <span class="menu__note">theme</span>
         </span>
         <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
       </button>
       <button class="menu__row" type="button" data-goto="window">
+        <svg class="ico menu__ico" aria-hidden="true"><use href="#i-pin"/></svg>
         <span class="menu__copy">
           <span class="menu__name">Window</span>
-          <span class="menu__note">where it sits, the tray, closing it</span>
+          <span class="menu__note">position, tray, closing</span>
         </span>
         <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
       </button>
       <button class="menu__row" type="button" data-goto="about-this-copy">
+        <svg class="ico menu__ico" aria-hidden="true"><use href="#i-info"/></svg>
         <span class="menu__copy">
           <span class="menu__name">About</span>
-          <span class="menu__note">version, paths, the log</span>
+          <span class="menu__note">where files are kept</span>
         </span>
         <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
       </button>
@@ -587,7 +527,7 @@
          What differs between the providers is only how an account is proved
          - one takes a service credential off a web page, the other needs a
          login and a puzzle - so that is the only place the form differs. -->
-    <section class="pane pane--gate accts" id="prefAccounts" style="--i:0">
+    <section class="pane pane--gate accts" id="prefAccounts">
       <!-- The line across the top: how many providers can connect, as a
            number and a bar, and the way to add another account. -->
       <div class="accthero">
@@ -687,17 +627,159 @@
     <section class="screen" data-screen="connection" hidden>
 
     <!-- 2 - one line, no card. A switch is not a form. -->
-    <section class="pane pane--line" style="--i:1">
+    <div class="cards">
+    <section class="setrow pane--line">
       <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-route"/></svg></span>
       <span class="pane__copy">
         <h3 class="pane__title">Route all of Windows</h3>
-        <p class="pane__why">Sets the Windows proxy so every program goes
-          through the connection. Off, nothing on the machine changes and the
-          proxy simply waits on <span class="mono" id="routeAddr">127.0.0.1:8877</span>
-          for whatever is pointed at it by hand.</p>
+        <p class="pane__why">Every program uses the connection. Off, only programs
+          you point at <span class="mono" id="routeAddr">127.0.0.1:8877</span>
+          yourself do.</p>
       </span>
       <button class="toggle" id="sysProxy" type="button"
-              role="switch" aria-checked="true"><span></span></button>
+              role="switch" aria-checked="true"
+              aria-label="Route all of Windows"><span></span></button>
+    </section>
+
+    <!-- 2b - and how. Two answers of the same weight, so the two-position
+         switch rather than a list. Directly under the switch it qualifies,
+         and dimmed with it: with Windows left alone there is nothing for
+         either answer to do. -->
+    <section class="setrow pane--line pane--stacked" id="prefRouteWith">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-tower"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title" id="routeWithTitle">How Windows is routed</h3>
+        <p class="pane__why"><b>Proxy setting</b> reaches browsers and most apps.
+          <b>Tunnel</b> adds an adapter that catches every program, but carries
+          TCP only: voice calls and UDP games will not work.</p>
+        <div class="seg" id="routeWith" data-with="proxy" role="group"
+             aria-labelledby="routeWithTitle">
+          <i class="seg__slide" aria-hidden="true"></i>
+          <button class="seg__opt" type="button" data-with="proxy"
+                  aria-pressed="true">Proxy setting</button>
+          <button class="seg__opt" type="button" data-with="tun"
+                  aria-pressed="false">Tunnel (TUN)</button>
+        </div>
+        <p class="note" id="routeWithSaid"></p>
+      </span>
+    </section>
+    </div>
+
+    <!-- 2c - and what does not go through it at all. Under the two above
+         because it is the same question asked about less: those say whether
+         and how Windows is carried, this says which parts of it are not.
+
+         One pane, one list, one Apply. The list is the same list whichever
+         way the switch at the top points - "everything except these" and
+         "only these" are two readings of it - so it stays on screen with the
+         switch at Off, dimmed, and can be filled in before it is turned on.
+         Nothing in it takes effect until Apply: with a tunnel up, applying
+         means restarting the adapter, and that should happen once, when
+         somebody says so, rather than once per chip.
+
+         Hidden by the page on a backend that does not describe one. -->
+    <section class="pane" id="prefSplit" data-off="1">
+      <div class="pane__head">
+        <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-split"/></svg></span>
+        <h3 class="pane__title" id="splitTitle">Split tunnel</h3>
+        <span class="pill" id="splitPill" title="What is in force now">off</span>
+      </div>
+      <p class="pane__why">Some traffic is better off not going through Relay
+        at all: <b>Iranian sites</b> that refuse a foreign address or are slow
+        the long way round, a bank, a program that only needs the line you
+        already have. <b>Except these</b> sends everything through Relay but
+        the list. <b>Only these</b> turns it round &mdash; the list goes
+        through Relay and the rest of the machine is left as it was.</p>
+
+      <div class="seg seg--three" id="splitMode" data-split="off" role="group"
+           aria-labelledby="splitTitle">
+        <i class="seg__slide" aria-hidden="true"></i>
+        <button class="seg__opt" type="button" data-split="off"
+                aria-pressed="true">Off</button>
+        <button class="seg__opt" type="button" data-split="bypass"
+                aria-pressed="false">Except these</button>
+        <button class="seg__opt" type="button" data-split="only"
+                aria-pressed="false">Only these</button>
+      </div>
+      <p class="note" id="splitSaid"></p>
+
+      <!-- The list. One recessed box rather than three, because it is one
+           thing - what the switch above is about - and it dims as one. -->
+      <div class="split" id="splitList">
+        <div class="split__iran">
+          <label class="split__copy" for="splitIran">
+            <span class="split__name" id="splitIranName">Iranian sites</span>
+            <span class="split__help" id="splitIranSaid"></span>
+          </label>
+          <button class="toggle toggle--sm" id="splitIran" type="button"
+                  role="switch" aria-checked="false"
+                  aria-labelledby="splitIranName"
+                  aria-describedby="splitIranSaid"><span></span></button>
+        </div>
+
+        <div class="split__part">
+          <p class="split__cap" id="splitAppsCap">Programs</p>
+          <ul class="chips split__chips" id="splitApps"
+              aria-labelledby="splitAppsCap"></ul>
+          <!-- The popover hangs off this row rather than off the button, so
+               it is as wide as the list it adds to and never wider than the
+               window. -->
+          <div class="split__acts" id="splitActs">
+            <button class="btn btn--quiet btn--auto" id="splitPick" type="button">
+              <svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>
+              <span>Add program&hellip;</span>
+            </button>
+            <button class="btn btn--quiet btn--auto" id="splitRunning" type="button"
+                    aria-haspopup="dialog" aria-expanded="false"
+                    aria-controls="splitRun">
+              <svg class="ico" aria-hidden="true"><use href="#i-activity"/></svg>
+              <span>Running now</span>
+            </button>
+            <div class="runpop" id="splitRun" role="dialog"
+                 aria-label="Programs running now" hidden>
+              <label class="runpop__find">
+                <svg class="ico" aria-hidden="true"><use href="#i-search"/></svg>
+                <input id="splitRunFind" type="text" placeholder="Filter"
+                       autocomplete="off" autocapitalize="off" spellcheck="false"
+                       aria-label="Filter the running programs"
+                       aria-controls="splitRunList">
+              </label>
+              <ul class="runpop__list" id="splitRunList"
+                  aria-label="Running programs"></ul>
+              <p class="runpop__none" id="splitRunNone" hidden></p>
+            </div>
+          </div>
+          <p class="note" id="splitAppsNote"></p>
+        </div>
+
+        <div class="split__part">
+          <p class="split__cap" id="splitSitesCap">Sites</p>
+          <ul class="chips split__chips" id="splitSites"
+              aria-labelledby="splitSitesCap"></ul>
+          <div class="field__pair split__add">
+            <input class="field__in mono" id="splitSite" type="text"
+                   placeholder="digikala.com or 5.160.0.0/16"
+                   autocomplete="off" autocapitalize="off" spellcheck="false"
+                   aria-label="A site, address or range to add"
+                   aria-describedby="splitSiteSaid splitSiteHelp">
+            <button class="btn btn--quiet btn--auto" id="splitSiteAdd" type="button">Add</button>
+          </div>
+          <p class="note" id="splitSiteSaid" aria-live="polite"></p>
+          <p class="note note--dim" id="splitSiteHelp"><span class="mono">digikala.com</span>
+            means the site and every subdomain of it. Addresses and ranges
+            such as <span class="mono">5.160.0.0/16</span> work too.</p>
+        </div>
+      </div>
+
+      <p class="note split__warn" id="splitEmpty" hidden>
+        <svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg>
+        <span>Nothing is listed, so everything still goes through Relay.</span>
+      </p>
+      <div class="pane__row split__go">
+        <button class="btn btn--quiet btn--auto" id="splitApply" type="button"
+                disabled>Apply</button>
+        <p class="note" id="splitApplied" role="status" aria-live="polite"></p>
+      </div>
     </section>
 
     <!-- 3 - the number the rest of it hangs off, sitting under the switch
@@ -709,32 +791,81 @@
          is in the (i). What stays below the field is the one line that
          changes what somebody does next, in a box of its own so it reads as
          advice about a program rather than as a third paragraph. -->
-    <section class="pane pane--line pane--stacked" id="prefPort" style="--i:2">
+    <div class="cards">
+    <section class="setrow pane--line" id="prefPort">
       <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-socket"/></svg></span>
       <span class="pane__copy">
-        <h3 class="pane__title">The port it listens on</h3>
-        <p class="pane__why">The proxy serves here whether Windows is routed
-          or not. Move it if something else on this machine already holds
-          <span class="mono">8877</span>. One port answers both
-          <span class="mono">HTTP</span> and <span class="mono">SOCKS5</span>,
-          so there is no second port and nothing to set up, and no username or
-          password either, because it only listens on this machine.</p>
-        <label class="port">
-          <span class="port__cap mono">127.0.0.1</span>
-          <input class="field__in mono" id="listenPort" type="text"
-                 inputmode="numeric" maxlength="5" placeholder="8877"
-                 autocomplete="off" spellcheck="false"
-                 aria-label="The port the proxy listens on">
-        </label>
-        <p class="note" id="portSaid"></p>
-
-        <p class="tip">
-          <svg class="ico" aria-hidden="true"><use href="#i-info"/></svg>
-          <span>Setting this up in <b>Telegram</b>? Pick <b>SOCKS5</b> rather
-            than HTTP. Same port, and it holds one connection open instead of
-            sending every message separately in the clear.</span>
-        </p>
+        <h3 class="pane__title">Port</h3>
+        <p class="pane__why">The proxy listens on <span class="mono">127.0.0.1</span>
+          here, for HTTP and SOCKS5 alike.</p>
       </span>
+      <label class="port">
+        <span class="port__cap mono">127.0.0.1</span>
+        <input class="field__in mono" id="listenPort" type="text"
+               inputmode="numeric" maxlength="5" placeholder="8877"
+               autocomplete="off" spellcheck="false"
+               aria-label="The port the proxy listens on">
+      </label>
+    </section>
+    </div>
+    <p class="note" id="portSaid"></p>
+    <p class="tip">
+      <svg class="ico" aria-hidden="true"><use href="#i-info"/></svg>
+      <span>Move it if something else already holds <span class="mono">8877</span>.
+        In <b>Telegram</b>, pick <b>SOCKS5</b> rather than HTTP: same port, and
+        it holds one connection open instead of sending every message in the clear.</span>
+    </p>
+
+    <!-- Share on Wi-Fi. A switch row, then, once it is on, what to type on the
+         other device. The backend answers slowly (PowerShell), so the page
+         asks on opening and every ten seconds while this screen is showing. -->
+    <section class="pane pane--lan" id="prefLan" hidden>
+      <div class="pane__head">
+        <h3 class="pane__title">Share on Wi-Fi</h3>
+        <span class="pill" id="lanPill" data-state="">off</span>
+      </div>
+      <div class="cards">
+        <section class="setrow pane--line" id="lanRow" data-on="0">
+          <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-phone"/></svg></span>
+          <span class="pane__copy">
+            <h3 class="pane__title">Share this connection on Wi-Fi</h3>
+            <p class="pane__why">Another device on the same network points its
+              proxy setting at this computer and uses the same exit.</p>
+          </span>
+          <button class="toggle" id="lanSwitch" type="button" role="switch"
+                  aria-checked="false" aria-label="Share this connection on Wi-Fi"><span></span></button>
+        </section>
+      </div>
+      <p class="note" id="lanUac">Turning this on shows a Windows permission
+        prompt, once, to open the firewall for it. Turning it off may ask again.</p>
+      <p class="note" id="lanSaid" role="status" aria-live="polite"></p>
+      <div class="lan" id="lanBody" hidden>
+        <h4 class="lan__head">On the other device</h4>
+        <dl class="kv">
+          <div class="kv__row"><dt>Proxy</dt><dd>Manual</dd></div>
+          <div class="kv__row"><dt>Server</dt><dd class="mono" id="lanAddr">—</dd>
+            <button class="btn btn--bare" id="lanCopyAddr" type="button">Copy</button></div>
+          <div class="kv__row"><dt>Port</dt><dd class="mono" id="lanPort">—</dd>
+            <button class="btn btn--bare" id="lanCopyPort" type="button">Copy</button></div>
+        </dl>
+        <p class="note" id="lanOthers" hidden></p>
+        <p class="lan__line" id="lanClients"></p>
+        <p class="lan__line" id="lanFw"></p>
+        <div class="pane__row" id="lanFixRow">
+          <button class="btn btn--quiet btn--auto" id="lanFix" type="button" hidden>Allow in Windows Firewall</button>
+        </div>
+        <p class="note" id="lanLater" hidden>Applies when you reconnect.</p>
+        <details class="expander">
+          <summary class="expander__sum"><span>How to set it on an iPhone</span>
+            <svg class="ico expander__chev" aria-hidden="true"><use href="#i-chev-down"/></svg></summary>
+          <p class="pane__why pane__why--tight">Settings → Wi-Fi → the (i) next to this network →
+            Configure Proxy → Manual. Type the server and port above, leave
+            authentication off, and save. Android has the same under the
+            network's Advanced options.</p>
+        </details>
+        <p class="note">Only devices on the same network can use it. Anyone
+          on that network can, so share it on a network you trust.</p>
+      </div>
     </section>
 
     <!-- 4 - the server of your own. Its own pane rather than a line, because
@@ -747,7 +878,7 @@
          nothing to say which half you were looking at. So each half is boxed,
          captioned with where it happens, and keeps its own (i) for the part
          that only matters the first time. -->
-    <section class="pane pane--gate" id="prefTunnel" style="--i:3">
+    <section class="pane pane--gate" id="prefTunnel">
       <div class="pane__head">
         <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg></span>
         <h3 class="pane__title">Your own tunnel</h3>
@@ -758,9 +889,50 @@
         carrying <b>uploads</b> &mdash; measured on this line, the same file
         went up at 1&#8209;10&nbsp;Mbit with half the attempts dying, and
         40&#8209;80&nbsp;Mbit through a tunnel.</p>
-      <p class="pane__skip">Nothing to do here unless you rent a server.</p>
-
+      <details class="expander" id="tunnelMore">
+        <summary class="expander__sum"><span>Set up a server of your own</span>
+          <svg class="ico expander__chev" aria-hidden="true"><use href="#i-chev-down"/></svg></summary>
       <div class="pane__body">
+        <!-- The short way, first: a server that is already set up printed a
+             key, and the key is the whole of what this pane asks for. The
+             long way stays below for a server that has not been set up yet. -->
+        <div class="step">
+          <p class="step__cap">
+            <svg class="ico" aria-hidden="true"><use href="#i-key"/></svg>
+            <span>Have a key?</span>
+          </p>
+          <p class="pane__why">A server that is set up prints one line starting
+            with <b>relay://</b>. Paste it here and the server, both passwords
+            and its Shadowsocks settings all fill in at once.</p>
+          <label class="field">
+            <span class="field__cap">Key</span>
+            <span class="field__pair">
+              <input class="field__in mono" id="tunnelKey" type="password"
+                     placeholder="relay://…" autocomplete="off" spellcheck="false">
+              <button class="field__peek" id="tunnelKeyPeek" type="button"
+                      aria-pressed="false" aria-label="Show the key">
+                <svg class="ico" aria-hidden="true"><use href="#i-eye"/></svg>
+              </button>
+            </span>
+          </label>
+          <div class="pane__row pane__row--acts">
+            <button class="btn btn--quiet btn--auto" id="tunnelKeyUse" type="button">Use key</button>
+          </div>
+          <!-- Only once the server has said it speaks Shadowsocks. -->
+          <div class="via" id="tunnelViaBox" hidden>
+            <p class="field__cap" id="tunnelViaCap">Way in</p>
+            <div class="seg" id="tunnelVia" data-via="ws" role="group"
+                 aria-labelledby="tunnelViaCap">
+              <i class="seg__slide" aria-hidden="true"></i>
+              <button class="seg__opt" type="button" data-via="ss"
+                      aria-pressed="false">Shadowsocks</button>
+              <button class="seg__opt" type="button" data-via="ws"
+                      aria-pressed="true">WebSocket</button>
+            </div>
+          </div>
+          <p class="note" id="tunnelKeySaid"></p>
+        </div>
+
         <div class="step">
           <p class="step__cap">
             <svg class="ico" aria-hidden="true"><use href="#i-socket"/></svg>
@@ -851,9 +1023,10 @@
           </button>
         </div>
       </div>
+      </details>
     </section>
 
-    <section class="pane pane--strip" style="--i:4">
+    <section class="pane pane--strip">
       <div class="pane__head">
         <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg></span>
         <h3 class="pane__title">Server folder</h3>
@@ -868,12 +1041,130 @@
 
     </section>
 
+    <section class="screen" data-screen="share" hidden>
+
+    <!-- Your server, for something that is not this window.
+
+         A screen of its own rather than one more pane under the tunnel: the
+         tunnel pane is set up once and left alone, and this is visited every
+         time a phone is handed over - with a QR code per location at the end
+         of it, which is a screenful on its own.
+
+         Two panes, because it is two moments. The first is the asking -
+         which places, then the wait while each one's exits are timed from the
+         server. The second is what came back, and stays there to be scanned
+         from until it is made again. -->
+    <section class="pane" id="prefShare">
+      <div class="pane__head">
+        <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-phone"/></svg></span>
+        <h3 class="pane__title" id="shareTitle">Share with other devices</h3>
+        <span class="pill" id="sharePill" data-state="off">not ready</span>
+      </div>
+      <p class="pane__why">An iPhone, or anything with a V2Ray app &mdash;
+        <b>Shadowrocket</b>, <b>Streisand</b>, <b>V2Box</b>, <b>Hiddify</b>,
+        <b>sing-box</b> &mdash; can use your server without Relay on it. The
+        first config comes out at the server itself. Each place you add takes
+        one of the server's numbered slots: the server times that place's
+        exits, keeps the one that uploads best from where it stands, and the
+        slot goes out through it from then on.</p>
+      <p class="pane__skip">Scan the code on the phone, or paste the link.</p>
+
+      <!-- Not ready: the reason, and nothing to press. A list of places and a
+           button that can only fail is a form that wastes the reader's time. -->
+      <p class="note" id="shareWhy" hidden></p>
+
+      <div id="shareBody" hidden>
+        <!-- The places, in one recessed box like the split tunnel's list: the
+             server itself first and fixed, then what was added. -->
+        <div class="split share__where">
+          <div class="split__part">
+            <p class="split__cap" id="shareCap">Where they come out
+              <span class="share__count" id="shareCount"></span></p>
+            <ul class="chips split__chips share__chips" id="shareChips"
+                aria-labelledby="shareCap"></ul>
+            <div class="split__acts" id="shareActs">
+              <button class="btn btn--quiet btn--auto" id="shareAdd" type="button"
+                      aria-haspopup="dialog" aria-expanded="false"
+                      aria-controls="sharePop">
+                <svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>
+                <span>Add a place&hellip;</span>
+              </button>
+              <div class="runpop sharepop" id="sharePop" role="dialog"
+                   aria-label="Places to add" hidden>
+                <label class="runpop__find">
+                  <svg class="ico" aria-hidden="true"><use href="#i-search"/></svg>
+                  <input id="shareFind" type="text" placeholder="Country or city"
+                         autocomplete="off" autocapitalize="off" spellcheck="false"
+                         aria-label="Filter the places"
+                         aria-controls="shareList">
+                </label>
+                <!-- Inside the list rather than under the chips: the list
+                     covers that line, and this is where the next press is. -->
+                <p class="sharepop__full" id="shareFull" role="status" hidden></p>
+                <ul class="runpop__list sharepop__list" id="shareList"
+                    aria-label="Places"></ul>
+                <p class="runpop__none" id="shareNone" hidden></p>
+              </div>
+            </div>
+            <p class="note" id="shareLimit" aria-live="polite"></p>
+          </div>
+        </div>
+
+        <div class="pane__row share__go">
+          <button class="btn btn--quiet btn--auto" id="shareMake" type="button">Make configs</button>
+          <button class="btn btn--quiet btn--auto" id="shareStop" type="button" hidden>Cancel</button>
+          <p class="note" id="shareSaid" role="status" aria-live="polite"></p>
+        </div>
+
+        <!-- One line per place while the server times it. -->
+        <ol class="runs" id="shareRuns" aria-label="Progress" hidden></ol>
+      </div>
+    </section>
+
+    <!-- What came back. A card per slot, each with its own kind of link
+         and the code for it; the strip at the top does the same for all
+         of them at once, and decides what the two Copy buttons copy. -->
+    <section class="pane pane--major" id="shareOut" hidden>
+      <div class="pane__head">
+        <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-key"/></svg></span>
+        <h3 class="pane__title">The configs</h3>
+        <span class="pill pill--quiet" id="shareAt"></span>
+      </div>
+      <p class="share__warn">
+        <svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg>
+        <span>These links carry access to your server &mdash; share them like a password.</span>
+      </p>
+      <div class="share__top">
+        <div class="seg" id="shareKind" data-proto="vless" role="group"
+             aria-label="Which kind of link, for every config">
+          <i class="seg__slide" aria-hidden="true"></i>
+          <button class="seg__opt" type="button" data-proto="vless"
+                  aria-pressed="true">VLESS</button>
+          <button class="seg__opt" type="button" data-proto="vmess"
+                  aria-pressed="false">VMess</button>
+        </div>
+        <span class="share__copies">
+          <button class="btn btn--quiet btn--auto" id="shareCopyAll" type="button">
+            <svg class="ico" aria-hidden="true"><use href="#i-copy"/></svg>
+            <span>Copy all</span>
+          </button>
+          <button class="btn btn--quiet btn--auto" id="shareCopySub" type="button">
+            <svg class="ico" aria-hidden="true"><use href="#i-copy"/></svg>
+            <span>Copy subscription</span>
+          </button>
+        </span>
+      </div>
+      <ul class="qrs" id="shareCards" aria-label="One config per slot"></ul>
+    </section>
+
+    </section>
+
     <section class="screen" data-screen="servers" hidden>
 
     <!-- 5 · a folder in, a folder out, and the one decision in between.
          Shaped as the route it describes rather than as another form: three
          nodes on a line, which is what the operation is. -->
-    <section class="pane pane--pipe" id="prefPin" style="--i:5">
+    <section class="pane pane--pipe" id="prefPin">
       <div class="pane__head">
         <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-pin"/></svg></span>
         <h3 class="pane__title">Pin them to real addresses</h3>
@@ -978,7 +1269,7 @@
 
     <!-- 5½ · the light one. One exit per country, timed by how quickly its
          proxy answers - what the list's Fastest first is made of. -->
-    <section class="pane" id="prefQuick" style="--i:6">
+    <section class="pane" id="prefQuick">
       <div class="pane__head">
         <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-bolt"/></svg></span>
         <h3 class="pane__title">Quick timing</h3>
@@ -1004,7 +1295,7 @@
     </section>
 
     <!-- 6 · the heavy one -->
-    <section class="pane pane--major" id="prefSweep" style="--i:6">
+    <section class="pane pane--major" id="prefSweep">
       <div class="pane__head">
         <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg></span>
         <h3 class="pane__title">Time the servers properly</h3>
@@ -1200,36 +1491,16 @@
          right-clicking an icon in the corner of the taskbar is one most
          people never find. Both places change the same setting. -->
     <section class="screen" data-screen="look" hidden>
-
-    <section class="pane" style="--i:1">
-      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg></span>
-      <span class="pane__copy">
-        <h3 class="pane__title">Theme</h3>
-        <div class="themes" id="themes" role="radiogroup" aria-label="Theme"></div>
-      </span>
-    </section>
-
-    <section class="pane" style="--i:2">
-      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg></span>
-      <span class="pane__copy">
-        <h3 class="pane__title">Orb colours</h3>
-        <p class="pane__why">Traffic light: silver when not connected, yellow
-          while connecting, green when connected, red when it failed. Desktop:
-          the original lavender and teal at rest.</p>
-        <div class="seg" id="orbColors" data-orb="signal">
-          <i class="seg__slide" aria-hidden="true"></i>
-          <button class="seg__opt" type="button" data-orb="signal"
-                  aria-pressed="true">Traffic light</button>
-          <button class="seg__opt" type="button" data-orb="desktop"
-                  aria-pressed="false">Desktop</button>
-        </div>
-      </span>
+    <section class="pane">
+      <div class="pane__head"><h3 class="pane__title">Theme</h3></div>
+      <p class="pane__why">The globe and the status colours follow the connection, not the theme.</p>
+      <div class="themes" id="themes" role="radiogroup" aria-label="Theme"></div>
     </section>
     </section>
-
     <section class="screen" data-screen="window" hidden>
 
-    <section class="pane pane--line" style="--i:1">
+    <div class="cards">
+    <section class="setrow pane--line">
       <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-pin"/></svg></span>
       <span class="pane__copy">
         <h3 class="pane__title">Lock position</h3>
@@ -1240,7 +1511,7 @@
               role="switch" aria-checked="false"><span></span></button>
     </section>
 
-    <section class="pane pane--line" style="--i:2">
+    <section class="setrow pane--line">
       <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg></span>
       <span class="pane__copy">
         <h3 class="pane__title">Always on top</h3>
@@ -1249,8 +1520,9 @@
       <button class="toggle" id="winTop" type="button" data-option="onTop"
               role="switch" aria-checked="false"><span></span></button>
     </section>
+    </div>
 
-    <section class="pane" style="--i:3">
+    <section class="pane">
       <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-x"/></svg></span>
       <span class="pane__copy">
         <h3 class="pane__title">The close button</h3>
@@ -1269,7 +1541,8 @@
       </span>
     </section>
 
-    <section class="pane pane--line" style="--i:4">
+    <div class="cards">
+    <section class="setrow pane--line">
       <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-socket"/></svg></span>
       <span class="pane__copy">
         <h3 class="pane__title">Stay connected after closing</h3>
@@ -1279,13 +1552,14 @@
       <button class="toggle" id="keepOnClose" type="button"
               role="switch" aria-checked="false"><span></span></button>
     </section>
+    </div>
     </section>
 
     <section class="screen" data-screen="about-this-copy" hidden>
 
     <!-- 7 · a footnote, and shaped like one -->
-    <section class="pane pane--foot" style="--i:7">
-      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-info"/></svg></span>
+    <section class="pane pane--foot">
+      <div class="pane__head"><h3 class="pane__title">Where this copy keeps its files</h3></div>
       <p class="path path--bare mono" id="aboutPaths">—</p>
     </section>
     </section>
@@ -1321,48 +1595,37 @@
     <button class="btn btn--quiet btn--auto" id="introSkip" type="button">Skip</button>
   </header>
   <div class="intro__track" id="introTrack">
-    <section class="intro__slide" data-tint="#8c82ff">
+    <section class="intro__slide">
       <div class="intro__art"><svg class="logo-mark logo-mark--draw" viewBox="0 0 256 256" aria-hidden="true">
         <circle class="logo-mark__disc" cx="128" cy="128" r="56"/>
         <path class="logo-mark__ring" pathLength="1" d="M226.48 110.64 A100 100 0 1 1 145.36 29.52"/>
         <circle class="logo-mark__bead" cx="221.3" cy="34.7" r="16"/>
       </svg></div>
-      <h2 class="first__title">Relay</h2>
-      <p class="first__say">A private way out from a line that forges DNS answers and
-        filters VPNs - one click to connect, and it tells you exactly where your
-        traffic comes out.</p>
+      <h2 class="first__title">Choose where your traffic comes out.</h2>
+      <p class="first__say">Relay connects Windows to a VPN server and checks,
+        independently, which country websites see you in.</p>
     </section>
-    <section class="intro__slide" data-tint="#ffc761">
-      <div class="intro__art"><span class="intro__badge"><svg class="ico" aria-hidden="true"><use href="#i-bolt"/></svg></span></div>
-      <h2 class="first__title">The first exit that answers</h2>
-      <p class="first__say">Relay asks dozens of your provider's exits at once and
-        connects through whichever answers first. Pick a country, or let it race
-        them all.</p>
+    <section class="intro__slide">
+      <h2 class="first__title">The first exit that answers.</h2>
+      <p class="first__say">Relay asks dozens of your provider's servers at once
+        and connects through whichever replies first. You can also pick a country.</p>
     </section>
-    <section class="intro__slide" data-tint="#61efbf">
-      <div class="intro__art"><span class="intro__badge"><svg class="ico" aria-hidden="true"><use href="#i-pin"/></svg></span></div>
-      <h2 class="first__title">Pinned to real addresses</h2>
-      <p class="first__say">This line's resolver answers with forged addresses. Relay
-        looks every server up over DNS-over-HTTPS and keeps the address that is
-        really it.</p>
+    <section class="intro__slide">
+      <h2 class="first__title">Real addresses only.</h2>
+      <p class="first__say">This network's DNS can return forged answers for VPN
+        servers. Relay looks each one up over DNS-over-HTTPS and keeps the
+        address that really is its.</p>
     </section>
-    <section class="intro__slide" data-tint="#3dd4ee">
-      <div class="intro__art"><span class="intro__badge"><svg class="ico" aria-hidden="true"><use href="#i-tower"/></svg></span></div>
-      <h2 class="first__title">Or your own server</h2>
-      <p class="first__say">Have a server of your own behind Cloudflare? Relay speaks
-        its tunnel directly - quicker and steadier, with uploads that do not
-        stall.</p>
-    </section>
-    <section class="intro__slide" data-tint="#ff8fb8">
-      <div class="intro__art"><span class="intro__badge"><svg class="ico" aria-hidden="true"><use href="#i-star"/></svg></span></div>
-      <h2 class="first__title">One click, anywhere</h2>
-      <p class="first__say">Click the orb or the Connect button, or use the tray icon
-        by the clock. Hold the orb to reconnect.</p>
+    <section class="intro__slide">
+      <h2 class="first__title">Or a server you rent.</h2>
+      <p class="first__say">Relay can carry traffic through your own server
+        instead, and lets named programs and sites skip the tunnel. Click the
+        globe to connect; hold it to reconnect.</p>
     </section>
   </div>
   <footer class="first__foot">
     <div class="intro__dots" id="introDots" aria-hidden="true">
-      <i></i><i></i><i></i><i></i><i></i>
+      <i></i><i></i><i></i><i></i>
     </div>
     <button class="btn first__go" id="introNext" type="button" autofocus>Next</button>
   </footer>
@@ -1375,32 +1638,27 @@
         <path class="logo-mark__ring" pathLength="1" d="M226.48 110.64 A100 100 0 1 1 145.36 29.52"/>
         <circle class="logo-mark__bead" cx="221.3" cy="34.7" r="16"/>
       </svg></div>
-    <h2 class="first__title">Welcome to Relay</h2>
-    <p class="first__say">How will you connect? Relay needs one of these before it can
-      carry anything - more can be added later under Settings.</p>
+    <h2 class="first__title">Connect with an account or a server.</h2>
+    <p class="first__say">Relay needs one of these before it can carry traffic.
+      More can be added later under Settings.</p>
     <div class="choice">
-      <div class="choice__head">
-        <span class="choice__glyph"><svg class="ico" aria-hidden="true"><use href="#i-key"/></svg></span>
-        <span class="choice__copy">
-          <span class="choice__name">A VPN account</span>
-          <span class="choice__note">Sign in, and Relay gets the provider's servers and
-            pins them to real addresses for you.</span>
-        </span>
-      </div>
+      <span class="choice__copy">
+        <span class="choice__name">A VPN account</span>
+        <span class="choice__note">Sign in, and Relay fetches the provider's
+          servers and pins them to real addresses.</span>
+      </span>
       <div class="choice__pair">
         <button class="btn first__go" type="button" data-provider="surfshark">Surfshark</button>
         <button class="btn first__go" type="button" data-provider="windscribe">Windscribe</button>
       </div>
     </div>
     <button class="choice choice--row" id="welcomeServer" type="button">
-      <span class="choice__head">
-        <span class="choice__glyph"><svg class="ico" aria-hidden="true"><use href="#i-tower"/></svg></span>
-        <span class="choice__copy">
-          <span class="choice__name">My own server</span>
-          <span class="choice__note">A server of yours behind Cloudflare. Set its domain
-            and password.</span>
-        </span>
+      <span class="choice__copy">
+        <span class="choice__name">My own server</span>
+        <span class="choice__note">A server of yours behind Cloudflare. Enter
+          its domain and password.</span>
       </span>
+      <svg class="ico choice__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
     </button>
   </div>
 </dialog>
@@ -1462,7 +1720,6 @@
 <dialog class="sheet sheet--add" id="acctDlg">
   <header class="sheet__top">
     <span class="sheet__heading">
-      <span class="sheet__kicker">ACCOUNTS</span>
       <span class="sheet__title" id="acctDlgTitle">Add an account</span>
     </span>
     <button class="icon" id="acctDlgClose" type="button" aria-label="Close">
@@ -1534,7 +1791,6 @@
 <dialog class="sheet sheet--captcha" id="wsCapDlg">
   <header class="sheet__top">
     <span class="sheet__heading">
-      <span class="sheet__kicker">WINDSCRIBE</span>
       <span class="sheet__title">Prove you are a person</span>
     </span>
     <button class="icon" id="wsCapClose" type="button" aria-label="Close">
@@ -1570,18 +1826,15 @@
 <dialog class="sheet sheet--log" id="log">
   <header class="sheet__top">
     <span class="sheet__heading">
-      <span class="sheet__kicker">THROUGH THE RELAY</span>
       <span class="sheet__title">What went where</span>
     </span>
     <button class="icon" id="logClose" type="button" aria-label="Close">
       <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
     </button>
   </header>
-
-  <!-- One list, two ways of reading it. The same rows grouped by the name
-       they went to, or by the program that asked - because "where did my
-       traffic go" and "what is using my connection" are two questions and a
-       single flat list only ever answers one of them. -->
+  <!-- One table, two ways of reading it: by the name traffic went to, or by
+       the program that asked. The bar under each row is its share of the
+       busiest row. -->
   <div class="logbar">
     <div class="pair" id="logPair" role="tablist">
       <button class="pair__opt" type="button" data-by="host"
@@ -1590,20 +1843,25 @@
               role="tab" aria-selected="false">Program</button>
       <i class="pair__slide" aria-hidden="true"></i>
     </div>
-    <p class="logbar__sum mono" id="logSum">—</p>
+    <input class="field__in logbar__find" id="logFilter" type="search"
+           placeholder="Filter" autocomplete="off" autocapitalize="off"
+           spellcheck="false" aria-label="Filter hosts and programs">
   </div>
-
-  <!-- Focus lands here rather than on the close button, which is what a
-       <dialog> gives it by default - the first thing offered on opening
-       something should not be the way out of it. Arrow keys scroll the list
-       from here too. -->
-  <div class="sheet__list" id="logList" tabindex="-1" autofocus></div>
-
+  <p class="logbar__sum mono" id="logSum">—</p>
+  <div class="lhead" aria-hidden="true">
+    <span id="logColA">Host</span><span id="logColB">Program</span><span>Down</span><span>Up</span>
+  </div>
+  <div class="sheet__list" id="logList" role="table" tabindex="-1" autofocus></div>
   <p class="logfoot" id="logFoot"></p>
 </dialog>
 
 <script src="fuse.js"></script>
-<script src="sphere.js"></script>
+<script src="gsap.min.js"></script>
+<!-- qrcode-generator 1.4.4, MIT, vendored from cdnjs (SRI-checked); the
+     licence is in the file's own header. Draws the codes on Other devices. -->
+<script src="qrcode.min.js"></script>
+<script src="globe-land.js"></script>
+<script src="globe.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

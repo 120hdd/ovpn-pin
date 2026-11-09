@@ -20,6 +20,9 @@
 //	    -> TCP        one CONNECT through the exit, then bytes both ways
 //	    -> UDP :53    the query, re-asked as DoH through the same exit
 //	    -> UDP other  dropped, and said out loud below
+//
+// Unless split tunnelling says a connection goes around the exit, in which
+// case tunnel_split.go carries it on the phone's own line - UDP included.
 package core
 
 import (
@@ -64,6 +67,9 @@ type Tunnel struct {
 
 	// What the way out has been doing, counted from the traffic itself.
 	health health
+
+	// Which connections go around the exit; nil for none. See split.go.
+	split atomic.Pointer[Split]
 
 	closeOnce sync.Once
 }
@@ -230,6 +236,8 @@ func (t *Tunnel) Exit() string {
 		return w.Addr
 	case *TunnelServer:
 		return w.Domain
+	case *ShadowsocksServer:
+		return w.Host
 	}
 	return ""
 }
@@ -263,11 +271,18 @@ type handler Tunnel
 // re-asked over HTTPS, which is a stream. Everything else UDP is dropped, and
 // almost everything copes - QUIC falls back to TCP when it gets nothing, and
 // that fallback is what makes the web work here at all.
-func (h *handler) JudgeFlow(network uint8, _ netip.AddrPort, destination netip.AddrPort, _ []byte) tun.FlowVerdict {
+//
+// Split tunnelling is the one way a UDP flow is let through: one that goes
+// around the exit has nothing stopping it, and NewPacketConnectionEx carries
+// it on the phone's own line.
+func (h *handler) JudgeFlow(network uint8, source netip.AddrPort, destination netip.AddrPort, _ []byte) tun.FlowVerdict {
 	if destination.Port() == 53 {
 		return tun.FlowVerdict{Action: tun.ActionHijackDNS}
 	}
 	if network == ipProtoUDP {
+		if s := (*Tunnel)(h).Split(); s != nil && h.udpGoesStraight(s, source, destination) {
+			return tun.FlowVerdict{Action: tun.ActionAccept}
+		}
 		return tun.FlowVerdict{Action: tun.ActionDrop}
 	}
 	return tun.FlowVerdict{Action: tun.ActionAccept}
@@ -336,10 +351,50 @@ func (h *handler) carry(ctx context.Context, conn net.Conn, source, destination 
 	// Nothing but TCP reaches here, because JudgeFlow drops UDP and hijacks
 	// DNS before either gets this far - so the protocol to look the owner up
 	// under is a constant, and it is named rather than written as 6.
-	row := h.hosts.opened(destination.String(), h.label(destination),
+	label := h.label(destination)
+	row := h.hosts.opened(destination.String(), label,
 		whoOpened(ipProtoTCP, source.String(), destination.String()))
 
-	upstream, spare, err := (*Tunnel)(h).open(destination.String(), 15*time.Second)
+	// Around the exit or through it, decided before either is dialled. The
+	// decision may have read the client's first message to find a name;
+	// if so, that message is held here and sent on below instead of being
+	// read again.
+	var (
+		straight bool
+		held     []byte
+		peeked   bool
+	)
+	if s := (*Tunnel)(h).Split(); s != nil {
+		var sni string
+		name := ""
+		if destination.IsIP() {
+			name = h.names.Name(destination.Addr.Unmap())
+		} else {
+			name = destination.AddrString()
+		}
+		straight, held, sni = h.goesStraight(conn, s, source, destination, name)
+		peeked = held != nil
+		if sni != "" {
+			h.hosts.rename(destination.String(),
+				net.JoinHostPort(sni, strconv.Itoa(int(destination.Port))))
+		}
+	}
+
+	var (
+		upstream net.Conn
+		spare    []byte
+		err      error
+	)
+	if straight {
+		// Not counted towards the exit's health: the exit had no part in it,
+		// and a site that refuses this line says nothing about the exit.
+		upstream, err = dialStraight(ctx, destination.String(), 15*time.Second)
+		if err == nil {
+			h.hosts.straight(row)
+		}
+	} else {
+		upstream, spare, err = (*Tunnel)(h).open(destination.String(), 15*time.Second)
+	}
 	if err != nil {
 		h.hosts.closed(row)
 		return err
@@ -369,7 +424,15 @@ func (h *handler) carry(ctx context.Context, conn net.Conn, source, destination 
 		//
 		// Only the client-to-exit direction, and only the first message.
 		// Everything else goes straight through io.Copy as before.
-		if first, err := firstBytes(conn); err == nil && len(first) > 0 {
+		//
+		// Already read, when split tunnelling needed the name to decide:
+		// sent on as it is, and not looked for twice.
+		if peeked {
+			if _, werr := toExit.Write(held); werr != nil {
+				done <- werr
+				return
+			}
+		} else if first, err := firstBytes(conn); err == nil && len(first) > 0 {
 			if name := sniFrom(first); name != "" {
 				h.hosts.rename(destination.String(),
 					net.JoinHostPort(name, strconv.Itoa(int(destination.Port))))
@@ -402,13 +465,25 @@ func (h *handler) carry(ctx context.Context, conn net.Conn, source, destination 
 	return first
 }
 
-// NewPacketConnectionEx is UDP that got past JudgeFlow, which is none of it.
-// Closed rather than left hanging, so an app that tries gets an answer.
-func (h *handler) NewPacketConnectionEx(_ context.Context, conn N.PacketConn, _ M.Socksaddr, _ M.Socksaddr, onClose N.CloseHandlerFunc) {
-	conn.Close()
-	if onClose != nil {
-		onClose(errors.New("this exit is an HTTPS proxy, and CONNECT carries no UDP"))
+// NewPacketConnectionEx is UDP that got past JudgeFlow: only ever a flow
+// split tunnelling sends around the exit, carried on the phone's own line.
+// Anything else - which JudgeFlow should not have let by - is closed rather
+// than left hanging, so an app that tries gets an answer.
+func (h *handler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, _ M.Socksaddr, _ M.Socksaddr, onClose N.CloseHandlerFunc) {
+	if (*Tunnel)(h).Split() == nil {
+		conn.Close()
+		if onClose != nil {
+			onClose(errors.New("this exit is an HTTPS proxy, and CONNECT carries no UDP"))
+		}
+		return
 	}
+	go func() {
+		err := carryUDP(ctx, conn)
+		conn.Close()
+		if onClose != nil {
+			onClose(err)
+		}
+	}()
 }
 
 // NewDNSPacket re-asks one DNS query over HTTPS, through the exit.
@@ -421,7 +496,7 @@ func (h *handler) NewDNSPacket(payload []byte, _ M.Socksaddr, destination M.Sock
 	copy(query, payload)
 
 	go func() {
-		answer, err := h.askDNS(query)
+		answer, err := h.askDNSFor(query)
 		if err != nil || len(answer) == 0 {
 			// Nothing written. The phone's resolver retries and then gives
 			// up, which is the same thing it does for a dropped packet -

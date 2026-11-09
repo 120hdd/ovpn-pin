@@ -65,8 +65,17 @@ type Client struct {
 
 	// The multiplexed session, when the way out is the user's own server.
 	// Held apart from the tunnel because it outlives a single connection and
-	// has to be closed by hand.
-	server *core.TunnelServer
+	// has to be closed by hand. (Over Shadowsocks there is no session, and
+	// closing it is a no-op - but it is held the same way.)
+	server core.ServerWay
+
+	// Which connections go around the exit, as SetSplit last decided -
+	// applied to each tunnel as it starts. nil for none.
+	split *core.Split
+
+	// The proxy sharing the way out with the LAN, nil when off. See
+	// lanproxy.go; stopped with the tunnel it borrows from.
+	lan *core.LANProxy
 
 	// Exits given up on while connected, by address. Kept out of the next
 	// race so that replacing an exit that stopped carrying does not pick the
@@ -433,6 +442,7 @@ func (c *Client) StartTunnel(fd int, mtu int, addr, name, provider string) error
 	if err != nil {
 		return err
 	}
+	t.SetSplit(c.split)
 	c.tunnel = t
 	// So that anything this app fetches for itself - a provider server list,
 	// a sign-in - goes through the tunnel rather than around it. It would
@@ -466,6 +476,7 @@ func (c *Client) StartServerTunnel(fd int, mtu int, cfg *ServerConfig) error {
 		srv.Close()
 		return err
 	}
+	t.SetSplit(c.split)
 	c.tunnel = t
 	c.server = srv
 	core.SetLive(srv)
@@ -474,9 +485,15 @@ func (c *Client) StartServerTunnel(fd int, mtu int, cfg *ServerConfig) error {
 
 func (c *Client) StopTunnel() error {
 	c.mu.Lock()
-	t, srv := c.tunnel, c.server
-	c.tunnel, c.server = nil, nil
+	t, srv, lan := c.tunnel, c.server, c.lan
+	c.tunnel, c.server, c.lan = nil, nil, nil
 	c.mu.Unlock()
+
+	// First: a shared device's connections go through the way that is about
+	// to be closed, and would otherwise fail one by one.
+	if lan != nil {
+		lan.Close()
+	}
 
 	// Before either is closed, so nothing starts a fetch through a way out
 	// that is halfway shut.

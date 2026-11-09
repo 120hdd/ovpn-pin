@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -87,6 +88,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.erelay.relay.ui.theme.Mono
 import com.erelay.relay.ui.theme.Shape
+import com.erelay.relay.ui.theme.Space
 import com.erelay.relay.ui.theme.Tone
 import com.erelay.relay.ui.theme.Type
 
@@ -112,6 +114,8 @@ fun Modifier.press(
     sink: Boolean = false,
     feel: HapticFeedbackType? = HapticFeedbackType.ContextClick,
     source: MutableInteractionSource? = null,
+    /** How far a [sink] gives: a key's worth by default, less for a wide field. */
+    sinkTo: Float = 0.965f,
     onClick: () -> Unit,
 ): Modifier = composed {
     val source = source ?: remember { MutableInteractionSource() }
@@ -122,7 +126,7 @@ fun Modifier.press(
     // is, and fade rather than blink off when it lifts.
     val lit by animateFloatAsState(if (pressed && enabled) 1f else 0f,
         tween(if (pressed) 40 else 280), label = "lit")
-    val scale by animateFloatAsState(if (pressed && enabled && sink) 0.965f else 1f,
+    val scale by animateFloatAsState(if (pressed && enabled && sink) sinkTo else 1f,
         spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow), label = "sink")
     this
         .graphicsLayer {
@@ -142,28 +146,19 @@ fun Modifier.press(
         }
 }
 
-/** The page behind everything: near-black with the faint violet light at the top. */
+/** The page behind everything: the theme's bg, flat. Nothing glows. */
 @Composable
 fun Backdrop(content: @Composable () -> Unit) {
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Tone.bg)
-            .background(Brush.radialGradient(
-                listOf(Tone.glow, Color.Transparent),
-                center = androidx.compose.ui.geometry.Offset(540f, 0f), radius = 1400f)),
-    ) { content() }
+    Box(Modifier.fillMaxSize().background(Tone.bg)) { content() }
 }
 
 /**
- * A full-screen sheet, the desktop's dialogs: rises 12dp while fading in,
- * sinks 10 on the way out. Kicker over title, a close button, and a back
- * arrow when there is somewhere to go back to.
+ * A full-screen sheet: the title, a close button, and a back arrow when there
+ * is somewhere to go back to.
  */
 @Composable
 fun Sheet(
     open: Boolean,
-    kicker: String,
     title: String,
     onClose: () -> Unit,
     onBack: (() -> Unit)? = null,
@@ -183,25 +178,26 @@ fun Sheet(
             // than stretching a list of rows across the whole screen.
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
             Column(Modifier.widthIn(max = CONTENT_MAX).fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                // A short screen gives the list under the title the height
+                // the title's air would have taken.
+                val short = shortScreen()
                 Row(
-                    Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp, top = 18.dp, bottom = 14.dp),
+                    Modifier.fillMaxWidth().padding(start = Space.x5, end = Space.x4,
+                        top = if (short) Space.x2 else Space.x4, bottom = if (short) Space.x2 else Space.x3),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (onBack != null) {
                         IconButton(Glyph.chevLeft, "Back", onBack, quiet = true)
-                        Spacer(Modifier.width(6.dp))
+                        Spacer(Modifier.width(Space.x2))
                     }
-                    Column(Modifier.weight(1f)) {
-                        Text(kicker.uppercase(), style = Type.kicker)
-                        Spacer(Modifier.height(2.dp))
-                        Text(title, style = Type.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    IconButton(Glyph.x, "Close", onClose, ringed = true)
+                    Text(title, style = Type.title, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f))
+                    IconButton(Glyph.x, "Close", onClose)
                 }
                 val body = Modifier.fillMaxWidth().weight(1f)
                 if (scroll) {
-                    Column(body.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)
-                        .padding(bottom = 24.dp), content = content)
+                    Column(body.verticalScroll(rememberScrollState()).padding(horizontal = Space.x4)
+                        .padding(bottom = Space.x6), content = content)
                 } else {
                     Column(body, content = content)
                 }
@@ -214,18 +210,39 @@ fun Sheet(
 /** As wide as a screen's content gets: a large phone's width, and a little more. */
 val CONTENT_MAX = 600.dp
 
+/** The window, in dp: what a screen has to fit into, known before anything is laid out. */
+@Composable
+fun windowDp(): androidx.compose.ui.unit.DpSize {
+    val density = LocalDensity.current
+    val px = androidx.compose.ui.platform.LocalWindowInfo.current.containerSize
+    return with(density) { androidx.compose.ui.unit.DpSize(px.width.toDp(), px.height.toDp()) }
+}
+
+/**
+ * A short phone, or an ordinary one with a large font setting: what the
+ * spacing and the art can shrink for. 700dp of height at the normal size is
+ * where the main screen stopped fitting without a scroll.
+ */
+@Composable
+fun shortScreen(): Boolean {
+    val density = LocalDensity.current
+    return windowDp().height.value / density.fontScale.coerceAtLeast(1f) < 700f
+}
+
 @Composable
 fun IconButton(
     icon: ImageVector, label: String, onClick: () -> Unit,
-    quiet: Boolean = false, ringed: Boolean = false, tint: Color = Tone.textMuted,
+    quiet: Boolean = false, ringed: Boolean = false, tint: Color = Tone.text2,
     size: Dp = 48.dp, enabled: Boolean = true,
+    /** Null when the caller answers the touch itself, with a haptic that says more. */
+    feel: HapticFeedbackType? = HapticFeedbackType.ContextClick,
 ) {
     Box(
         Modifier
             .size(size)
-            .press(enabled, RoundedCornerShape(12.dp), sink = true, onClick = onClick)
+            .press(enabled, RoundedCornerShape(12.dp), sink = true, feel = feel, onClick = onClick)
             .clip(RoundedCornerShape(12.dp))
-            .then(if (ringed) Modifier.border(1.5.dp, Tone.focus.copy(alpha = 0.8f), RoundedCornerShape(12.dp))
+            .then(if (ringed) Modifier.border(1.dp, Tone.strokeStrong, RoundedCornerShape(12.dp))
                   else Modifier),
         contentAlignment = Alignment.Center,
     ) {
@@ -234,75 +251,127 @@ fun IconButton(
     }
 }
 
-/** A pane: the rounded, bordered block every settings screen is made of. */
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+/**
+ * A section of a screen: a subtitle on the bare background, an optional
+ * sentence under it, then whatever the section is - a [Group] of rows, or
+ * plain content. Not a card.
+ */
 @Composable
-fun Pane(
+fun Section(
+    title: String,
     modifier: Modifier = Modifier,
-    icon: ImageVector? = null,
-    title: String? = null,
-    pill: String? = null,
-    pillGood: Boolean = true,
+    note: String? = null,
     help: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Column(
-        modifier
-            .fillMaxWidth()
-            .padding(vertical = 6.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(Tone.surface.copy(alpha = 0.72f))
-            .border(1.dp, Tone.divider, RoundedCornerShape(16.dp))
-            .padding(14.dp),
-    ) {
-        if (title != null) {
-            // The pill sits at the end of the title's line while both fit,
-            // and goes under it when they do not - squeezed in beside it,
-            // a long one left the title a letter wide.
-            FlowRow(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp),
-                itemVerticalAlignment = Alignment.CenterVertically) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (icon != null) {
-                        Box(
-                            Modifier.size(32.dp).clip(RoundedCornerShape(9.dp)).background(Tone.control),
-                            contentAlignment = Alignment.Center,
-                        ) { Icon(icon, null, Modifier.size(16.dp), tint = Tone.textMuted) }
-                        Spacer(Modifier.width(10.dp))
-                    }
-                    Text(title, style = Type.strong, modifier = Modifier.weight(1f, fill = false))
-                    if (help != null) InfoTip(help)
-                }
-                if (pill != null) {
-                    Spacer(Modifier.weight(1f))
-                    Pill(pill, good = pillGood)
-                }
-            }
-            Spacer(Modifier.height(12.dp))
+    Column(modifier.fillMaxWidth().padding(top = Space.x6)) {
+        Row(Modifier.padding(horizontal = Space.x1), verticalAlignment = Alignment.CenterVertically) {
+            Text(title, style = Type.subtitle, modifier = Modifier.weight(1f, fill = false))
+            if (help != null) InfoTip(help)
         }
+        if (note != null) {
+            Text(note, style = Type.caption, modifier = Modifier.padding(horizontal = Space.x1, vertical = Space.x1))
+        }
+        Spacer(Modifier.height(Space.x2))
         content()
     }
 }
 
+/**
+ * A joined list: one surface, an outer radius of 16, 1px separators between
+ * rows ([Sep]) and nothing else between them.
+ */
 @Composable
-fun Pill(text: String, good: Boolean = true, dot: Boolean = false,
-         color: androidx.compose.ui.graphics.Color? = null) {
-    val c = color ?: if (good) Tone.ok else Tone.textOff
-    Row(
-        Modifier
-            .clip(CircleShape)
-            .background(c.copy(alpha = 0.12f))
-            .border(1.dp, c.copy(alpha = 0.22f), CircleShape)
-            .padding(horizontal = 9.dp, vertical = 3.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (dot) {
-            Box(Modifier.size(5.dp).clip(CircleShape).background(c))
-            Spacer(Modifier.width(6.dp))
-        }
-        // A pill is one word or two; broken over two lines it reads as two
-        // pills. The title beside it gives way instead.
-        Text(text, style = Type.eyebrow.copy(color = c, fontSize = 10.sp), maxLines = 1, softWrap = false)
+fun Group(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    val shape = RoundedCornerShape(Shape.card)
+    Column(
+        modifier.fillMaxWidth().clip(shape).background(Tone.surface).border(1.dp, Tone.stroke, shape),
+        content = content,
+    )
+}
+
+/** A group whose content is not rows - fields, a paragraph, a button - with the group's padding. */
+@Composable
+fun Block(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Group(modifier) {
+        Column(Modifier.fillMaxWidth().padding(Space.x4), content = content)
     }
+}
+
+/** The 1px separator between two rows of a [Group]. */
+@Composable
+fun Sep() {
+    Box(Modifier.fillMaxWidth().height(1.dp).background(Tone.stroke))
+}
+
+@Composable
+private fun rowColors() = androidx.compose.material3.ListItemDefaults.colors(containerColor = Color.Transparent)
+
+/**
+ * A settings row: an optional leading icon, the title (body-strong) and its
+ * description (caption), a control on the trailing edge. With [onClick] the
+ * whole row is the target.
+ */
+@Composable
+fun SettingRow(
+    title: String,
+    modifier: Modifier = Modifier,
+    desc: String? = null,
+    icon: ImageVector? = null,
+    onClick: (() -> Unit)? = null,
+    enabled: Boolean = true,
+    /** Instead of [icon]: a flag, a mark. */
+    leading: (@Composable () -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    androidx.compose.material3.ListItem(
+        modifier = modifier
+            .heightIn(min = 56.dp)
+            .then(if (onClick != null) Modifier.clickable(enabled = enabled, onClick = onClick) else Modifier),
+        colors = rowColors(),
+        leadingContent = leading ?: icon?.let { i -> { Icon(i, null, Modifier.size(20.dp), tint = Tone.text2) } },
+        headlineContent = { Text(title, style = Type.strong) },
+        supportingContent = desc?.let { d -> { Text(d, style = Type.caption) } },
+        trailingContent = trailing,
+    )
+}
+
+/** A row whose whole width is a switch. */
+@Composable
+fun SwitchRow(
+    title: String,
+    desc: String?,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    val haptics = LocalHapticFeedback.current
+    val buzz = LocalFeel.current.haptics
+    androidx.compose.material3.ListItem(
+        modifier = modifier
+            .heightIn(min = 56.dp)
+            .toggleable(value = checked, enabled = enabled, role = androidx.compose.ui.semantics.Role.Switch) {
+                if (buzz) haptics.performHapticFeedback(
+                    if (it) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff)
+                onChange(it)
+            },
+        colors = rowColors(),
+        headlineContent = { Text(title, style = Type.strong) },
+        supportingContent = desc?.let { d -> { Text(d, style = Type.caption) } },
+        trailingContent = {
+            androidx.compose.material3.Switch(
+                checked = checked, onCheckedChange = null, enabled = enabled,
+                colors = androidx.compose.material3.SwitchDefaults.colors(
+                    checkedTrackColor = Tone.text, checkedThumbColor = Tone.bg, checkedBorderColor = Color.Transparent,
+                    uncheckedTrackColor = Tone.surface2, uncheckedThumbColor = Tone.text2,
+                    uncheckedBorderColor = Tone.strokeStrong,
+                    disabledCheckedTrackColor = Tone.text.copy(alpha = 0.4f),
+                    disabledUncheckedTrackColor = Tone.surface2.copy(alpha = 0.6f),
+                ),
+            )
+        },
+    )
 }
 
 /** The quiet button: a dark control with a hairline border. */
@@ -316,12 +385,14 @@ fun Btn(
     danger: Boolean = false,
     icon: ImageVector? = null,
 ) {
+    // The emphasised button is the page's own text colour, inverted: nothing
+    // here is coloured for being clickable.
     val bg = when {
-        strong -> Tone.ok
-        else -> Tone.control
+        strong -> Tone.text
+        else -> Tone.surface2
     }
     val fg = when {
-        strong -> Tone.ink
+        strong -> Tone.bg
         danger -> Tone.fail
         else -> Tone.text
     }
@@ -331,18 +402,18 @@ fun Btn(
             .press(enabled, RoundedCornerShape(Shape.control), sink = true, onClick = onClick)
             .clip(RoundedCornerShape(Shape.control))
             .background(if (enabled) bg else bg.copy(alpha = 0.45f))
-            .border(1.dp, if (strong) Color.Transparent else Tone.border, RoundedCornerShape(Shape.control))
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .border(1.dp, if (strong) Color.Transparent else Tone.strokeStrong, RoundedCornerShape(Shape.control))
+            .padding(horizontal = Space.x4, vertical = Space.x3),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
         if (icon != null) {
             Icon(icon, null, Modifier.size(16.dp), tint = if (enabled) fg else fg.copy(alpha = 0.5f))
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(Space.x2))
         }
         // Two lines, broken between words, before it gets smaller: one line
         // with a large font setting cut "Windscribe" off at "Windsc".
-        androidx.compose.foundation.text.BasicText(text, style = Type.button.copy(fontSize = 14.sp,
+        androidx.compose.foundation.text.BasicText(text, style = Type.strong.copy(
             color = if (enabled) fg else fg.copy(alpha = 0.5f), textAlign = TextAlign.Center),
             maxLines = 2, modifier = Modifier.weight(1f, fill = false),
             autoSize = FitText(14.sp, floor = 10.dp))
@@ -367,13 +438,13 @@ fun <T> Segment(options: List<T>, chosen: T, label: (T) -> String, onPick: (T) -
         modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(Tone.bg.copy(alpha = 0.6f))
-            .border(1.dp, Tone.divider, RoundedCornerShape(12.dp))
-            .padding(3.dp),
+            .clip(RoundedCornerShape(Shape.control))
+            .background(Tone.bg)
+            .border(1.dp, Tone.stroke, RoundedCornerShape(Shape.control))
+            .padding(Space.x1),
     ) {
         val inset = 5.dp
-        val base = Type.button.copy(fontSize = 13.sp, textAlign = TextAlign.Center)
+        val base = Type.strong.copy(textAlign = TextAlign.Center)
         val measurer = rememberTextMeasurer()
         val density = LocalDensity.current
         val labels = options.map(label)
@@ -385,23 +456,23 @@ fun <T> Segment(options: List<T>, chosen: T, label: (T) -> String, onPick: (T) -
                 .heightIn(min = 42.dp)
                 .drawBehind {
                     val w = size.width / options.size
-                    drawRoundRect(Tone.controlActive, topLeft = androidx.compose.ui.geometry.Offset(w * at, 0f),
+                    drawRoundRect(Tone.surface2, topLeft = androidx.compose.ui.geometry.Offset(w * at, 0f),
                         size = androidx.compose.ui.geometry.Size(w, size.height),
-                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(9.dp.toPx()))
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(8.dp.toPx()))
                 },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             for ((i, o) in options.withIndex()) {
                 Box(
                     Modifier.weight(1f).heightIn(min = 42.dp)
-                        .press(enabled, RoundedCornerShape(9.dp), feel = HapticFeedbackType.SegmentTick) {
+                        .press(enabled, RoundedCornerShape(8.dp), feel = HapticFeedbackType.SegmentTick) {
                             if (o != chosen) onPick(o)
                         }
-                        .padding(horizontal = inset, vertical = 4.dp),
+                        .padding(horizontal = inset, vertical = Space.x1),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(labels[i], style = base.copy(fontSize = fit.size, lineHeight = 1.15.em,
-                        color = if (o == chosen) Tone.text else Tone.textOff),
+                        color = if (o == chosen) Tone.text else Tone.text3),
                         maxLines = fit.lines, overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -464,38 +535,6 @@ data class FitText(val max: TextUnit, val floor: Dp, val step: TextUnit = 0.5.sp
 }
 
 @Composable
-fun Toggle(on: Boolean, onChange: (Boolean) -> Unit, enabled: Boolean = true) {
-    val x by animateDpAsState(if (on) 20.dp else 0.dp, tween(200, easing = Shape.swing), label = "toggle")
-    Box(
-        Modifier
-            .size(width = 44.dp, height = 24.dp)
-            .press(enabled, CircleShape, sink = true,
-                feel = if (on) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn) { onChange(!on) }
-            .clip(CircleShape)
-            .background(if (on) Tone.ok else Tone.controlActive)
-            .padding(3.dp),
-    ) {
-        Box(Modifier.offset(x = x).size(18.dp).clip(CircleShape)
-            .background(if (on) Tone.ink else Tone.textMuted))
-    }
-}
-
-/** A labelled row with a toggle at the end, and its explanation behind an (i). */
-@Composable
-fun ToggleRow(title: String, help: String?, on: Boolean, onChange: (Boolean) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        // The words wrap in what the switch leaves them; the switch is
-        // never the thing pushed off the edge.
-        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            Text(title, style = Type.strong, modifier = Modifier.weight(1f, fill = false))
-            if (help != null) InfoTip(help)
-        }
-        Spacer(Modifier.width(8.dp))
-        Toggle(on, onChange)
-    }
-}
-
-@Composable
 fun Field(
     value: String,
     onChange: (String) -> Unit,
@@ -511,17 +550,17 @@ fun Field(
             .fillMaxWidth()
             .heightIn(min = 46.dp)
             .clip(RoundedCornerShape(Shape.control))
-            .background(Tone.bg.copy(alpha = 0.7f))
-            .border(1.dp, Tone.border, RoundedCornerShape(Shape.control))
-            .padding(start = 14.dp, end = 6.dp),
+            .background(Tone.bg)
+            .border(1.dp, Tone.strokeStrong, RoundedCornerShape(Shape.control))
+            .padding(start = Space.x4, end = Space.x2),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val style = (if (mono) TextStyle(fontFamily = Mono) else Type.body).copy(color = Tone.text)
-        Box(Modifier.weight(1f).padding(vertical = 12.dp)) {
-            if (value.isEmpty()) Text(placeholder, style = style.copy(color = Tone.textOff))
+        Box(Modifier.weight(1f).padding(vertical = Space.x3)) {
+            if (value.isEmpty()) Text(placeholder, style = style.copy(color = Tone.text3))
             BasicTextField(
                 value = value, onValueChange = onChange, singleLine = true, textStyle = style,
-                cursorBrush = SolidColor(Tone.ok),
+                cursorBrush = SolidColor(Tone.text),
                 visualTransformation = if (secret && !shown) PasswordVisualTransformation()
                     else VisualTransformation.None,
                 keyboardOptions = KeyboardOptions(keyboardType =
@@ -533,7 +572,7 @@ fun Field(
             IconButton(if (shown) Glyph.eyeOff else Glyph.eye, if (shown) "Hide" else "Show",
                 { shown = !shown }, quiet = true, size = 36.dp)
         } else {
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(Space.x2))
         }
     }
 }
@@ -542,13 +581,13 @@ fun Field(
 @Composable
 fun SaidLine(text: String, bad: Boolean = false, modifier: Modifier = Modifier) {
     if (text.isEmpty()) return
-    Text(text, style = Type.small.copy(color = if (bad) Tone.fail else Tone.textMuted),
-        modifier = modifier.padding(top = 8.dp))
+    Text(text, style = Type.caption.copy(color = if (bad) Tone.fail else Tone.text2),
+        modifier = modifier.padding(top = Space.x2))
 }
 
 @Composable
 fun Divider() {
-    Box(Modifier.fillMaxWidth().height(1.dp).background(Tone.divider))
+    Box(Modifier.fillMaxWidth().height(1.dp).background(Tone.stroke))
 }
 
 /**
@@ -569,9 +608,12 @@ fun InfoTip(
     var open by remember { mutableStateOf(false) }
     Box(modifier) {
         IconButton(icon, label, { open = !open }, size = 36.dp,
-            tint = tint ?: if (open) Tone.ok else Tone.textOff)
+            tint = tint ?: if (open) Tone.text else Tone.text3)
         if (open) {
             val margin = with(androidx.compose.ui.platform.LocalDensity.current) { 16.dp.roundToPx() }
+            // 320 wide, or the window less its margins on a phone narrower
+            // than that: a 320dp phone had the card's right edge off-screen.
+            val widest = minOf(320.dp, windowDp().width - 32.dp).coerceAtLeast(160.dp)
             androidx.compose.ui.window.Popup(
                 popupPositionProvider = remember(margin) { BelowAnchor(margin) },
                 onDismissRequest = { open = false },
@@ -585,13 +627,15 @@ fun InfoTip(
                             initialScale = 0.94f)) {
                     Box(
                         Modifier
-                            .widthIn(max = 320.dp)
-                            .shadow(18.dp, RoundedCornerShape(14.dp))
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(Tone.controlActive)
-                            .border(1.dp, Tone.ok.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
+                            .widthIn(max = widest)
+                            .shadow(12.dp, RoundedCornerShape(Shape.control),
+                                ambientColor = Color.Black.copy(alpha = if (Tone.light) 0.12f else 0.32f),
+                                spotColor = Color.Black.copy(alpha = if (Tone.light) 0.12f else 0.32f))
+                            .clip(RoundedCornerShape(Shape.control))
+                            .background(Tone.surface2)
+                            .border(1.dp, Tone.strokeStrong, RoundedCornerShape(Shape.control))
                             .tap { open = false }
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                            .padding(horizontal = Space.x4, vertical = Space.x3),
                     ) {
                         Text(text, style = Type.body.copy(color = Tone.text))
                     }
@@ -618,37 +662,62 @@ private class BelowAnchor(private val margin: Int) : androidx.compose.ui.window.
     }
 }
 
-/** The rows of the settings menu: a title, a line under it, a chevron. */
-@Composable
-fun MenuRow(title: String, note: String, onClick: () -> Unit) {
-    val source = remember { MutableInteractionSource() }
-    val pressed by source.collectIsPressedAsState()
-    val nudge by androidx.compose.animation.core.animateDpAsState(if (pressed) 4.dp else 0.dp,
-        spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium), label = "nudge")
-    val tint by androidx.compose.animation.animateColorAsState(
-        if (pressed) Tone.ok else Tone.textOff, tween(if (pressed) 60 else 300), label = "chev")
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .press(source = source, onClick = onClick)
-            .background(Tone.ok.copy(alpha = if (pressed) 0.05f else 0f))
-            .padding(horizontal = 16.dp, vertical = 18.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = Type.strong)
-            Spacer(Modifier.height(4.dp))
-            Text(note, style = Type.small.copy(color = Tone.textMuted))
-        }
-        Icon(Glyph.chevRight, null, Modifier.offset(x = nudge).size(16.dp), tint = tint)
-    }
-}
-
 @Composable
 fun RowScope.Grow() = Spacer(Modifier.weight(1f))
 
 @Composable
 fun ButtonRow(content: @Composable RowScope.() -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
+    Row(Modifier.fillMaxWidth().padding(top = Space.x3), horizontalArrangement = Arrangement.spacedBy(Space.x2),
         verticalAlignment = Alignment.CenterVertically, content = content)
+}
+
+/** A caption over a field: what to type, and a quiet word when it is optional. */
+@Composable
+fun FieldLabel(text: String, hint: String? = null) {
+    Row(Modifier.padding(start = Space.x1, bottom = Space.x1), verticalAlignment = Alignment.CenterVertically) {
+        Text(text, style = Type.strong, modifier = Modifier.weight(1f, fill = false))
+        if (hint != null) Text("  $hint", style = Type.caption.copy(color = Tone.text3))
+    }
+}
+
+/** A row's trailing chevron: this opens something. */
+@Composable
+fun Chevron() = Icon(Glyph.chevRight, null, Modifier.size(16.dp), tint = Tone.text3)
+
+/** A joined row that opens another screen. */
+@Composable
+fun NavRow(title: String, desc: String?, onClick: () -> Unit, icon: ImageVector? = null) =
+    SettingRow(title, desc = desc, icon = icon, onClick = onClick) { Chevron() }
+
+/** Checkbox colours: text-coloured when ticked, never the state colour. */
+@Composable
+fun checkColors() = androidx.compose.material3.CheckboxDefaults.colors(
+    checkedColor = Tone.text, checkmarkColor = Tone.bg, uncheckedColor = Tone.strokeStrong,
+    disabledCheckedColor = Tone.text.copy(alpha = 0.4f), disabledUncheckedColor = Tone.stroke,
+)
+
+/** A row whose whole width ticks a checkbox at its leading edge. */
+@Composable
+fun CheckRow(
+    title: String,
+    desc: String?,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    androidx.compose.material3.ListItem(
+        modifier = modifier
+            .heightIn(min = 56.dp)
+            .toggleable(value = checked, enabled = enabled, role = androidx.compose.ui.semantics.Role.Checkbox,
+                onValueChange = onChange),
+        colors = rowColors(),
+        leadingContent = {
+            androidx.compose.material3.Checkbox(checked, null, enabled = enabled, colors = checkColors())
+        },
+        headlineContent = { Text(title, style = Type.strong, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        supportingContent = desc?.let { d -> { Text(d, style = Type.caption, maxLines = 2, overflow = TextOverflow.Ellipsis) } },
+        trailingContent = trailing,
+    )
 }

@@ -42,6 +42,15 @@ type ServerConfig struct {
 	// in hex. Empty until the first Test or connect has seen it; then kept,
 	// and a server showing anything else is refused.
 	Pin string
+
+	// Transport is how the server is reached: "" or "ws" for the WebSocket
+	// (through Cloudflare, or straight to the address), "ss" for Shadowsocks
+	// straight to the address. The SS fields come from the server's key.
+	Transport  string
+	SSMethod   string
+	SSPassword string
+	SSPort     int // exits at the server: single and bulk
+	SSExitPort int // exits at the chosen provider location: multi
 }
 
 func NewServerConfig() *ServerConfig { return &ServerConfig{Mode: "single"} }
@@ -99,10 +108,35 @@ func TestServer(cfg *ServerConfig, timeoutMs int) (string, error) {
 }
 
 // server is the client this config describes, pin and all.
-func (c *ServerConfig) server() *core.TunnelServer {
+//
+// Over Shadowsocks the mode is a port rather than a path: multi dials the
+// port that goes on through the server's exit-chain, the other two the one
+// that exits at the server. Bulk has nothing to add there - Shadowsocks is
+// one connection per connection already.
+func (c *ServerConfig) server() core.ServerWay {
+	if c.Transport == "ss" {
+		port := c.SSPort
+		if core.TunnelMode(c.Mode) == core.ModeMulti {
+			port = c.SSExitPort
+		}
+		return core.NewShadowsocksServer(c.Domain, port, c.SSMethod, c.SSPassword)
+	}
 	srv := core.NewTunnelServer(c.Domain, c.Password, c.edges(), core.TunnelMode(c.Mode))
 	srv.Pin = c.Pin
 	return srv
+}
+
+// ParseKey reads the key the server's installer printed (relay://...) and
+// hands back what it says as JSON, checked: host, pin, password,
+// apiPassword and, when the server offers it, ss {method, password, port,
+// exitPort}. What the settings screen calls when a key is pasted.
+func ParseKey(text string) (string, error) {
+	k, err := core.ParseRelayKey(text)
+	if err != nil {
+		return "", err
+	}
+	out, err := json.Marshal(k)
+	return string(out), err
 }
 
 // withPin adds the certificate the server showed to a seen-as answer, so the

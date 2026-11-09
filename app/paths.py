@@ -73,6 +73,21 @@ def gost_exe():
     return None
 
 
+def singbox_exe():
+    """What brings up the adapter in tunnel mode, or None. Looked for where
+    gost is, because it ships the same way: beside the exe, or in tunnel/."""
+    name = 'sing-box.exe' if os.name == 'nt' else 'sing-box'
+    for folder in (DATA_DIR, TUNNEL_DIR):
+        path = os.path.join(folder, name)
+        if os.path.isfile(path):
+            return path
+    for folder in os.environ.get('PATH', '').split(os.pathsep):
+        path = os.path.join(folder.strip('"'), name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
 # The PowerShell half. In the repo it is in windows/, with the rest of the
 # Windows side. The build copies both scripts out of there and puts them
 # beside the exe rather than inside _internal. Both scripts are read-only;
@@ -249,18 +264,35 @@ def servers_dir():
     return os.path.join(DATA_DIR, SERVER_DIRS[0])
 
 
-def worker_argv(ip, host, port, auth, tunnel=None):
+# Where the worker listens. The loopback is the whole of the default: only
+# this machine can reach the port. LAN_HOST is "Share on Wi-Fi" - every
+# interface, so a phone on the same network can use the machine as its proxy.
+LOOPBACK_HOST = '127.0.0.1'
+LAN_HOST = '0.0.0.0'
+
+
+def worker_argv(ip, host, port, auth, tunnel=None, listen=LOOPBACK_HOST):
     """What to run to get a proxy process, on either side of freezing.
 
     With `tunnel` set the worker carries traffic through a proxy already
     running on this machine instead of dialling an exit, so the address is
     the whole of what it needs: no config, no certificate name, no account.
+
+    `listen` is the address it binds. The loopback unless the person has
+    turned on sharing, in which case LAN_HOST; the worker then refuses
+    anything that is not a local-network address on its own (see
+    client_allowed in core/ovpn-proxy.py). Always passed explicitly, even for
+    the loopback, so the command line says what the process is doing.
     """
     head = [sys.executable] + ([WORKER_FLAG] if FROZEN else [PROXY_PY])
+    # Split tunnelling's rules, which the window rewrites and the worker
+    # reads again on its own - see app/split.py.
+    rules = ['--split', os.path.join(STATE_DIR, 'split.json'),
+             '--listen', listen or LOOPBACK_HOST]
     if tunnel:
-        return head + ['--tunnel', tunnel, '--port', str(port), '--quiet']
+        return head + ['--tunnel', tunnel, '--port', str(port), '--quiet'] + rules
     return head + [ip, '--host', host,
-                   '--port', str(port), '--auth', auth, '--quiet']
+                   '--port', str(port), '--auth', auth, '--quiet'] + rules
 
 
 def point_proxy_module_at_data(px):

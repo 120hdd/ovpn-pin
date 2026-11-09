@@ -7,10 +7,14 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ApplicationInfo
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.VpnService
+import android.os.PersistableBundle
 import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -33,6 +37,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONArray
 import org.json.JSONObject
 import relay.Client
@@ -110,8 +115,45 @@ class RelayCore(private val app: Application) {
     val way: StateFlow<Way> = _way.asStateFlow()
     private val _allowLan = MutableStateFlow(prefs.getBoolean("allowLan", true))
     val allowLan: StateFlow<Boolean> = _allowLan.asStateFlow()
+    private val _lanShare = MutableStateFlow(prefs.getBoolean("lanShare", false))
+    /** Settings → Share this connection: whether to offer the tunnel to the Wi-Fi it is on. */
+    val lanShare: StateFlow<Boolean> = _lanShare.asStateFlow()
+    private val _lanSharePort = MutableStateFlow(prefs.getInt("lanSharePort", 8877))
+    val lanSharePort: StateFlow<Int> = _lanSharePort.asStateFlow()
+    private val _lanSharePassword = MutableStateFlow(prefs.getString("lanSharePassword", "").orEmpty())
+    val lanSharePassword: StateFlow<String> = _lanSharePassword.asStateFlow()
+    private val _lanState = MutableStateFlow(LanShareState())
+    /** What the core says the share is doing right now; refreshed while the screen is visible. */
+    val lanState: StateFlow<LanShareState> = _lanState.asStateFlow()
     private val _tunnel = MutableStateFlow(readTunnel())
     val tunnel: StateFlow<TunnelPlan> = _tunnel.asStateFlow()
+
+    // Up here with the rest of the state rather than beside the functions
+    // that use them, because readService() runs from init and resets one of
+    // them: a property declared below init is still null when init runs.
+    private val _split = MutableStateFlow(readSplit())
+    /** Settings → Split tunnel. The service reads the same prefs when it builds the interface. */
+    val split: StateFlow<SplitPlan> = _split.asStateFlow()
+    private val _iranApps = MutableStateFlow<Set<String>>(emptySet())
+    /** The core's list of Iranian apps, by package. Empty until read, once, off the main thread. */
+    val iranApps: StateFlow<Set<String>> = _iranApps.asStateFlow()
+    private val _splitPending = MutableStateFlow(false)
+    /**
+     * The split tunnel was changed while a tunnel was up, which was built with
+     * the old one. Cleared when that tunnel goes down or another is started.
+     */
+    val splitPending: StateFlow<Boolean> = _splitPending.asStateFlow()
+
+    // Up here for the same reason as the split's: declared below init, a
+    // property is still unset when something launched from init gets to it.
+    private val _export = MutableStateFlow(readExport(ExportRun()))
+    /** Settings → Share with other devices: whether it can run, how it is going, what it made last. */
+    val export: StateFlow<ExportRun> = _export.asStateFlow()
+    private val _exportPicks = MutableStateFlow(prefLines("exportPicks"))
+    /** The locations chosen to share, as pick codes, in the order their slots are given out. */
+    val exportPicks: StateFlow<List<String>> = _exportPicks.asStateFlow()
+    /** Every location on the phone, for the share chooser; null until asked, and after the folder changes. */
+    @Volatile private var shareList: List<Country>? = null
 
     private val _accounts = MutableStateFlow<List<Account>>(emptyList())
     val accounts: StateFlow<List<Account>> = _accounts.asStateFlow()
@@ -205,7 +247,6 @@ class RelayCore(private val app: Application) {
         orbTap = prefs.getBoolean("orbTap", true),
         orbMotion = prefs.getBoolean("orbMotion", true),
         meter = prefs.getBoolean("meter", true),
-        orbColors = prefs.getString("orbColors", "signal") ?: "signal",
     )
 
     fun setFeel(next: Feel) {
@@ -215,7 +256,6 @@ class RelayCore(private val app: Application) {
             .putBoolean("orbTap", next.orbTap)
             .putBoolean("orbMotion", next.orbMotion)
             .putBoolean("meter", next.meter)
-            .putString("orbColors", next.orbColors)
             .apply()
         _feel.value = next
     }
@@ -250,6 +290,7 @@ class RelayCore(private val app: Application) {
             refreshAccounts()
             refreshDead()
         }
+        scope.launch { iranSet() }
         whoami()
     }
 
@@ -282,6 +323,8 @@ class RelayCore(private val app: Application) {
             else -> Mode.OFF
         }
         if (mode != Mode.BUSY) connecting = false
+        // No tunnel, so none built with an old split: the next one reads the new.
+        if (mode == Mode.OFF || mode == Mode.FAIL) _splitPending.value = false
         val was = _conn.value
         _conn.value = Conn(
             mode = mode,
@@ -456,6 +499,7 @@ class RelayCore(private val app: Application) {
     /** Re-read the folder and everything drawn from it. */
     suspend fun refreshList() = withContext(io) {
         forget()
+        shareList = null
         val c = catalogue()
         _countries.value = parseCountries(try { c.countriesJSON() } catch (e: Exception) { "[]" })
         _serverCount.value = c.count().toInt()
@@ -627,21 +671,49 @@ class RelayCore(private val app: Application) {
         if (way == Way.PROVIDER) {
             // One is enough to start: the core drops the exits there is no
             // credential for and only refuses when that leaves nothing.
-            val creds = credentials(Accounts.SURFSHARK) ?: credentials(Accounts.WINDSCRIBE)
-                ?: return Said.no("No account yet. Add one under Settings → Accounts.")
+            //
+            // Each provider's own, and only its own. Surfshark's slot used to
+            // take Windscribe's login when there was no Surfshark account, so
+            // every Surfshark exit was asked with the wrong one and refused -
+            // hidden in a country race by the Windscribe exits beside it, and
+            // the whole answer for a Surfshark city or server picked alone.
+            val surfshark = credentials(Accounts.SURFSHARK)
+            val windscribe = credentials(Accounts.WINDSCRIBE)
+            if (surfshark == null && windscribe == null) {
+                return Said.no("No account yet. Add one under Settings → Accounts.")
+            }
+            // The exact configs behind the row that was tapped, read off the
+            // same catalogue that drew it. The service used to be handed only
+            // the code and work the pool out again from a scan of its own -
+            // through RaceIn, which for years knew country codes and nothing
+            // else. A country always connected; a city ("de/ber"), a provider
+            // ("fr:windscribe") or one server ("file:x.ovpn") raced nothing
+            // whenever the two readings disagreed: a core built before RaceIn
+            // learnt those shapes (nothing fails to link - the signature never
+            // changed), or a city key worked out from notes that had moved on
+            // since the list was drawn. Starred has always been sent this way;
+            // now every pick is, so what is raced is what was on screen.
+            val c = catalogue()
+            val only = when {
+                code != "auto" -> try { c.poolFiles(code) } catch (e: Exception) { "" }
+                _source.value == "starred" -> starredFiles(c)
+                else -> ""
+            }
+            if (code != "auto" && only.isBlank()) {
+                return Said.no("Nothing is left behind that pick - its servers were re-pinned " +
+                    "or set aside. Pick it again from the list.")
+            }
             intent
                 .putExtra(RelayVpnService.EXTRA_PROVIDER, "surfshark")
-                .putExtra(RelayVpnService.EXTRA_USER, creds.first)
-                .putExtra(RelayVpnService.EXTRA_PASSWORD, creds.second)
+                .putExtra(RelayVpnService.EXTRA_USER, surfshark?.first.orEmpty())
+                .putExtra(RelayVpnService.EXTRA_PASSWORD, surfshark?.second.orEmpty())
                 .putExtra(RelayVpnService.EXTRA_CONFIG_DIR, AppFiles.pinned(app).absolutePath)
                 .putExtra(RelayVpnService.EXTRA_COUNTRY, code)
-            credentials(Accounts.WINDSCRIBE)?.let { (user, password) ->
+            windscribe?.let { (user, password) ->
                 intent.putExtra(RelayVpnService.EXTRA_WS_USER, user)
                     .putExtra(RelayVpnService.EXTRA_WS_PASSWORD, password)
             }
-            if (_source.value == "starred") {
-                intent.putExtra(RelayVpnService.EXTRA_ONLY, starredFiles(catalogue()))
-            }
+            if (only.isNotBlank()) intent.putExtra(RelayVpnService.EXTRA_ONLY, only)
         } else {
             val domain = prefs.getString("tunnelDomain", "").orEmpty()
             val password = prefs.getString("tunnelPassword", "").orEmpty()
@@ -670,6 +742,8 @@ class RelayCore(private val app: Application) {
             }
         }
         connecting = true
+        // This one is built from the split as it is now.
+        _splitPending.value = false
         _conn.update { it.copy(mode = Mode.BUSY, failure = null, asked = 0, total = 0) }
         ContextCompat.startForegroundService(app, intent)
         return Said.OK
@@ -997,13 +1071,102 @@ class RelayCore(private val app: Application) {
     private fun edgeList(): List<String> =
         prefs.getString("tunnelEdges", "").orEmpty().lines().map { it.trim() }.filter { it.isNotEmpty() }
 
+    private fun hasSs() = !prefs.getString("tunnelSsPassword", "").isNullOrEmpty()
+
+    private fun viaSs() = hasSs() && prefs.getString("tunnelTransport", "") == "ss"
+
     private fun readTunnel() = TunnelPlan(
         domain = prefs.getString("tunnelDomain", "").orEmpty(),
         hasPassword = !prefs.getString("tunnelPassword", "").isNullOrEmpty(),
         hasApiPassword = !prefs.getString("tunnelApiPassword", "").isNullOrEmpty(),
         edges = edgeList(),
         pin = prefs.getString("tunnelPin", "").orEmpty(),
+        transport = if (viaSs()) "ss" else "ws",
+        hasSs = hasSs(),
+        ssPort = prefs.getInt("tunnelSsPort", 0),
     )
+
+    /**
+     * Sets the whole server up from the key its installer printed: server,
+     * both passwords, the certificate pin and - when the server offers it -
+     * Shadowsocks, which then becomes the way in. Everything is replaced,
+     * because a key is one server's complete description and half of it
+     * mixed with what was there before is a server that exists nowhere.
+     */
+    suspend fun importKey(text: String): Said = withContext(io) {
+        if (RelayVpnService.exitAddress.isNotEmpty() && _way.value != Way.PROVIDER) {
+            return@withContext Said.no("Disconnect first - the tunnel is carrying the connection right now.")
+        }
+        val key = try {
+            JSONObject(Relay.parseKey(text))
+        } catch (e: Exception) {
+            return@withContext Said.no(e.message ?: "That key could not be read.")
+        }
+        val ss = key.optJSONObject("ss")
+        // The locations kept for other devices: an id their links are made
+        // from, and how many. A key from an older installer has neither, and
+        // then the share screen says to run the installer again.
+        val shared = key.optJSONObject("export")?.takeIf { it.optString("id").isNotEmpty() }
+        val exportId = shared?.optString("id").orEmpty()
+        // Links made for another server - or for this one before it was
+        // installed again, with new ids - no longer open anything.
+        val stale = key.optString("host") != prefs.getString("tunnelDomain", "") ||
+            exportId != prefs.getString("tunnelExportId", "")
+        prefs.edit().apply {
+            if (shared != null) {
+                putString("tunnelExportId", exportId)
+                putInt("tunnelExportSlots", shared.optInt("slots"))
+            } else {
+                remove("tunnelExportId"); remove("tunnelExportSlots")
+            }
+            if (stale) remove("exportLast")
+            putString("tunnelDomain", key.optString("host"))
+            putString("tunnelPassword", key.optString("password"))
+            putString("tunnelApiPassword", key.optString("apiPassword"))
+            // The key's pin is the server's own word for its certificate, so
+            // even the first connection is checked against it.
+            putString("tunnelPin", key.optString("pin"))
+            remove("tunnelEdges")
+            if (ss != null) {
+                putString("tunnelSsMethod", ss.optString("method"))
+                putString("tunnelSsPassword", ss.optString("password"))
+                putInt("tunnelSsPort", ss.optInt("port"))
+                putInt("tunnelSsExitPort", ss.optInt("exitPort"))
+                putString("tunnelTransport", "ss")
+            } else {
+                remove("tunnelSsMethod"); remove("tunnelSsPassword")
+                remove("tunnelSsPort"); remove("tunnelSsExitPort")
+                putString("tunnelTransport", "ws")
+            }
+        }.apply()
+        _tunnel.value = readTunnel()
+        _export.update { readExport(it) }
+        Said(true, "Set up for ${key.optString("host")}" +
+            (if (ss != null) ", over Shadowsocks" else "") + ". Press Test to check it carries.")
+    }
+
+    /** Shadowsocks or the WebSocket, for a server whose key offered both. */
+    fun setTunnelTransport(transport: String): Said {
+        if (transport == "ss" && !hasSs()) return Said.no("This server's key had no Shadowsocks.")
+        if (RelayVpnService.exitAddress.isNotEmpty() && _way.value != Way.PROVIDER) {
+            return Said.no("Disconnect first - the tunnel is carrying the connection right now.")
+        }
+        prefs.edit().putString("tunnelTransport", if (transport == "ss") "ss" else "ws").apply()
+        _tunnel.value = readTunnel()
+        return Said(true, if (transport == "ss") "Straight to the server over Shadowsocks."
+            else "Through the WebSocket, as before.")
+    }
+
+    /** The Shadowsocks settings onto a config, when that is the way in. */
+    private fun applySs(cfg: relay.ServerConfig): Boolean {
+        if (!viaSs()) return false
+        cfg.transport = "ss"
+        cfg.ssMethod = prefs.getString("tunnelSsMethod", "").orEmpty()
+        cfg.ssPassword = prefs.getString("tunnelSsPassword", "").orEmpty()
+        cfg.ssPort = prefs.getInt("tunnelSsPort", 0).toLong()
+        cfg.ssExitPort = prefs.getInt("tunnelSsExitPort", 0).toLong()
+        return true
+    }
 
     /**
      * Blank means unchanged, not cleared: the passwords are never shown back,
@@ -1016,10 +1179,19 @@ class RelayCore(private val app: Application) {
             putString("tunnelDomain", domain.trim())
             if (password.isNotEmpty()) putString("tunnelPassword", password)
             if (apiPassword.isNotEmpty()) putString("tunnelApiPassword", apiPassword)
-            // A new server: its edges and its certificate were the old one's.
-            if (domain.trim() != was) { remove("tunnelEdges"); remove("tunnelPin") }
+            // A new server: its edges, its certificate and its Shadowsocks
+            // were the old one's - and so were its shared locations, and
+            // the links made for them.
+            if (domain.trim() != was) {
+                remove("tunnelEdges"); remove("tunnelPin")
+                remove("tunnelSsMethod"); remove("tunnelSsPassword")
+                remove("tunnelSsPort"); remove("tunnelSsExitPort")
+                putString("tunnelTransport", "ws")
+                remove("tunnelExportId"); remove("tunnelExportSlots"); remove("exportLast")
+            }
         }.apply()
         _tunnel.value = readTunnel()
+        _export.update { readExport(it) }
     }
 
     /**
@@ -1049,6 +1221,210 @@ class RelayCore(private val app: Application) {
         prefs.edit().putBoolean("allowLan", on).apply()
         _allowLan.value = on
         return RelayVpnService.exitAddress.isNotEmpty()
+    }
+
+    // -- sharing on the Wi-Fi ---------------------------------------------------------
+    //
+    // The service starts the share after the tunnel is up when the pref is on
+    // (RelayVpnService.shareOnLan), and the core ends it with the tunnel. These
+    // are for the switch pressed while connected, and for the screen's view of it.
+
+    private fun tunnelUp() = RelayVpnService.exitAddress.isNotEmpty()
+
+    /** Starts, restarts or stops the share to match the prefs, when a tunnel is up. */
+    private fun applyLanShare(): Said {
+        if (!tunnelUp()) return Said.OK
+        RelayVpnService.stopLanShare()
+        if (_lanShare.value) {
+            try {
+                RelayVpnService.startLanShare(_lanSharePort.value, _lanSharePassword.value)
+            } catch (e: Exception) {
+                Log.w(RelayVpnService.TAG, "sharing on the local network: ${e.message}")
+                return Said(false, e.message ?: "Could not start sharing.")
+            }
+        }
+        return Said.OK
+    }
+
+    /** On: starts at once when connected, else with the next connect. */
+    suspend fun setLanShare(on: Boolean): Said = withContext(io) {
+        prefs.edit().putBoolean("lanShare", on).apply()
+        _lanShare.value = on
+        val r = applyLanShare()
+        readLanShare()
+        r
+    }
+
+    /** A port from 1024 up: below that Android does not let an app listen. */
+    suspend fun setLanSharePort(port: Int): Said {
+        if (port !in 1024..65535) return Said(false, "Use a port between 1024 and 65535.")
+        return withContext(io) {
+            prefs.edit().putInt("lanSharePort", port).apply()
+            _lanSharePort.value = port
+            val r = if (_lanShare.value) applyLanShare() else Said.OK
+            readLanShare()
+            r
+        }
+    }
+
+    suspend fun setLanSharePassword(password: String): Said = withContext(io) {
+        val clean = password.trim()
+        prefs.edit().putString("lanSharePassword", clean).apply()
+        _lanSharePassword.value = clean
+        val r = if (_lanShare.value) applyLanShare() else Said.OK
+        readLanShare()
+        r
+    }
+
+    /** Asks the core how the share stands. Cheap; called every few seconds while Settings shows it. */
+    suspend fun refreshLanShare() = withContext(io) { readLanShare() }
+
+    private fun readLanShare() {
+        _lanState.value = try {
+            val j = JSONObject(RelayVpnService.lanShareJSON())
+            val a = j.optJSONArray("addrs")
+            LanShareState(
+                on = j.optBoolean("on"),
+                port = j.optInt("port"),
+                addrs = List(a?.length() ?: 0) { a!!.getString(it) },
+                clients = j.optInt("clients"),
+            )
+        } catch (e: Exception) {
+            LanShareState()
+        }
+    }
+
+    // -- the split tunnel ----------------------------------------------------------
+    //
+    // Four prefs, read by the service when it builds the interface - which is
+    // the only moment they can mean anything, since which apps an interface
+    // admits is fixed when it is established. So, like the LAN switch, a
+    // change takes effect on the next connect, and [splitPending] says so
+    // while a tunnel built with the old one is still up.
+
+    private fun prefLines(key: String): List<String> =
+        prefs.getString(key, "").orEmpty().lines().map { it.trim() }.filter { it.isNotEmpty() }
+
+    private fun readSplit() = SplitPlan(
+        mode = SplitMode.of(prefs.getString("splitMode", "off")),
+        iran = prefs.getBoolean("splitIran", true),
+        apps = prefLines("splitApps").toSet(),
+        domains = prefLines("splitDomains").distinct(),
+    )
+
+    /** Saved, and noted as waiting for a reconnect if a tunnel is up or on its way. */
+    private fun changedSplit(next: SplitPlan) {
+        _split.value = next
+        val mode = _conn.value.mode
+        if (mode == Mode.ON || mode == Mode.BUSY) _splitPending.value = true
+    }
+
+    fun setSplitMode(mode: SplitMode) {
+        prefs.edit().putString("splitMode", mode.key).apply()
+        changedSplit(_split.value.copy(mode = mode))
+    }
+
+    fun setSplitIran(on: Boolean) {
+        prefs.edit().putBoolean("splitIran", on).apply()
+        changedSplit(_split.value.copy(iran = on))
+    }
+
+    fun setSplitApp(pkg: String, on: Boolean) {
+        val was = _split.value.apps
+        val next = if (on) was + pkg else was - pkg
+        if (next == was) return
+        prefs.edit().putString("splitApps", next.joinToString("\n")).apply()
+        changedSplit(_split.value.copy(apps = next))
+    }
+
+    /**
+     * Add what was typed: a domain (which takes every name under it), an
+     * address, or a range. Several at once when they are pasted together,
+     * split on spaces and commas - and then all or none, so a typo is fixed
+     * in the field rather than hunted for in the list. The core says what is
+     * acceptable and how it is written down, the same check the desktop's
+     * list goes through.
+     */
+    suspend fun addSplitDomain(text: String): Said = withContext(io) {
+        val typed = text.split(Regex("[\\s,]+")).map { it.trim() }.filter { it.isNotEmpty() }
+        if (typed.isEmpty()) return@withContext Said.no("Type a domain, an address or a range.")
+        val got = mutableListOf<String>()
+        for (t in typed) {
+            val n = try {
+                Relay.splitNormalize(t).trim()
+            } catch (e: Exception) {
+                ""
+            }
+            if (n.isEmpty()) {
+                return@withContext Said.no("“$t” is not a domain, an IPv4 address or a range " +
+                    "like 5.6.0.0/16.")
+            }
+            if (n !in got) got += n
+        }
+        val had = _split.value.domains
+        val fresh = got.filter { it !in had }
+        if (fresh.isEmpty()) {
+            return@withContext Said(true,
+                if (got.size == 1) "${got[0]} is already on the list." else "Those are already on the list.")
+        }
+        val next = had + fresh
+        prefs.edit().putString("splitDomains", next.joinToString("\n")).apply()
+        changedSplit(_split.value.copy(domains = next))
+        Said(true, if (fresh.size == 1) "Added ${fresh[0]}." else "Added ${fresh.size}.")
+    }
+
+    fun removeSplitDomain(entry: String) {
+        val next = _split.value.domains.filter { it != entry }
+        prefs.edit().putString("splitDomains", next.joinToString("\n")).apply()
+        changedSplit(_split.value.copy(domains = next))
+    }
+
+    /**
+     * The core's list of Iranian apps, read once. Empty is not remembered as
+     * the answer, so a core that could not say the first time is asked again.
+     */
+    private fun iranSet(): Set<String> {
+        _iranApps.value.takeIf { it.isNotEmpty() }?.let { return it }
+        val got = try {
+            Relay.splitIranApps().lines().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        } catch (e: Exception) {
+            emptySet<String>()
+        }
+        _iranApps.value = got
+        return got
+    }
+
+    /**
+     * The apps the split tunnel's picker offers: everything with an icon in
+     * the launcher, which is what a person thinks of as their apps - not the
+     * hundreds of services and providers behind them - sorted by name, and
+     * never this one, which the tunnel already leaves out of itself.
+     */
+    suspend fun installedApps(): List<InstalledApp> = withContext(io) {
+        val pm = app.packageManager
+        val iran = iranSet()
+        val launchable = try {
+            pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+                .mapNotNull { it.activityInfo?.packageName }.toSet()
+        } catch (e: Exception) {
+            emptySet<String>()
+        }
+        val installed = try {
+            pm.getInstalledApplications(0)
+        } catch (e: Exception) {
+            emptyList<ApplicationInfo>()
+        }
+        installed
+            .filter { it.packageName != app.packageName && it.packageName in launchable }
+            .map { info ->
+                InstalledApp(
+                    pkg = info.packageName,
+                    label = pm.getApplicationLabel(info).toString().ifBlank { info.packageName },
+                    iranian = info.packageName in iran,
+                    system = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0,
+                )
+            }
+            .sortedBy { it.label.lowercase() }
     }
 
     /** Look for a way in now: fifty-odd TLS handshakes, a few seconds. */
@@ -1084,6 +1460,16 @@ class RelayCore(private val app: Application) {
         cfg.mode = mode
         cfg.edges = prefs.getString("tunnelEdges", "").orEmpty()
         cfg.pin = prefs.getString("tunnelPin", "").orEmpty()
+        // Straight to the address: there is no other way in to go looking
+        // for, so a failure is the answer rather than a reason to scan.
+        if (applySs(cfg)) {
+            return@withContext try {
+                ask(cfg)
+            } catch (e: Exception) {
+                Said.no("$domain:${cfg.ssPort} did not carry anything over Shadowsocks: " +
+                    (e.message ?: e.toString()).take(140))
+            }
+        }
         try {
             ask(cfg)
         } catch (first: Exception) {
@@ -1149,7 +1535,7 @@ class RelayCore(private val app: Application) {
     /** What is running on the server, and whether it answers. */
     fun statusCommand(): String =
         "systemctl --no-pager --lines=0 status gost sing-box nginx | grep -E '^. |Active:';" +
-            " ss -lnt | grep -E ':443 |127.0.0.1:(1000[0-3]|18080) '"
+            " ss -lnt | grep -E ':443 |:838[89] |127.0.0.1:(1000[0-3]|18080) '"
 
     /** Takes the tunnel off the server again, leaving anything else there alone. */
     fun uninstallCommand(): String {
@@ -1162,9 +1548,355 @@ class RelayCore(private val app: Application) {
             " systemctl daemon-reload; systemctl reload nginx"
     }
 
-    fun copy(text: String) {
-        app.getSystemService(ClipboardManager::class.java)
-            ?.setPrimaryClip(ClipData.newPlainText("Relay", text))
+    // -- configs for other devices ----------------------------------------------
+    //
+    // Settings → Share with other devices. The server keeps numbered slots for
+    // devices that have no Relay of their own: slot 0 leaves from the server
+    // itself, slots 1 to n from a provider exit this app chooses. A run finds,
+    // for each location on the list, the exit there that uploads best from the
+    // server - the very search server + exit makes before it connects - and
+    // pins the next slot to it; then the core writes the links. Nothing here
+    // builds a tunnel: the server's API is asked, and an upload is carried
+    // through the server to time each exit, all from the app's own process.
+    //
+    // The socket protector is left as it is, which is how testTunnel leaves
+    // it. While a tunnel is up it is the live service's protect(), and that
+    // keeps these sockets out of the tunnel exactly as it keeps the service's
+    // own. When the service stops it hands the hook back - stopTunnel() sets
+    // it to null - so the core's dialControl never points at a service that
+    // can no longer answer, and a dial from here is a plain dial.
+
+    private fun readExport(was: ExportRun): ExportRun = was.copy(
+        ready = !prefs.getString("tunnelDomain", "").isNullOrEmpty() &&
+            !prefs.getString("tunnelPassword", "").isNullOrEmpty() &&
+            !prefs.getString("tunnelExportId", "").isNullOrEmpty(),
+        slots = prefs.getInt("tunnelExportSlots", 0),
+        last = prefs.getString("exportLast", null)?.let { parseExportResult(it) },
+    )
+
+    /**
+     * Put a location on the share list, or take it off. False when it would
+     * not fit: the server keeps a fixed number, and the list is the order the
+     * slots are given out in, so nothing is dropped off the end to make room.
+     */
+    fun setExportPick(code: String, on: Boolean): Boolean {
+        val was = _exportPicks.value
+        val next = when {
+            on && code in was -> return true
+            on && was.size >= _export.value.slots -> return false
+            on -> was + code
+            else -> was - code
+        }
+        prefs.edit().putString("exportPicks", next.joinToString("\n")).apply()
+        _exportPicks.value = next
+        return true
+    }
+
+    /**
+     * Every location on the phone, for the share chooser. The exit list's own
+     * when it shows everything; read afresh when it shows Starred, because a
+     * location shared is looked for among every exit the phone has - the run
+     * loads the whole folder, as server + exit does - and a chooser narrowed
+     * to the starred few would hide most of what can be picked.
+     */
+    suspend fun shareCountries(): List<Country> = withContext(io) {
+        shareList?.let { return@withContext it }
+        val got = if (_source.value == "all" && _countries.value.isNotEmpty()) {
+            _countries.value
+        } else {
+            try {
+                val c = Relay.newClient("", "")
+                c.load()
+                parseCountries(c.countriesJSON())
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+        if (got.isNotEmpty()) shareList = got
+        got
+    }
+
+    private val exportBusy = AtomicBoolean(false)
+    @Volatile private var exportStop = false
+
+    /**
+     * Start a run in the core's own scope rather than the screen's: one
+     * location takes the better part of a minute, and a run over eight
+     * should not end because somebody closed Settings to wait. The screen
+     * reads [export] whenever it comes back.
+     */
+    fun startExport(picks: List<ExportPick>): Said {
+        if (_export.value.running || exportBusy.get()) return Said.no("Already making configs.")
+        scope.launch { runExport(picks) }
+        return Said.OK
+    }
+
+    /** Stop after the location being tested: the core's search cannot be cut off half way. */
+    fun stopExport() {
+        if (!_export.value.running) return
+        exportStop = true
+        _export.update { it.copy(stopping = true) }
+    }
+
+    /**
+     * Pin a slot to each of [picks], in order, and make every slot's links.
+     *
+     * The server's own exit-chain is read first and put back last, whatever
+     * happens between: the search that finds a location's best exit leaves
+     * that chain on the winner, and the user's own server + exit connection
+     * leaves by it. Then the server is asked to write it all to its file, so
+     * the slots outlive a reboot.
+     *
+     * A location that fails says why on its own row and the rest carry on. A
+     * server that refuses - its API password, or no answer at all - stops the
+     * run, because no other location would fare better; the slots pinned
+     * before that still get their links.
+     */
+    suspend fun runExport(picks: List<ExportPick>): Said = withContext(io) {
+        if (!exportBusy.compareAndSet(false, true)) return@withContext Said.no("Already making configs.")
+        try {
+            exportStop = false
+            val said = try {
+                exportNow(picks)
+            } catch (e: Exception) {
+                Said.no(e.message ?: e.toString())
+            }
+            if (!said.ok) _export.update { it.copy(error = said.text) }
+            said
+        } finally {
+            _export.update { it.copy(running = false, stopping = false, phase = "") }
+            exportBusy.set(false)
+        }
+    }
+
+    private fun exportNow(picks: List<ExportPick>): Said {
+        val domain = prefs.getString("tunnelDomain", "").orEmpty()
+        val password = prefs.getString("tunnelPassword", "").orEmpty()
+        val api = prefs.getString("tunnelApiPassword", "").orEmpty()
+        val id = prefs.getString("tunnelExportId", "").orEmpty()
+        val slots = prefs.getInt("tunnelExportSlots", 0)
+        when {
+            domain.isEmpty() || password.isEmpty() ->
+                return Said.no("Set up your own server under Settings → Connection first.")
+            id.isEmpty() || slots < 1 ->
+                return Said.no("Your server's key keeps no locations for other devices. Run the " +
+                    "installer from this version on the server again and paste the new key it prints.")
+            api.isEmpty() ->
+                return Said.no("This server's API password is missing. Paste its key again under " +
+                    "Settings → Connection.")
+            picks.size > slots ->
+                return Said.no("Your server keeps $slots locations. Take ${picks.size - slots} off the list.")
+            // A connect through server + exit is setting the very chain this
+            // borrows; the two would fight over it.
+            _conn.value.mode == Mode.BUSY ->
+                return Said.no("Wait for the connection to finish, then try again.")
+        }
+        // The same accounts server + exit connects with: each exit is set on
+        // the server with its own provider's credential, and the slot keeps it.
+        val surfshark = credentials(Accounts.SURFSHARK)
+        val windscribe = credentials(Accounts.WINDSCRIBE)
+        if (picks.isNotEmpty() && surfshark == null && windscribe == null) {
+            return Said.no("No provider account to find exits with. Add one under Settings → Accounts.")
+        }
+
+        _export.update {
+            it.copy(running = true, stopping = false, phase = "starting", index = 0, error = "",
+                steps = picks.mapIndexed { i, p -> ExportStep(k = i + 1, code = p.code, name = p.name) })
+        }
+
+        // Built as the service builds it for server + exit: the upload that
+        // times each exit is carried the way that connection carries it.
+        val cfg = Relay.newServerConfig()
+        cfg.domain = domain
+        cfg.password = password
+        cfg.mode = "multi"
+        cfg.edges = prefs.getString("tunnelEdges", "").orEmpty()
+        cfg.pin = prefs.getString("tunnelPin", "").orEmpty()
+        val viaSs = applySs(cfg)
+        if (!viaSs && cfg.edges.isBlank() && picks.isNotEmpty()) {
+            cfg.edges = try {
+                Relay.scanEdges(domain, 30000L)
+            } catch (e: Exception) {
+                ""
+            }
+            if (cfg.edges.isBlank()) {
+                return Said.no("No way in to $domain answered. Press Test under Settings → Connection, " +
+                    "then try again.")
+            }
+            prefs.edit().putString("tunnelEdges", cfg.edges).apply()
+            _tunnel.value = readTunnel()
+        }
+
+        val notes = mutableListOf<String>()
+        var fatal: String? = null
+        if (picks.isNotEmpty()) {
+            val c = Relay.newClient(surfshark?.first.orEmpty(), surfshark?.second.orEmpty())
+            windscribe?.let { (user, pass) -> c.setCredentials(Accounts.WINDSCRIBE, user, pass) }
+            try {
+                c.load()
+            } catch (e: Exception) {
+                return Said.no("There are no servers on this phone to find exits in. Get them under " +
+                    "Settings → Accounts.")
+            }
+            // A server that has never had server + exit set may have no
+            // exit-chain to keep; then there is nothing to put back either.
+            val saved: String? = try {
+                Relay.saveServerChain(cfg, api, EXIT_CHAIN, EXPORT_API_MS)
+            } catch (e: Exception) {
+                val why = e.message ?: e.toString()
+                if (!why.contains("no chain called")) return Said.no("$domain did not answer: ${why.take(160)}")
+                null
+            }
+            try {
+                for ((i, p) in picks.withIndex()) {
+                    if (exportStop || fatal != null) {
+                        setStep(i) { it.copy(phase = "skipped") }
+                        continue
+                    }
+                    _export.update { it.copy(phase = "locations", index = i) }
+                    setStep(i) { it.copy(phase = "testing") }
+                    try {
+                        val r = c.exportSlot(cfg, api, (i + 1).toLong(), p.code,
+                            surfshark?.first.orEmpty(), surfshark?.second.orEmpty(),
+                            windscribe?.first.orEmpty(), windscribe?.second.orEmpty(), 6L, 4000L)
+                        setStep(i) {
+                            it.copy(phase = "pinned", exit = r.name, provider = r.provider, upKBs = r.tookMs.toInt())
+                        }
+                    } catch (e: Exception) {
+                        val why = e.message ?: e.toString()
+                        if (serverRefused(why)) fatal = why
+                        setStep(i) { it.copy(phase = "failed", error = placeFailed(why)) }
+                    }
+                }
+            } finally {
+                if (saved != null) {
+                    _export.update { it.copy(phase = "restoring") }
+                    try {
+                        Relay.restoreServerChain(cfg, api, EXIT_CHAIN, saved, EXPORT_API_MS)
+                    } catch (e: Exception) {
+                        notes += "Your own server + exit could not be put back where it was (" +
+                            (e.message ?: e.toString()).take(120) + "). The next connect through " +
+                            "server + exit sets it again."
+                    }
+                }
+            }
+        }
+
+        val steps = _export.value.steps
+        val pinned = steps.filter { it.phase == "pinned" }
+        if (pinned.isNotEmpty()) {
+            _export.update { it.copy(phase = "saving") }
+            try {
+                Relay.persistServer(cfg, api, EXPORT_API_MS)
+            } catch (e: Exception) {
+                notes += "The server took the locations but could not save them (" +
+                    (e.message ?: e.toString()).take(120) + "). They work until it restarts; make " +
+                    "the configs again after that."
+            }
+        }
+
+        _export.update { it.copy(phase = "links") }
+        val asked = JSONArray().put(JSONObject().put("k", 0).put("name", SERVER_SLOT))
+        for (s in pinned) asked.put(JSONObject().put("k", s.k).put("name", slotName(s.name)))
+        val made = try {
+            JSONArray(Relay.exportLinksJSON(domain, edgeList().firstOrNull().orEmpty(), id,
+                asked.toString(), ssJson()))
+        } catch (e: Exception) {
+            return Said.no(e.message ?: "The links could not be made.")
+        }
+        val byK = made.objects().associateBy { it.optInt("k") }
+        val own = byK[0]
+        val rows = mutableListOf(ExportSlotLinks(
+            k = 0, name = SERVER_SLOT, place = "", code = "", exit = domain,
+            vless = own?.optString("vless").orEmpty(), vmess = own?.optString("vmess").orEmpty(),
+            ss = own?.optString("ss").orEmpty(),
+            error = if (own == null) "No link came back for the server." else "",
+        ))
+        // A run stopped part way leaves the slots after it as the last run
+        // pinned them. Where that was the same place in the same slot, its
+        // link still opens it, so it stays on screen rather than vanishing
+        // because this run never got to it.
+        val before = _export.value.last?.slots.orEmpty().associateBy { it.k }
+        for (s in steps) {
+            if (s.phase != "pinned" && s.phase != "failed") {
+                before[s.k]?.takeIf { it.ok && it.code == s.code }?.let { rows += it }
+                continue
+            }
+            val l = byK[s.k]
+            rows += ExportSlotLinks(
+                k = s.k, name = slotName(s.name), place = s.name, code = s.code,
+                exit = s.exit, provider = s.provider, upKBs = s.upKBs,
+                error = when {
+                    s.phase == "failed" -> s.error
+                    l == null -> "No link came back for this one."
+                    else -> ""
+                },
+                vless = l?.optString("vless").orEmpty(), vmess = l?.optString("vmess").orEmpty(),
+            )
+        }
+        val result = ExportResult(System.currentTimeMillis(), domain, rows, notes)
+        prefs.edit().putString("exportLast", result.toJson()).apply()
+        _export.update { it.copy(last = result) }
+        fatal?.let { return Said.no("$domain stopped taking locations: ${it.take(160)}") }
+        return Said(true, "Made ${rows.count { it.ok }} configs.")
+    }
+
+    private fun setStep(i: Int, change: (ExportStep) -> ExportStep) {
+        _export.update { r -> r.copy(steps = r.steps.mapIndexed { j, s -> if (j == i) change(s) else s }) }
+    }
+
+    /**
+     * Whether a slot failed at the server rather than at the location. The
+     * core says it in words, not types: the API's own refusals begin "the
+     * server", and a request that never reached it names the /api/ address
+     * it was sent to.
+     */
+    private fun serverRefused(why: String) = why.startsWith("the server ") || "/api/" in why
+
+    /** The core's word for why a location could not be pinned, said for a person. */
+    private fun placeFailed(why: String): String = when {
+        why.startsWith("no exit in") ->
+            "This phone has no exits there any more. Pick it again from the list, or another."
+        why.startsWith("no account for any exit in") ->
+            "No account for the provider whose exits these are. Add one under Settings → Accounts."
+        else -> why.take(160)
+    }
+
+    /** The key's Shadowsocks, for the server's own slot - or nothing, when the key had none. */
+    private fun ssJson(): String = if (!hasSs()) "" else JSONObject()
+        .put("method", prefs.getString("tunnelSsMethod", "").orEmpty())
+        .put("password", prefs.getString("tunnelSsPassword", "").orEmpty())
+        .put("port", prefs.getInt("tunnelSsPort", 0))
+        .put("exitPort", prefs.getInt("tunnelSsExitPort", 0))
+        .toString()
+
+    private fun slotName(place: String) = "Relay · $place"
+
+    /** A link as a QR code, for another phone's camera. Null when the core could not draw it. */
+    suspend fun qrBitmap(text: String, px: Int): Bitmap? = withContext(io) {
+        try {
+            val png = Relay.qrpng(text, px.toLong())
+            BitmapFactory.decodeByteArray(png, 0, png.size)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Onto the clipboard. A [sensitive] one - a link that opens the server -
+     * is marked so, and Android 13 and later then shows dots in its preview
+     * instead of the link, and keeps it out of the keyboard's suggestions.
+     */
+    fun copy(text: String, sensitive: Boolean = false) {
+        val clip = ClipData.newPlainText("Relay", text)
+        if (sensitive) {
+            // ClipDescription.EXTRA_IS_SENSITIVE, by its value: the constant
+            // is Android 13's, and older ones ignore the extra.
+            clip.description.setExtras(PersistableBundle().apply {
+                putBoolean("android.content.extra.IS_SENSITIVE", true)
+            })
+        }
+        app.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(clip)
     }
 
     val dataFolder: String get() = AppFiles.root(app).absolutePath
@@ -1184,3 +1916,16 @@ const val QUICK = "quick"
 
 /** How old a quick test may get before opening the list runs another: six hours. */
 private const val QUICK_EVERY_MS = 6L * 60 * 60 * 1000
+
+/**
+ * The server's own way out to a provider, which server + exit points and a
+ * share run borrows - each location's search leaves it on that location's
+ * winner - and puts back.
+ */
+private const val EXIT_CHAIN = "exit-chain"
+
+/** One request to the server's API: what the core gives its own SetExit. */
+private const val EXPORT_API_MS = 15_000L
+
+/** What another device lists the server's own slot as. */
+const val SERVER_SLOT = "Relay · server"

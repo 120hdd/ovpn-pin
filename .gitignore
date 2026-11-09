@@ -62,3 +62,8 @@ release-build/
 # installer and the build fetch it rather than the repo carrying it.
 tunnel/gost.exe
 tunnel/gost
+# The same for what brings up the adapter in tunnel mode, and its licence,
+# which the release fetch writes beside it.
+tunnel/sing-box.exe
+tunnel/sing-box
+tunnel/sing-box-LICENSE.txt

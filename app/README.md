@@ -102,6 +102,74 @@ On, every program on the machine goes through the connection. Off, the proxy
 still serves on its port and the machine is left alone — for someone who would
 rather point one browser at it by hand.
 
+### How Windows is routed: proxy setting or tunnel
+
+Two ways to do the routing above, chosen under it.
+
+**Proxy setting** (the default) sets the Windows proxy. Browsers and most of
+what Windows ships follow it; a game, a command-line tool or a messenger with
+network code of its own goes straight past it.
+
+**Tunnel (TUN)** adds a network adapter that every program's traffic falls
+into, whether it knows about proxies or not. `sing-box.exe` brings it up
+(wintun is inside it; there is no driver to install) and hands each TCP
+connection to the same worker on the same port, so the exit, the meter and the
+host list are unchanged — except that the host list names sing-box rather
+than the program behind it. What it does not carry:
+
+- **UDP.** The provider's proxy is HTTP CONNECT, which is TCP only. UDP is
+  refused at once so browsers fall back from QUIC straight away; voice calls
+  and games that need UDP do not work while it is on.
+- **IPv6.** Unreachable rather than leaking past the adapter; DNS answers are
+  IPv4 only, so nothing tries it.
+
+DNS is answered by sing-box, which asks `1.1.1.1` over HTTPS through the exit,
+and `strict_route` stops Windows asking the other adapters' DNS servers. The
+LAN, link-local and multicast ranges stay off the adapter. The worker's own
+connection to the exit is routed around it by address, gost's to your server
+by process, and this app's own traffic by process too, so a reachability test
+still measures this line. From source that last rule covers every
+`python.exe`.
+
+The adapter needs administrator rights: Windows shows a UAC prompt each time it
+connects this way, unless Relay is already elevated. An elevated script
+(`.state/tun/run.ps1`) runs sing-box and is asked to stop through a file, the
+same way the sweep is; it also watches the worker and takes the adapter down if
+the worker goes, so the machine is never left pointed at nothing. Its files and
+`sing-box.log` are in `.state/tun/`. Builds put `sing-box.exe` beside
+`Relay.exe` (from `tunnel/` in the repo); without it the option is greyed out.
+
+### Split tunnel
+
+Under the routing choice: which connections go through the exit and which go
+straight out on this machine's own line.
+
+- **Off** — everything through the exit (the default).
+- **Except these** — everything through the exit except the list.
+- **Only these** — only the list goes through the exit.
+
+The list is programs (by exe name — `telegram.exe`), sites (`digikala.com`
+means it and everything under it), addresses and ranges (`5.6.0.0/16`), and the
+**Iranian sites** preset: Iran's registered address ranges and the domains of
+Iranian services, from `lists/` at the top of the repo — the same files the
+phone uses. The ranges are RIPE NCC's record of what was handed to Iran,
+regenerated with `python lists/update.py`; the domains are kept by hand.
+
+Who applies it depends on how Windows is routed:
+
+- **Tunnel (TUN)** — sing-box, which sees each connection's program, address
+  and, by sniffing its first packet, its name. What goes around the exit
+  leaves by its direct outbound, UDP included, and a listed name is looked up
+  from this line's own DNS server so it is answered as seen from here. A
+  change while connected restarts the adapter (one more UAC prompt).
+- **Proxy setting** — the worker, which reads `.state/split.json` again
+  whenever it changes, so a change applies to the next connection. It sees
+  only programs that use the proxy, and matches a name as a name: looking up
+  every name to compare its address would hand everything you visit to this
+  line's resolver.
+
+Never both: with the adapter up, the worker is told "off".
+
 ### The port it listens on
 
 Editable in place rather than buried, because on a machine that already runs
@@ -118,6 +186,44 @@ and is markedly quicker. Same address, same port, better choice.
 The pane that turns the second and third ways out on. It wants three things —
 a domain and two passwords — and all three are printed by the server's
 installer when it finishes.
+
+**The key.** The installer's last line is `relay://…`: base64url of a JSON
+object with the server, its certificate's SHA-256 when it is reached by
+address, both passwords and its Shadowsocks settings. Pasted into *Have a
+key?* it sets the whole pane up at once — on the phone too, where the same
+field is at the top of Settings → Connection. The key's pin is checked even
+on the first contact, so a key also protects the first connection, which the
+"keep whatever answers first" rule cannot. `cat /etc/relay/key` on the
+server shows it again. It holds passwords: treat it like one.
+
+**Shadowsocks** is the second way in, beside the WebSocket through Cloudflare.
+The server offers it on two ports (8388 and 8389 unless `--ss-port` moved
+them): the first exits at the server, the second goes on through the same
+exit-chain as `/ex`, so *Server + exit* reaches every location either way. It
+goes straight to the server's address with no CDN in between — the quicker way
+in whenever that address is reachable, and the one whose traffic counts as
+domestic when the server is inside Iran. It does not survive a filtered
+address the way the WebSocket does, so both stay available and the pane
+switches between them. On this machine gost carries it (`connector: ss`); on
+the phone the Go core does (`mobile/core/shadowsocks.go`). TCP only.
+
+**Share with other devices** makes configs for anything with a V2Ray client
+and no Relay — an iPhone in Shadowrocket, Streisand, V2Box, Hiddify or
+sing-box. The server keeps numbered locations for them (`--slots`, 8 unless
+told): slot 0 exits at the server, and each other slot is a user on its
+sing-box routed to its own gost chain, `loc-<k>`. Pick locations, and for each
+the app finds the exit that carries an upload best from the server — the same
+search *Server + exit* makes — points a slot at it through the API, and asks
+gost to write its config to its file so the slots survive a reboot. Then it
+shows each slot's VLESS (`/vl`) and VMess (`/vm`) links over WebSocket and
+TLS, with a QR code, through the same nginx and Cloudflare the apps use; for a
+server reached by address the links accept its own certificate, since those
+clients cannot pin one. The UUIDs are uuid5s of an id the key carries
+(`x.id`), derived the same way by the installer, this app and the phone
+(`app/export.py`, `mobile/core/export.go`). A slot's provider account lives
+on the server for as long as the slot points at it, and every link carries
+access to the server: share them like a password. Running the installer
+again resets the slots to its placeholder, so share again afterwards.
 
 There is a machine to set up first, and the pane says so rather than
 pretending otherwise. **Copy** hands you the whole installer as a single

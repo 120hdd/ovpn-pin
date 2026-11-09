@@ -57,6 +57,10 @@ type hostRow struct {
 	Live  int     `json:"live"`
 	First float64 `json:"first"`
 	Last  float64 `json:"last"`
+	// Went straight out by the phone's own line rather than through the
+	// exit, because split tunnelling said so. Absent when false, so the
+	// desktop's shape is unchanged for every row it does not apply to.
+	Direct bool `json:"direct,omitempty"`
 }
 
 const hostsLimit = 400
@@ -110,6 +114,16 @@ func (h *Hosts) opened(addr, label, app string) *hostRow {
 	row.Live++
 	row.Last = now
 	return row
+}
+
+// straight marks a row as one that went around the exit.
+func (h *Hosts) straight(row *hostRow) {
+	if h == nil || row == nil {
+		return
+	}
+	h.mu.Lock()
+	row.Direct = true
+	h.mu.Unlock()
 }
 
 // rename gives a row the name its own traffic announced.
