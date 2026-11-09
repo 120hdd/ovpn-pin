@@ -31,6 +31,9 @@ import com.erelay.relay.ui.theme.Tone
  * flag-icons, MIT, the licence beside them in assets/flags - rasterised from
  * app/ui/flags' SVGs to 144px WebP, because Compose has no SVG of its own.
  *
+ * Iran's is the exception: the Lion and Sun flag, from Wikimedia Commons
+ * ("State flag of Iran (1964-1980)", public domain), cut to the same 4:3.
+ *
  * The emoji they replace sat small in the middle of a grey disc, with the
  * disc showing round it, and every phone drew them in its own hand.
  */
@@ -56,6 +59,13 @@ private fun flagBitmap(context: Context, code: String): ImageBitmap? {
     }
 }
 
+/** The flag's picture alone, for a background that wants more than a circle of it. */
+@Composable
+fun rememberFlagBitmap(code: String): ImageBitmap? {
+    val context = LocalContext.current
+    return remember(code) { flagBitmap(context, code) }
+}
+
 /**
  * A country's flag as a filled circle with a hairline edge. A country there
  * is no picture for falls back to its emoji, and no country to a globe.
@@ -68,14 +78,14 @@ fun Flag(code: String, size: Dp, modifier: Modifier = Modifier) {
         modifier
             .size(size)
             .clip(CircleShape)
-            .background(Tone.control)
-            .border(1.dp, Tone.wash.copy(alpha = 0.14f), CircleShape),
+            .background(Tone.surface2)
+            .border(1.dp, Tone.stroke, CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         when {
             bitmap != null -> Image(bitmap, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             flagOf(code).isNotEmpty() -> Text(flagOf(code), fontSize = (size.value * 0.55f).sp)
-            else -> Icon(Glyph.globe, null, Modifier.size(size * 0.45f), tint = Tone.textMuted)
+            else -> Icon(Glyph.globe, null, Modifier.size(size * 0.45f), tint = Tone.text2)
         }
     }
 }

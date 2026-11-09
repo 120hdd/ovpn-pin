@@ -106,6 +106,13 @@ object Glyph {
     val sparkle = stroke("sparkle",
         "M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z")
     val wide = stroke("wide", "M1 7h26M22.5 2.5 27 7l-4.5 4.5", box = 28f)
+    /** Lucide's share-2: a link handed on to another app. */
+    val share = stroke("share", circle(18f, 5f, 3f), circle(6f, 12f, 3f), circle(18f, 19f, 3f),
+        "M8.59 13.51L15.42 17.49", "M15.41 6.51L8.59 10.49")
+    /** Lucide's qr-code: Settings → Share with other devices. */
+    val qr = stroke("qr", rect(3f, 3f, 5f, 5f, 1f), rect(16f, 3f, 5f, 5f, 1f), rect(3f, 16f, 5f, 5f, 1f),
+        "M21 16h-3a2 2 0 0 0-2 2v3", "M21 21v.01", "M12 7v3a2 2 0 0 1-2 2H7", "M3 12h.01", "M12 3h.01",
+        "M12 16v.01", "M16 12h1", "M21 12v.01", "M12 21v-1")
 
     /** Surfshark's mark, from the same sprite. */
     val surfshark = filled("surfshark", 24f,

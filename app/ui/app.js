@@ -12,6 +12,16 @@
 
 const $ = (id) => document.getElementById(id);
 
+/* Reduced motion, read through gsap.matchMedia() so it follows the setting
+   live. Everything that would otherwise tween asks CALM first. */
+let CALM = false;
+if (window.gsap) {
+  gsap.matchMedia().add('(prefers-reduced-motion: reduce)', () => {
+    CALM = true;
+    return () => { CALM = false; };
+  });
+}
+
 const state = {
   countries: [],
   picked: 'auto',
@@ -20,6 +30,11 @@ const state = {
   fuse: null,
   cursor: 0,
   systemProxy: true,
+  routeWith: 'proxy',   // proxy | tun - how Windows is routed, when it is
+  tunReady: true,       // whether this copy has sing-box.exe to do it with
+  elevated: false,      // already administrator, so no UAC prompt to warn of
+  split: null,          // the split tunnel in force; null on a backend without one
+  splitLists: null,     // how big the Iranian lists are, as the backend counted them
   port: 8877,           // where the proxy listens; the backend owns the truth
   hasCredentials: true,
   sweep: null,          // null when idle, otherwise how the run is going
@@ -81,92 +96,13 @@ function icon(href, className, title) {
   return svg;
 }
 
-/* A deterministic Fibonacci sphere rendered as glass beads. Depth controls
-   scale, blur and opacity, while the brighter sine-shaped crest makes the
-   surface read as a travelling particle wave instead of a flat dot cloud. */
+/* The hologram globe (globe.js) behind the home screen. It draws itself with
+   WebGL2, or as a still with the 2D API when the GPU is blocked; either way
+   there is nothing to fall back to here. */
 function initConnectionCore() {
-  const canvas = $('orbCanvas');
-  if (canvas && window.OrbCore && window.OrbCore.init(canvas)) return;
-
-  /* No WebGL2 (blocked GPU, remote session): swap the canvas back out and
-     fall back to the DOM bead sphere below. */
-  let shell = $('blobParticles');
-  if (!shell && canvas) {
-    shell = document.createElement('span');
-    shell.className = 'blob__body';
-    shell.id = 'blobParticles';
-    canvas.replaceWith(shell);
-  }
-  if (!shell || shell.childElementCount) return;
-
-  const addParticle = ({ x, y, size, opacity, blur, dx, dy, glow, depth, color, wave = false }) => {
-    const index = shell.childElementCount;
-    const point = document.createElement('i');
-    if (wave) point.className = 'blob__particle--wave';
-    point.style.setProperty('--x', `${x.toFixed(2)}px`);
-    point.style.setProperty('--y', `${y.toFixed(2)}px`);
-    point.style.setProperty('--s', `${size.toFixed(2)}px`);
-    point.style.setProperty('--o', opacity.toFixed(2));
-    point.style.setProperty('--blur', `${blur.toFixed(2)}px`);
-    point.style.setProperty('--dx', `${dx.toFixed(2)}px`);
-    point.style.setProperty('--dy', `${dy.toFixed(2)}px`);
-    point.style.setProperty('--glow', `${glow.toFixed(2)}px`);
-    point.style.setProperty('--z', `${Math.round(depth * 120)}`);
-    point.style.setProperty('--delay', `${(-index * 0.075).toFixed(2)}s`);
-    point.style.setProperty('--duration', `${(4.3 + (index % 9) * 0.38).toFixed(2)}s`);
-    point.style.setProperty('--dot-color', color);
-    shell.append(point);
-  };
-
-  const golden = Math.PI * (3 - Math.sqrt(5));
-  const shellCount = 84;
-  for (let n = 0; n < shellCount; n += 1) {
-    const vertical = 1 - ((n + 0.5) / shellCount) * 2;
-    const ring = Math.sqrt(1 - vertical * vertical);
-    const angle = n * golden + vertical * 0.82;
-    const projectedX = Math.cos(angle) * ring;
-    const depth = (Math.sin(angle) * ring + 1) / 2;
-    const ripple = 1 + Math.sin(angle * 2.1 + vertical * 4.8) * 0.032;
-    addParticle({
-      x: projectedX * 59 * ripple,
-      y: vertical * 59,
-      size: 0.55 + depth * 1.15 + (n % 13 === 0 ? 0.5 : 0),
-      opacity: 0.08 + depth * 0.44,
-      blur: (1 - depth) * 0.64,
-      dx: Math.cos(angle * 1.35) * 0.75,
-      dy: Math.sin(angle * 1.62) * 0.85,
-      glow: 0.8 + depth * 2.4,
-      depth,
-      color: depth > 0.5 ? 'var(--blob-b)' : 'var(--blob-c)',
-    });
-  }
-
-  const bands = [19, 21, 19];
-  bands.forEach((count, bandIndex) => {
-    const band = bandIndex - 1;
-    for (let n = 0; n < count; n += 1) {
-      const horizontal = -0.91 + (n / (count - 1)) * 1.82;
-      const jitter = Math.sin((n + 1) * (bandIndex + 2) * 1.71) * 0.012;
-      const waveY = Math.sin(horizontal * 4.25 + band * 0.42) * 0.17
-        - horizontal * 0.14
-        + band * 0.058
-        + jitter;
-      const depth = 0.67 + (Math.cos(horizontal * 2.8 + band * 0.35) + 1) * 0.12;
-      addParticle({
-        x: (horizontal + jitter * 0.6) * 59,
-        y: waveY * 59,
-        size: 2.35 + depth * 1.35 + (1 - Math.abs(horizontal)) * 0.72 + (n % 6 === 0 ? 0.55 : 0),
-        opacity: Math.min(0.98, 0.64 + depth * 0.35),
-        blur: (1 - depth) * 0.2,
-        dx: Math.cos(horizontal * 5.2 + band) * 1.65,
-        dy: Math.sin(horizontal * 4.1 - band) * 1.45,
-        glow: 5.2 + depth * 4.2,
-        depth: Math.min(1, depth + 0.14),
-        color: band === 0 ? 'var(--blob-a)' : (band > 0 ? 'var(--blob-b)' : 'var(--blob-c)'),
-        wave: true,
-      });
-    }
-  });
+  const canvas = $('globeCanvas');
+  if (!canvas || !window.Globe) return;
+  window.Globe.init(canvas, { calm: () => CALM });
 }
 
 /* ------------------------------------------------------------- rendering */
@@ -202,10 +138,10 @@ window.addEventListener('resize', () => {
 
 function setStatus(word, kind, where, host) {
   const s = $('status');
+  // Sentence case: the words are written in capitals in a dozen places, and
+  // the screen says "Disconnected", not "DISCONNECTED".
+  word = String(word || '').toLowerCase().replace(/^./, (c) => c.toUpperCase());
   if (s.textContent !== word) {
-    s.classList.remove('fresh');
-    void s.offsetWidth;
-    s.classList.add('fresh');
   }
   s.textContent = word;
   s.dataset.state = kind;
@@ -243,7 +179,7 @@ function nameOf(code) {
   }
   const [place, via] = (code || '').toLowerCase().split(':');
   const [where, city] = place.split('/');
-  const c = state.countries.find((x) => x.code === where);
+  const c = state.countries.find((x) => x.code === canonCode(where));
   let name = c ? c.name : (where || '').toUpperCase();
   if (city) {
     const found = (c && c.cityList || []).find((x) => x.code === city);
@@ -252,9 +188,15 @@ function nameOf(code) {
   return via ? `${name} · ${PROVIDER_NAMES[via] || via}` : name;
 }
 
+/* One screen, four conditions. `--state` is set once at the root and every
+   part of the window that means "the connection" reads it; the status word,
+   the button and the flag behind it all change in the same breath. */
+let shownConn = null;
+
 function render() {
   const act = $('act');
   const visualState = state.mode === 'fail' ? 'fail' : state.mode;
+  document.documentElement.dataset.conn = visualState;
   act.dataset.mode = state.mode === 'fail' ? 'off' : state.mode;
   // Owned here rather than switched off once in boot(). Adding an account is
   // a repaint and not a restart, so a button disabled at boot stayed disabled
@@ -263,20 +205,12 @@ function render() {
   $('card').dataset.busy = String(state.mode === 'busy');
   $('card').dataset.state = visualState;
   $('hero').dataset.state = visualState;
-  $('hero').dataset.scheme = state.orbColors || 'signal';
-  const orb = $('orb');
+  const orb = $('globeHit');
   orb.setAttribute('aria-disabled', String(!state.hasCredentials));
   orb.setAttribute('aria-label', ({
     off: 'Connect', fail: 'Connect', busy: 'Cancel', on: 'Disconnect',
   })[visualState]);
   $('swap').dataset.state = visualState;
-  $('routeLabel').textContent = ({
-    // Said when there is something to press: the orb is the button.
-    off: state.hasCredentials ? 'PRESS TO CONNECT' : 'READY TO RELAY',
-    busy: 'NEGOTIATING ROUTE',
-    on: 'PRIVATE ROUTE ACTIVE',
-    fail: 'ROUTE UNAVAILABLE',
-  })[visualState];
   $('pick').disabled = state.mode === 'busy';
   $('more').hidden = state.mode !== 'on';
   // Put away the moment the route goes, rather than left showing the last
@@ -286,19 +220,93 @@ function render() {
   if (state.mode !== 'on') {
     $('details').hidden = true;
     $('more').setAttribute('aria-expanded', 'false');
+    $('statusClock').textContent = '';
   }
 
-  // Through nameOf, which knows the four shapes a pick can take. Looking
-  // the code up in the country list only ever worked for the plainest of
-  // them, so choosing France-through-Windscribe put the string
-  // "fr:windscribe" on the front of the app.
-  const where = String(state.picked || '').startsWith('file:')
-    ? canonCode(state.picked.slice(5).replace(/^\d+\.\d+s-/, '').slice(0, 2))
-    : String(state.picked || '').split(/[:/]/)[0];
-  const c = state.countries.find((x) => x.code === where);
-  $('pickLabel').textContent = state.picked === 'auto'
-    ? 'Whichever answers first' : nameOf(state.picked);
-  $('pickFlag').style.backgroundImage = c ? flagUrl(c.code) : '';
+  // The location line. Connected, it is where the traffic really comes out;
+  // otherwise it is the pick - read through nameOf, which knows the four
+  // shapes a pick can take (looking the code up in the country list only
+  // ever worked for the plainest, and put "fr:windscribe" on the screen).
+  let code = null;
+  let label;
+  const any = !state.picked || state.picked === 'auto';
+  if (state.mode === 'on' && state.live) {
+    code = state.live.code;
+    label = state.live.name;
+  } else if (any) {
+    label = 'Any country';
+  } else {
+    const where = String(state.picked).startsWith('file:')
+      ? canonCode(state.picked.slice(5).replace(/^\d+\.\d+s-/, '').slice(0, 2))
+      : String(state.picked).split(/[:/]/)[0];
+    const c = state.countries.find((x) => x.code === where);
+    code = c ? c.code : null;
+    label = nameOf(state.picked);
+  }
+  $('pickLabel').textContent = label;
+  $('pick').dataset.any = (any && !(state.mode === 'on' && state.live)) ? '1' : '0';
+  $('pickFlag').style.backgroundImage = code ? flagUrl(code) : '';
+
+  const flagCode = state.mode === 'on' && state.live ? state.live.code : null;
+  setBackdrop(flagCode);
+  if (window.Globe) window.Globe.sync(flagCode);
+  if (shownConn !== null && shownConn !== visualState) stateMoment(shownConn, visualState);
+  shownConn = visualState;
+}
+
+/* The connected country's flag, dim, behind the whole home screen: cover,
+   faded into the page by a linear gradient and darkened at the edges (both
+   in CSS, on the layer). It comes in over 333ms on a decel curve when the
+   route comes up and goes the same way when it does not; with reduced motion
+   it is simply there or not. */
+let backdropCode = null;
+
+function setBackdrop(code) {
+  code = code || null;
+  if (code === backdropCode) return;
+  backdropCode = code;
+  const host = $('backdrop');
+  const calm = CALM;
+  for (const old of host.querySelectorAll('.backdrop__layer')) {
+    if (calm || !window.gsap) old.remove();
+    else gsap.to(old, { opacity: 0, duration: 0.333, ease: 'expo.out', overwrite: true,
+                        onComplete: () => old.remove() });
+  }
+  if (!code) return;
+  const probe = new Image();
+  probe.onload = () => {
+    if (backdropCode !== code) return;      // moved on while it loaded
+    const layer = document.createElement('div');
+    layer.className = 'backdrop__layer';
+    const flag = document.createElement('i');
+    flag.className = 'backdrop__flag';
+    flag.style.backgroundImage = flagUrl(code);
+    layer.append(flag);
+    host.append(layer);
+    if (!calm && window.gsap) {
+      gsap.fromTo(layer, { opacity: 0 }, { opacity: 1, duration: 0.333, ease: 'expo.out' });
+    }
+  };
+  probe.src = `flags/${code}.svg`;
+}
+
+/* ------------------------------------------------------ the connect moment */
+
+/* The one orchestrated moment, one timeline. The status word arrives from
+   just below in the new colour (the colour itself is the `--state` transition
+   in CSS); the backdrop fade-in and the sparkline fade are started in the same
+   render by their own owners (setBackdrop and the .flux rule), and the globe
+   by Globe.sync (the grid tints to the state over 600 ms, and when the route is
+   up it turns to the exit country and drops a marker). Reduced motion: nothing
+   tweens, it all just swaps. */
+const moment = { tl: null };
+
+function stateMoment() {
+  if (moment.tl) { moment.tl.kill(); moment.tl = null; }
+  if (!window.gsap || CALM) return;
+  moment.tl = gsap.timeline({ defaults: { ease: 'expo.out' } });
+  moment.tl.fromTo('#status', { y: 8, opacity: 0 },
+                   { y: 0, opacity: 1, duration: 0.25, clearProps: 'transform,opacity' }, 0);
 }
 
 /* --------------------------------------------------------------- picker */
@@ -310,6 +318,7 @@ function openPicker() {
   maybeQuick();
   $('search').value = '';
   $('searchMain').classList.remove('is-typed');
+  $('pickAny').hidden = !state.picked || state.picked === 'auto';
   state.cursor = 0;
   drawList('');
   $('picker').showModal();
@@ -345,24 +354,28 @@ function openPicker() {
   requestAnimationFrame(sample);
 }
 
-function drawList(query) {
-  const list = $('list');
-  const q = (query || '').trim();
+/* The countries are grouped by continent, in this order. A country the
+   catalogue gave no continent to (or one this list has not heard of) goes
+   under "Elsewhere" rather than vanishing. */
+const CONTINENTS = ['Europe', 'Middle East', 'Asia', 'North America',
+  'South America', 'Africa', 'Oceania', 'Antarctica', 'Elsewhere'];
+const continentOf = (c) => (CONTINENTS.includes(c.continent) ? c.continent : 'Elsewhere');
 
-  // Seventy-five rows, each with a flag behind it, rebuilt from nothing every
-  // time the sheet opened - and the sheet's own entrance animation running
-  // over the top of it. Nothing about that list changes between one open and
-  // the next unless the query or the chosen country has, so it is only built
-  // when one of them has.
-  // The provider selection belongs in here too. What a country row says now
-  // depends on which providers back it, and two different selections can
-  // leave the same number of countries standing - so a key counting only
-  // countries lets the list keep rows for a provider that has been switched
-  // off, with counts from before it was.
-  const key = `${q}|${state.picked}|${state.countries.length}`
+/* What the list on screen was built from. Nothing about it changes between
+   one open and the next unless the query or the chosen country has, so it is
+   only built when one of them has. The provider selection belongs in here
+   too: what a country row says depends on which providers back it. */
+function listKey(q) {
+  return `${q}|${state.picked}|${state.countries.length}`
     + `|${(state.providers || []).join(',')}`
     + `|${[...state.openCities].sort().join(',')}`
     + `|${state.sortBy}|${(state.favourites || []).join(',')}`;
+}
+
+function drawList(query) {
+  const list = $('list');
+  const q = (query || '').trim();
+  const key = listKey(q);
   if (list.dataset.key === key) return;
   list.dataset.key = key;
 
@@ -372,37 +385,12 @@ function drawList(query) {
   const wasAt = list.scrollTop;
   list.replaceChildren();
 
-  if (!q) {
-    const auto = document.createElement('button');
-    auto.type = 'button';
-    auto.className = 'row row--auto' + (state.picked === 'auto' ? ' is-picked' : '');
-    auto.dataset.code = 'auto';
-    const autoIcon = document.createElement('span');
-    autoIcon.className = 'row__auto-icon';
-    autoIcon.setAttribute('aria-hidden', 'true');
-    autoIcon.textContent = '\u2726';
-    const copy = document.createElement('span');
-    copy.className = 'row__copy';
-    const name = document.createElement('span');
-    name.className = 'row__name';
-    name.textContent = 'Fastest available';
-    const sub = document.createElement('span');
-    sub.className = 'row__sub';
-    sub.textContent = 'Races every location, takes the first to answer';
-    copy.append(name, sub);
-    auto.append(autoIcon, copy);
-    list.append(auto);
-  }
-  // What the list is and how many, as the first line of it - the phone's
-  // "FASTEST FIRST 72". The count keeps its id: it is what the drive reads.
-  const head = document.createElement('p');
-  head.className = 'listsplit listsplit--top';
-  head.textContent = q ? 'Matches ' : (state.sortBy || 'ping') === 'ping'
-    ? 'Fastest first ' : 'All locations ';
+  const total = document.createElement('p');
+  total.className = 'listtotal';
   const tally = document.createElement('b');
   tally.id = 'listCount';
-  head.append(tally);
-  list.append(head);
+  total.append(tally, ' locations');
+  list.append(total);
 
   let found = sortCountries(
     q ? state.fuse.search(q).map((r) => r.item) : state.countries);
@@ -414,22 +402,8 @@ function drawList(query) {
     const pos = (c) => (at.has(c.code) ? at.get(c.code) : 1e9);
     found = found.slice().sort((a, b) => pos(a) - pos(b));
   }
-  // Fastest first is only honest about the countries that were timed; the
-  // rest go below their own heading, in alphabetical order.
-  let untimedAt = -1;
-  if (!q && (state.sortBy || 'ping') === 'ping') {
-    const timed = (c) => (state.freeze ? state.freeze.tested.has(c.code) : !!c.tested);
-    const fav = (c) => (starredIn(c) ? 0 : 1);
-    const yes = found.filter(timed);
-    const no = found.filter((c) => !timed(c))
-      .sort((a, b) => fav(a) - fav(b) || a.name.localeCompare(b.name));
-    if (no.length) {
-      untimedAt = yes.length;
-      found = yes.concat(no);
-    }
-  }
   if (!found.length) {
-    $('listCount').textContent = '0';
+    tally.textContent = '0';
     const e = document.createElement('p');
     e.className = 'empty';
     e.textContent = `No country matches “${q}”.`;
@@ -437,236 +411,85 @@ function drawList(query) {
     return;
   }
 
-  /* One row per way in, when there is more than one.
+  /* The groups: starred places first when there are any, then continents in
+     their order. Search runs across all of them and a group with nothing in
+     it is not drawn. */
+  const groups = [];
+  const starred = found.filter(starredIn);
+  if (starred.length) groups.push(['Starred', starred]);
+  const others = found.filter((c) => !starredIn(c));
+  for (const name of CONTINENTS) {
+    const items = others.filter((c) => continentOf(c) === name);
+    if (items.length) groups.push([name, items]);
+  }
 
-     A country both providers reach is one place with two doors, and which
-     door is a real choice: they are different companies at different
-     addresses, and on this line one is often filtered where the other is
-     not. Showing "France - 24 relays" and picking for you hides the only
-     decision worth making there.
+  // Fastest first is only honest about the countries that were timed; within
+  // a group the rest go below their own heading, in alphabetical order.
+  const byPing = !q && (state.sortBy || 'ping') === 'ping';
+  const timed = (c) => (state.freeze ? state.freeze.tested.has(c.code) : !!c.tested);
 
-     The country's own row stays, and stays first, because it means
-     "whichever answers" - which is what most people want most of the time.
-     The rows under it are for when it is not. */
+  const jobs = [];
+  for (const [name, items] of groups) {
+    const sec = document.createElement('section');
+    sec.className = 'grp';
+    sec.dataset.group = name;
+    const head = document.createElement('p');
+    head.className = 'gh';
+    const hn = document.createElement('span');
+    hn.className = 'gh__name';
+    hn.textContent = name;
+    const hc = document.createElement('span');
+    hc.className = 'gh__n';
+    hc.textContent = String(items.length);
+    head.append(hn, hc);
+    sec.append(head);
+    list.append(sec);
 
-
-  const buildGroup = (c, i) => {
-    const head = [];
-    if (i === untimedAt) {
-      const split = document.createElement('p');
-      split.className = 'listsplit';
-      split.innerHTML = 'Not tested yet <b></b>';
-      split.querySelector('b').textContent = String(found.length - untimedAt);
-      head.push(split);
+    let ordered = items;
+    let untimedAt = -1;
+    if (byPing) {
+      const yes = items.filter(timed);
+      const no = items.filter((c) => !timed(c))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      if (yes.length && no.length) untimedAt = yes.length;
+      ordered = yes.concat(no);
     }
-    return head.concat(card(c));
+    ordered.forEach((c, i) => jobs.push({
+      sec, c, split: i === untimedAt ? ordered.length - untimedAt : 0,
+    }));
+  }
+
+  const place = ({ sec, c, split }) => {
+    if (split) {
+      const p = document.createElement('p');
+      p.className = 'listsplit';
+      p.append('Not tested yet');
+      const n = document.createElement('b');
+      n.textContent = String(split);
+      p.append(n);
+      sec.append(p);
+    }
+    sec.append(countryCard(c));
   };
 
-  /* The country as a card, the way the phone draws it: the row, and when it
-     is open its cities in a panel inside the same card. Lit when the pick is
-     anywhere in it - a city or one server as much as the country - so the
-     list says where you are without a tick. */
-  const card = (c) => {
-    const box = document.createElement('div');
-    box.className = 'group' + (pickIsIn(c) ? ' is-in' : '');
-    const [row, ...cities] = groupOf(c);
-    box.append(row);
-    if (cities.length) {
-      box.classList.add('is-open');
-      const inner = document.createElement('div');
-      inner.className = 'group__in';
-      inner.append(...cities);
-      box.append(inner);
-    }
-    return [box];
-  };
-
-  const groupOf = (c) => {
-    /* One row per place, and a sign for who backs it.
-
-       A country reached by both used to split into a row per provider, and
-       the rows underneath said less than the sign does: "Surfshark, 23
-       relays" with nothing measured about any of them, taking a line each
-       and pushing the next country off the screen. Which provider an exit
-       comes from is a fact about the row, not another row. */
-    const out = [build(c)];
-
-    /* The cities inside it, and only when asked for.
-
-       Every country's cities laid out at once was sixty-nine rows of them
-       above the fold, which is a list of cities pretending to be a list of
-       countries. Windscribe's own client keeps them shut until you open one,
-       and the plus on the row is the whole affordance.
-
-       A country with one city is already that city; opening it would show
-       the same place again with a smaller font. */
-    const cityList = c.cityList || [];
-    if (cityList.length > 1 && state.openCities.has(c.code)) {
-      let at = 0;
-      // Starred cities first; the rest keep the order the core gave.
-      const starred = (x) => (isFavourite(`${c.code}/${x.code}`) ? 0 : 1);
-      for (const city of cityList.slice().sort((a, b) => starred(a) - starred(b))) {
-        // Both providers in one city is two ways into one place, the same
-        // as it is for a country - so it splits the same way rather than
-        // merging into a row that cannot say which you would get.
-        const r = buildCity(c, city);
-        r.style.setProperty('--i', at++);
-        out.push(r);
-      }
-    }
-    return out;
-  };
-
-  const build = (c, via, heads) => {
-    const code = via ? `${c.code}:${via}` : c.code;
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = 'row' + (state.picked === code ? ' is-picked' : '')
-      + (via ? ' row--via' : '') + (heads ? ' row--heads' : '');
-    row.dataset.code = code;
-    row.style.setProperty('--flag', flagUrl(c.code));
-    // The flag as a thing on the row rather than a wash behind it. A
-    // quarter of the row tinted the colour of a flag is a decoration that
-    // reads as a state - and with a time, a load and a verdict now on the
-    // same line, the line needs the room more than it needs the picture.
-    const chip = document.createElement('span');
-    chip.className = via ? 'flag flag--dot' : 'flag';
-    if (!via) chip.style.setProperty('--flag', flagUrl(c.code));
-    row.append(chip);
-
-    const copy = document.createElement('span');
-    copy.className = 'row__copy';
-    const name = document.createElement('span');
-    name.className = 'row__name';
-    name.textContent = c.name;
-    const meta = document.createElement('span');
-    meta.className = 'row__meta';
-    // How many addresses a country has is what decides whether picking it
-    // will work, so that is the number shown rather than a speed nobody can
-    // act on.
-    // The count and the time, without the country's code in front: the name
-    // above already says which country, and the code was what pushed the
-    // time off the end of the line in a 400px window.
-    meta.textContent = `${c.count} relay${c.count === 1 ? '' : 's'}`;
-    if (via) {
-      // The provider is the name here, because the country is already said
-      // by the row directly above it.
-      name.textContent = PROVIDER_NAMES[via] || via;
-      const n = (c.by || {})[via] || 0;
-      const ok = (c.byOk || {})[via] || 0;
-      const ping = (c.byPing || {})[via];
-      // This provider's own tally. The country's would call a provider
-      // nobody has asked about blocked, on the strength of the other one
-      // having been measured.
-      const tried = (c.byTested || {})[via] || 0;
-      meta.textContent = `${n} relay${n === 1 ? '' : 's'}`
-        + (ping !== undefined && ping !== null ? ` · ${msSaid(ping)}` : '')
-        + (tried && !ok ? (tried >= n ? ' · blocked' : '') : '')
-        + (tried && ok && ok < n ? ` · ${ok}/${n}` : '');
-      row.dataset.state = !tried ? 'untested'
-        : ok ? (ok < tried ? 'some' : 'ok')
-          : (tried >= n ? 'blocked' : 'some');
-    } else if (heads) {
-      // Short, because the rows underneath say it better and this line
-      // now has to hold a time as well.
-      // "any" only when there is nothing better to say. Once there is a
-      // time on the line it is the rows underneath that mean "any", and the
-      // word was only pushing the time off the end.
-      const said_ = reachSaid(c);
-      meta.textContent = meta.textContent + (said_ || ' · any');
-      row.dataset.state = reachState(c);
-    } else {
-      // The phone's line: the time first, with a dot in its colour, then
-      // where and how many. Nothing in front before it has been asked,
-      // because "untested" and "blocked" must not look alike.
-      row.dataset.state = reachState(c);
-      const cities = c.cityList || [];
-      const places = cities.length > 1 ? `${cities.length} cities`
-        : (cities[0] && cities[0].name) || '';
-      meta.textContent = '';
-      if (c.tested && !c.ok && c.tested >= c.count) {
-        const lead = document.createElement('span');
-        lead.className = 'row__lead';
-        lead.dataset.level = 'high';
-        lead.textContent = 'Blocked here';
-        meta.append(lead);
-      } else if (c.tested && c.ok && c.ping !== null && c.ping !== undefined) {
-        const dot = document.createElement('i');
-        dot.className = 'row__dot';
-        dot.dataset.level = pingLevel(c.ping);
-        const ms = document.createElement('b');
-        ms.textContent = msSaid(c.ping);
-        meta.append(dot, ms);
-      }
-      // "11 relays" breaks before the number, never inside it, when the
-      // line has to wrap.
-      const rest = [places, `${c.count} relay${c.count === 1 ? '' : 's'}`]
-        .filter(Boolean).map((s) => s.replace(/ /g, '\u00a0')).join(' \u00b7 ');
-      meta.append((meta.childNodes.length ? ' \u00b7 ' : '') + rest);
-      // Who runs these exits and what they offer, on a line of their own:
-      // the provider's mark, then 10G and P2P in their colours.
-      const badges = document.createElement('span');
-      badges.className = 'row__badges';
-      const by = c.by || {};
-      for (const k of Object.keys(by).filter((k) => by[k] > 0).sort()) {
-        badges.append(providerTag(k, by[k], (c.byTested || {})[k] || 0,
-                                  (c.byOk || {})[k] || 0, (c.byPing || {})[k]));
-      }
-      for (const [has, word, why, kind] of [
-        [cities.some((x) => x.gbps === 10), '10G', '10 Gbps link', 'fast'],
-        [cities.some((x) => x.p2p), 'P2P', 'P2P allowed', 'p2p'],
-      ]) {
-        if (!has) continue;
-        const m = document.createElement('span');
-        m.className = 'mark';
-        m.dataset.kind = kind;
-        m.textContent = word;
-        m.title = why;
-        badges.append(m);
-      }
-      copy.append(name, meta, badges);
-    }
-    // A provider or group row: its name and its line, nothing more.
-    if (!copy.childNodes.length) copy.append(name, meta);
-    // No tick. The chosen row's card is outlined instead - see .group.is-in.
-    row.append(copy);
-    // The phone's chevron, inside the row at its right-hand end.
-    if (!via) {
-      const many = (c.cityList || []).length > 1;
-      // A country with cities opens into them; one without opens straight
-      // into its hosts, because there is no middle to show. Either way it is
-      // the same plus in the same place - what it reveals is the row's
-      // business, not the reader's.
-      const opens = many || c.count > 1;
-      row.append(railFor(code, opens ? (many ? 'expand' : 'exits') : null,
-                         many ? state.openCities.has(c.code)
-                              : state.openExits === c.code));
-    } else if (!heads) {
-      row.append(railFor(code, null));
-    }
-    return row;
-  };
+  tally.textContent = String(found.length);
 
   // A screenful now, the rest once the frame is over. Seventy-five of these
   // built in one go was measured at about 165ms of the first open's stutter -
   // and sixty-seven of them are below the fold, where nobody is waiting for
   // them. content-visibility already stops those being painted; this stops
   // them being built in the frame that matters.
-  $('listCount').textContent = String(found.length);
-
   const AT_ONCE = 14;
-  found.slice(0, AT_ONCE).forEach((c, i) => list.append(...buildGroup(c, i)));
+  jobs.slice(0, AT_ONCE).forEach(place);
   markCursor();
   // Restored after the first batch, and again once the tail lands: the list
   // is not tall enough to hold the old position until the rest of it is
   // there, and a scrollTop set past the end is silently clamped.
   if (wasAt) list.scrollTop = wasAt;
 
-  // And the tail a handful at a time. Appending all sixty-one in one idle
-  // callback only moved the long frame later - the sheet arrived instantly
-  // and then froze for a fifth of a second while they landed. No single
-  // batch is now big enough to miss a frame.
-  const rest = found.slice(AT_ONCE);
+  // And the tail a handful at a time, so no single batch is big enough to
+  // miss a frame.
+  const rest = jobs.slice(AT_ONCE);
   if (!rest.length) return;
   const later = window.requestIdleCallback || ((fn) => setTimeout(fn, 16));
   let at = 0;
@@ -674,15 +497,157 @@ function drawList(query) {
     // Only while this is still the list on screen. A search typed while the
     // tail was queued would otherwise have the old countries land under it.
     if (list.dataset.key !== key) return;
-    const batch = document.createDocumentFragment();
-    rest.slice(at, at + AT_ONCE).forEach((c, i) =>
-      batch.append(...buildGroup(c, AT_ONCE + at + i)));
-    list.append(batch);
+    rest.slice(at, at + AT_ONCE).forEach(place);
     if (wasAt && list.scrollTop !== wasAt) list.scrollTop = wasAt;
     at += AT_ONCE;
     if (at < rest.length) later(more);
   };
   later(more);
+}
+
+/* A country: its row, and when it is open its cities underneath, in place.
+   Lit when the pick is anywhere in it - a city or one server as much as the
+   country - so the list says where you are without a tick. */
+function countryCard(c) {
+  const box = document.createElement('div');
+  box.className = 'group' + (pickIsIn(c) ? ' is-in' : '');
+  box.dataset.code = c.code;
+  box.append(buildCountry(c));
+  const cities = state.openCities.has(c.code) ? cityRows(c) : [];
+  if (cities.length) {
+    box.classList.add('is-open');
+    const inner = document.createElement('div');
+    inner.className = 'group__in';
+    inner.append(...cities);
+    box.append(inner);
+  }
+  return box;
+}
+
+/* Its cities, starred ones first and the rest in the order the core gave.
+   A country with one city is already that city, so it has none to show. */
+function cityRows(c) {
+  const cityList = c.cityList || [];
+  if (cityList.length <= 1) return [];
+  const starred = (x) => (isFavourite(`${c.code}/${x.code}`) ? 0 : 1);
+  return cityList.slice().sort((a, b) => starred(a) - starred(b))
+    .map((city) => buildCity(c, city));
+}
+
+function buildCountry(c) {
+  const row = document.createElement('button');
+  row.type = 'button';
+  row.className = 'row' + (state.picked === c.code ? ' is-picked' : '');
+  row.dataset.code = c.code;
+  row.dataset.state = reachState(c);
+  row.style.setProperty('--flag', flagUrl(c.code));
+  const chip = document.createElement('span');
+  chip.className = 'flag';
+  row.append(chip);
+
+  const copy = document.createElement('span');
+  copy.className = 'row__copy';
+  const name = document.createElement('span');
+  name.className = 'row__name';
+  name.textContent = c.name;
+  const meta = document.createElement('span');
+  meta.className = 'row__meta';
+  const cities = c.cityList || [];
+  const places = cities.length > 1 ? `${cities.length} cities`
+    : (cities[0] && cities[0].name) || '';
+  // "11 relays" breaks before the number, never inside it, when the line has
+  // to wrap.
+  const line = [places, `${c.count} relay${c.count === 1 ? '' : 's'}`]
+    .filter(Boolean).map((s) => s.replace(/ /g, ' ')).join(' · ');
+  const count = document.createElement('span');
+  count.className = 'row__count';
+  count.textContent = line;
+  meta.append(count);
+  // Who runs these exits and what they offer: the provider's mark, then 10G
+  // and P2P.
+  const badges = document.createElement('span');
+  badges.className = 'row__badges';
+  const by = c.by || {};
+  for (const k of Object.keys(by).filter((k) => by[k] > 0).sort()) {
+    badges.append(providerTag(k, by[k], (c.byTested || {})[k] || 0,
+                              (c.byOk || {})[k] || 0, (c.byPing || {})[k]));
+  }
+  for (const [has, word, why, kind] of [
+    [cities.some((x) => x.gbps === 10), '10G', '10 Gbps link', 'fast'],
+    [cities.some((x) => x.p2p), 'P2P', 'P2P allowed', 'p2p'],
+  ]) {
+    if (!has) continue;
+    const m = document.createElement('span');
+    m.className = 'mark';
+    m.dataset.kind = kind;
+    m.textContent = word;
+    m.title = why;
+    badges.append(m);
+  }
+  if (badges.childNodes.length) meta.append(badges);
+  copy.append(name, meta);
+
+  // The time, in mono at the trailing edge - and "Blocked" only where every
+  // exit that was asked turned away. Nothing before it has been asked, because
+  // "untested" and "blocked" must not look alike.
+  const marks = document.createElement('span');
+  marks.className = 'row__marks';
+  const ping = document.createElement('span');
+  ping.className = 'row__ping';
+  if (c.tested && !c.ok && c.tested >= c.count) {
+    ping.textContent = 'Blocked';
+    ping.dataset.blocked = '1';
+  } else if (c.tested && c.ok && c.ping !== null && c.ping !== undefined) {
+    ping.textContent = msSaid(c.ping);
+  }
+  marks.append(ping);
+  row.append(copy, marks);
+
+  // A country with cities opens into them; one without opens straight into
+  // its hosts, because there is no middle to show. Either way it is the same
+  // chevron in the same place.
+  const many = cities.length > 1;
+  const opens = many || c.count > 1;
+  row.append(railFor(c.code, opens ? (many ? 'expand' : 'exits') : null,
+                     many ? state.openCities.has(c.code)
+                          : state.openExits === c.code));
+  return row;
+}
+
+/* Open or shut a country's cities where it stands: the list is not redrawn,
+   the panel grows to its height and the rows already on screen stay put. */
+function toggleCities(code) {
+  const opening = !state.openCities.has(code);
+  if (opening) state.openCities.add(code);
+  else state.openCities.delete(code);
+  const q = $('search').value.trim();
+  const c = state.countries.find((x) => x.code === code);
+  const group = $('list').querySelector(`.group[data-code="${CSS.escape(code)}"]`);
+  if (!c || !group) { $('list').dataset.key = ''; drawList(q); return; }
+  $('list').dataset.key = listKey(q);        // the next draw has nothing to do
+  const handle = group.querySelector('[data-expand]');
+  if (handle) handle.dataset.on = String(opening);
+  const calm = CALM || !window.gsap;
+  if (opening) {
+    const inner = document.createElement('div');
+    inner.className = 'group__in';
+    inner.append(...cityRows(c));
+    group.append(inner);
+    group.classList.add('is-open');
+    if (!calm) {
+      gsap.fromTo(inner, { height: 0 },
+                  { height: 'auto', duration: 0.25, ease: 'expo.out', clearProps: 'height' });
+    }
+  } else {
+    const inner = group.querySelector('.group__in');
+    const done = () => {
+      if (inner) inner.remove();
+      if (!group.querySelector('.exits')) group.classList.remove('is-open');
+    };
+    if (!inner || calm) done();
+    else gsap.to(inner, { height: 0, duration: 0.167, ease: 'power2.in', onComplete: done });
+  }
+  markCursor();
 }
 
 function rows() { return Array.from($('list').querySelectorAll('.row')); }
@@ -714,14 +679,14 @@ async function choose(code) {
      up does the obvious thing instead of nothing. */
   if (state.mode === 'busy') return;
   if (state.mode === 'on') {
-    setStatus('SWITCHING', 'busy', 'Leaving the old one', '');
+    setStatus('Switching', 'busy', 'Leaving the old one', '');
     try {
       await window.pywebview.api.disconnect();
     } catch (_) { /* going anyway */ }
   }
   state.mode = 'busy';
   render();
-  setStatus('CONNECTING', 'busy', 'Looking for a server', '');
+  setStatus('Connecting', 'busy', 'Looking for a server', '');
   setHint('');
   const r = await window.pywebview.api.connect(code);
   if (!r.ok) { state.mode = 'off'; render(); }
@@ -733,13 +698,14 @@ const STAGES = {
   probing: 'Looking for a server',
   starting: 'Opening the connection',
   routing: 'Pointing Windows at it',
+  adapter: 'Bringing up the network adapter',
   verifying: 'Checking it really works',
 };
 
 window.onProgress = (p) => {
   const detail = (p.phase === 'probing' && p.total)
     ? `${p.asked || 0} of ${p.total} asked` : '';
-  setStatus('CONNECTING', 'busy', STAGES[p.phase] || 'Working', detail);
+  setStatus('Connecting', 'busy', STAGES[p.phase] || 'Working', detail);
 };
 
 window.onConnected = (status) => {
@@ -766,9 +732,12 @@ window.onConnected = (status) => {
   // How long it has been up, ticking beside the place - the desktop's
   // version of the Android notification's timer.
   state.since = status.since || Date.now() / 1000;
-  setStatus('CONNECTED', 'on',
-            `${place}<span class="status__clock mono" id="statusClock"></span>`,
-            e.host || '');
+  // The place the traffic comes out in goes on the location line (see
+  // render), under its flag; the flag is also what fills the background.
+  const liveCode = canonCode(measured || claimed);
+  state.live = { code: liveCode, name: place };
+  setStatus('Connected', 'on', measured ? '' : 'Checking where it comes out', e.host || '');
+  lanPane.refresh();
   paintClock();
   $('detIn').textContent = `${e.ip || '—'}:443`;
   $('detOut').textContent = confirmed || '—';
@@ -778,9 +747,11 @@ window.onConnected = (status) => {
     ? `Sold as ${nameOf(claimed)}, but its traffic really comes out in ${place}. What websites see is the second one.`
     : (e.unconfirmed
         ? 'Connected, but the independent check did not answer. If pages load, it is fine.'
-        : (state.systemProxy
-            ? 'Everything on this PC now goes through this connection.'
-            : `Serving on 127.0.0.1:${state.port}. Windows was left alone, so point what you want at it.`)));
+        : (status.tun
+            ? 'Every program on this PC now goes through this connection, including the ones that ignore the proxy setting.'
+            : (state.systemProxy
+                ? 'Everything on this PC now goes through this connection.'
+                : `Serving on 127.0.0.1:${state.port}. Windows was left alone, so point what you want at it.`))));
   render();
   // The push comes once a second; this is so a window opened onto a
   // connection that was already up does not sit with an empty meter for the
@@ -806,7 +777,10 @@ window.onFailed = (err) => {
   state.mode = 'fail';
   setIp($('exitIp'), '—', false);
   $('exitPlace').textContent = 'not connected';
-  setStatus('NOT CONNECTED', 'fail', 'Could not connect', '');
+  setStatus('Not connected', 'fail', 'Could not connect', '');
+  // The detail arrives as "tun-failed: <what sing-box said>"; only the part
+  // after the kind is worth reading.
+  const tunWhy = (err.detail || '').replace(/^tun-[a-z]+:\s*/, '').slice(0, 160);
   const say = {
     'all-refused': state.picked === 'auto'
       ? 'No server accepted just now. That happens — wait a moment and try again.'
@@ -847,6 +821,16 @@ window.onFailed = (err) => {
     // Only from a port change: the old worker was stopped and the new one
     // never answered, so there is nothing up and the sheet has the detail.
     'moved-and-died': 'The port changed, but the connection did not come back up on it. Connect again.',
+    // Tunnel mode only. The exit was found and is fine; it is the adapter
+    // that did not come up, so the way out is a setting, not another server.
+    'tun-missing': 'Tunnel mode needs sing-box.exe beside Relay, and it is not '
+      + 'there. Switch Settings → Connection back to the proxy setting.',
+    'tun-refused': 'Windows was not given administrator approval, so the '
+      + 'network adapter was not brought up. Connect again and allow it, or '
+      + 'use the proxy setting instead.',
+    'tun-failed': tunWhy
+      ? `The network adapter did not come up: ${tunWhy}`
+      : 'The network adapter did not come up.',
   };
   // A failure without its own sentence says what it was, rather than
   // "try once more" over a reason nobody gets to read.
@@ -861,7 +845,7 @@ window.onDisconnected = (info) => {
   state.mode = 'off';
   setIp($('exitIp'), '—', false);
   $('exitPlace').textContent = 'not connected';
-  setStatus('DISCONNECTED', 'off', '', '');
+  setStatus('Disconnected', 'off', '', '');
   setHint(info && info.minutes
     ? `Windows is back to normal. Routed for ${info.minutes} minute${info.minutes === 1 ? '' : 's'}.`
     : 'Windows is back to normal.');
@@ -1046,7 +1030,10 @@ const flux = {
   peak: { down: 32768, up: 8192 },
   floor: { down: 32768, up: 8192 },
 
-  frame: null,
+  tween: null,               /* the one GSAP tween that carries a reading in */
+  prog: { k: 0 },
+  from: { down: 0, up: 0, downRate: 0, upRate: 0 },
+  frac: 0,                   /* how far the line has slid toward the next reading */
   said: {},
   box: { w: 0, h: 0 },
   ink: null,
@@ -1091,9 +1078,9 @@ const flux = {
     this.want = { down: 0, up: 0, downRate: 0, upRate: 0 };
     this.peak = { down: this.floor.down, up: this.floor.up };
     this.said = {};
+    this.frac = 0;
     this.el.dataset.live = 'true';
     this.paint();
-    this.run();
   },
 
   /* The digits and the unit are separate elements so the unit can be set
@@ -1114,7 +1101,7 @@ const flux = {
     if (!this.live) return;
     this.live = false;
     this.el.dataset.live = 'false';
-    if (this.frame) { cancelAnimationFrame(this.frame); this.frame = null; }
+    if (this.tween) { this.tween.kill(); this.tween = null; }
     setFlow(0);
   },
 
@@ -1130,13 +1117,41 @@ const flux = {
     while (this.pts.length > this.span) this.pts.shift();
     this.at = performance.now();
 
+    // The palette is read again for every reading: it is one lookup a second,
+    // and a theme change would otherwise leave the strokes in the old ink.
+    const skin = getComputedStyle(this.el);
+    this.ink = {
+      down: skin.getPropertyValue('--flux-down').trim() || this.ink.down,
+      up: skin.getPropertyValue('--flux-up').trim() || this.ink.up,
+    };
+
+    this.from = { ...this.shown };
     this.want = { down: t.down || 0, up: t.up || 0, downRate: down, upRate: up };
     // A total that went backwards is a new worker on a new port, not a
     // correction - there is nothing to ease toward, so it is taken whole.
     if (this.want.down < this.shown.down) this.shown.down = this.want.down;
     if (this.want.up < this.shown.up) this.shown.up = this.want.up;
     setFlow(pace(down + up));
-    if (slowMotion.matches) { this.settle(1); this.paint(); }
+    if (this.tween) { this.tween.kill(); this.tween = null; }
+    if (CALM || !window.gsap) {
+      this.settle(1); this.frac = 0; this.paint();
+      return;
+    }
+    // One tween per reading, linear, one second: the line slides one step
+    // left while the figures walk to the new ones. It replaces the frame
+    // loop this used to run; nothing moves between readings.
+    this.prog.k = 0;
+    this.tween = gsap.to(this.prog, {
+      k: 1, duration: this.every / 1000, ease: 'none',
+      onUpdate: () => {
+        const e = 1 - (1 - this.prog.k) ** 3;
+        for (const key of ['down', 'up', 'downRate', 'upRate']) {
+          this.shown[key] = this.from[key] + (this.want[key] - this.from[key]) * e;
+        }
+        this.frac = this.prog.k;
+        this.paint();
+      },
+    });
   },
 
   /* Walk the shown figures toward the reported ones. `k` is how much of the
@@ -1170,21 +1185,6 @@ const flux = {
     el.textContent = text;
   },
 
-  run() {
-    if (slowMotion.matches) return;
-    let last = performance.now();
-    const tick = (now) => {
-      this.frame = requestAnimationFrame(tick);
-      if (!this.live) return;
-      if (document.hidden) { last = now; return; }
-      const dt = Math.min(now - last, 250) / 1000;
-      last = now;
-      this.settle(1 - Math.exp(-dt * 7));
-      this.paint();
-    };
-    this.frame = requestAnimationFrame(tick);
-  },
-
   draw() {
     const ctx = this.ctx;
     if (!ctx) return;
@@ -1201,7 +1201,7 @@ const flux = {
     /* The rule sits low, not in the middle. Download gets three fifths of
        the band because download is what the question is usually about. */
     const rule = Math.round(h * 0.62) + 0.5;
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.075)';
+    ctx.strokeStyle = tint(this.ink.up, 0.22);
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, rule);
@@ -1228,37 +1228,33 @@ const flux = {
     /* How far between two readings we are. The whole line is shifted left by
        this much of one step, which is what makes it glide rather than jump
        once a second. */
-    const frac = slowMotion.matches
-      ? 0 : Math.min(1, (performance.now() - this.at) / this.every);
+    const frac = CALM ? 0 : this.frac;
     const step = w / (this.span - 1);
 
     this.band(ctx, w, rule, rule - 3, (s) => s.d, this.peak.down,
-              this.ink.down, 0.34, 0.92, step, frac, -1);
+              this.ink.down, 0.10, 1, step, frac, -1);
     this.band(ctx, w, rule, h - rule - 2, (s) => s.u, this.peak.up,
-              this.ink.up, 0.24, 0.76, step, frac, 1);
+              this.ink.up, 0.07, 1, step, frac, 1);
 
-    /* Where the line is now. The one lit thing in the band, and the only
-       reason the eye knows which end is the present. */
+    /* Where the line is now: a plain dot in the stroke's own ink, so the eye
+       knows which end is the present. No glow. */
     const head = this.pts[this.pts.length - 1];
-    if (!slowMotion.matches && head && head.d > 512) {
+    if (!CALM && head && head.d > 512) {
       const y = rule - Math.min(1, head.d / this.peak.down) * (rule - 3);
       ctx.fillStyle = this.ink.down;
-      ctx.shadowColor = this.ink.down;
-      ctx.shadowBlur = 7;
       ctx.beginPath();
-      ctx.arc(w - frac * step, y, 1.6, 0, Math.PI * 2);
+      ctx.arc(w - frac * step - 1.5, y, 2, 0, Math.PI * 2);
       ctx.fill();
-      ctx.shadowBlur = 0;
     }
 
     /* The trace comes out of nothing on the left rather than being sliced
        off by the edge of the canvas. */
-    const fade = ctx.createLinearGradient(0, 0, w * 0.24, 0);
+    const fade = ctx.createLinearGradient(0, 0, w * 0.2, 0);
     fade.addColorStop(0, 'rgba(0, 0, 0, 1)');
     fade.addColorStop(1, 'rgba(0, 0, 0, 0)');
     ctx.globalCompositeOperation = 'destination-out';
     ctx.fillStyle = fade;
-    ctx.fillRect(0, 0, w * 0.24, h);
+    ctx.fillRect(0, 0, w * 0.2, h);
     ctx.globalCompositeOperation = 'source-over';
   },
 
@@ -1298,7 +1294,7 @@ const flux = {
     trace();
     ctx.lineTo(w, ys[n - 1]);
     ctx.strokeStyle = tint(colour, ink);
-    ctx.lineWidth = 1.25;
+    ctx.lineWidth = 1.5;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     ctx.stroke();
@@ -1405,15 +1401,18 @@ window.onTraffic = (t) => {
 
 const log = {
   by: 'host',            /* or 'app' */
+  filter: '',
   poll: null,
   rows: [],
   open: false,
+  els: new Map(),        /* group key -> its row, so a refresh moves rows instead of remaking them */
 
   show() {
     if (this.open) return;
     this.open = true;
     $('log').showModal();
     this.slide();
+    this.heads();
     this.pull();
     // The worker rewrites the list every other second, so asking faster
     // would be reading the same answer twice.
@@ -1443,137 +1442,169 @@ const log = {
     if (this.by === 'host') {
       // Already one row per destination and program. Rows for the same host
       // from two different programs are folded together here, and the
-      // programs become the caption.
+      // programs become the second column.
       return this.fold((r) => r.host, (r) => r.app);
     }
     return this.fold((r) => r.app || 'Not identified', (r) => r.host);
   },
 
   /* Rows keyed by `name`, remembering the distinct `other` values that went
-     into each - which is what the second line of the row says. */
+     into each - which is what the second column says. */
   fold(name, other) {
     const out = new Map();
     for (const r of this.rows) {
       const key = name(r);
       let g = out.get(key);
       if (!g) {
-        g = { key, up: 0, down: 0, hits: 0, live: 0, others: new Set() };
+        g = { key, up: 0, down: 0, hits: 0, live: 0, direct: 0, n: 0, others: new Set() };
         out.set(key, g);
       }
       g.up += r.up;
       g.down += r.down;
       g.hits += r.hits;
       g.live += r.live;
+      g.n += 1;
+      if (r.direct) g.direct += 1;
       const o = other(r);
       if (o) g.others.add(o);
     }
     return [...out.values()].sort((a, b) => (b.up + b.down) - (a.up + a.down));
   },
 
+  heads() {
+    $('logColA').textContent = this.by === 'host' ? 'Host' : 'Program';
+    $('logColB').textContent = this.by === 'host' ? 'Program' : 'Hosts';
+  },
+
+  matches(g) {
+    const q = this.filter.trim().toLowerCase();
+    if (!q) return true;
+    if (g.key.toLowerCase().includes(q)) return true;
+    for (const o of g.others) if (o.toLowerCase().includes(q)) return true;
+    return false;
+  },
+
   draw(said) {
     const list = $('logList');
-    const groups = this.group();
-    list.textContent = '';
+    const all = this.group();
+    const groups = all.filter((g) => this.matches(g));
+    for (const n of list.querySelectorAll('.lnone')) n.remove();
+
+    // The dot on the header icon is about the whole ledger, not the filter.
+    let anyLive = 0;
+    for (const g of all) anyLive += g.live;
+    $('logOpen').dataset.live = anyLive > 0 ? 'true' : 'false';
 
     if (!groups.length) {
+      for (const el of this.els.values()) el.remove();
+      this.els.clear();
       const p = document.createElement('p');
       p.className = 'lnone';
-      p.textContent = said && said.live
-        ? 'Nothing has gone through yet. Open something and it will show up here.'
-        : 'Nothing is routed right now. Connect, and this fills in as your programs start talking.';
+      p.textContent = all.length
+        ? 'Nothing matches that.'
+        : said && said.live
+          ? 'Nothing has gone through yet. Open something and it will show up here.'
+          : 'Nothing is routed right now. Connect, and this fills in as your programs start talking.';
       list.append(p);
       $('logSum').textContent = '—';
       $('logFoot').textContent = '';
-      $('logOpen').dataset.live = 'false';
       return;
     }
 
     const top = groups[0].up + groups[0].down;
     let up = 0;
     let down = 0;
-    let live = 0;
-    for (const g of groups) { up += g.up; down += g.down; live += g.live; }
+    for (const g of groups) { up += g.up; down += g.down; }
 
-    // Short words and no spaces inside the figures. This shares a line with
-    // the two tabs in a 400px window, and the first thing that went was the
-    // upload total off the right-hand end where nobody could see it had.
     const [dn, du] = splitBytes(down);
     const [un, uu] = splitBytes(up);
     $('logSum').textContent =
       `${groups.length} ${this.by === 'host' ? 'hosts' : 'programs'}`
-      + `  ·  ↓${dn}${du}  ↑${un}${uu}`;
-    $('logOpen').dataset.live = live > 0 ? 'true' : 'false';
+      + `  ·  ↓ ${dn} ${du}  ↑ ${un} ${uu}`;
 
-    for (const g of groups) list.append(this.row(g, top));
+    const keep = new Set();
+    groups.forEach((g, i) => {
+      keep.add(g.key);
+      let el = this.els.get(g.key);
+      const fresh = !el;
+      if (fresh) { el = this.make(); this.els.set(g.key, el); }
+      this.fill(el, g, top, fresh);
+      // Only touch a row that is out of place, so the browser is not asked
+      // to relayout a hundred rows every two seconds.
+      if (list.children[i] !== el) list.insertBefore(el, list.children[i] || null);
+    });
+    for (const [k, el] of this.els) {
+      if (!keep.has(k)) { el.remove(); this.els.delete(k); }
+    }
 
     // Said only when it is true. The worker keeps the hundred busiest pairs
     // and nothing else, and a list that quietly stopped at a hundred while
     // looking complete is the kind of thing this app is meant not to do.
-    //
-    // Counted in the worker's own rows rather than in the groups above: the
-    // groups fold two rows into one wherever a host was reached by two
-    // programs, so a number taken from them would not be the number the
-    // worker left out.
     const missing = ((said && said.total) || 0) - this.rows.length;
     $('logFoot').textContent = missing > 0
       ? `${missing} quieter ${missing === 1 ? 'one is' : 'ones are'} counted in the meter but not listed here.`
       : '';
   },
 
-  row(g, top) {
+  make() {
     const el = document.createElement('div');
     el.className = 'lrow';
-    el.style.setProperty('--share',
-      `${Math.max(1.5, ((g.up + g.down) / (top || 1)) * 100).toFixed(1)}%`);
-
+    el.setAttribute('role', 'row');
     const name = document.createElement('p');
     name.className = 'lrow__name';
-    if (g.live > 0) {
-      const dot = document.createElement('i');
-      dot.className = 'lrow__live';
-      name.append(dot);
-    }
+    const dot = document.createElement('i');
+    dot.className = 'lrow__live';
+    dot.title = 'Open now';
     const who = document.createElement('span');
     who.className = 'lrow__who';
-    who.textContent = g.key;
-    name.append(who);
-
-    const [sn, su] = splitBytes(g.up + g.down);
-    const sum = document.createElement('p');
-    sum.className = 'lrow__sum mono';
-    sum.textContent = `${sn} ${su}`;
-
+    const tag = document.createElement('span');
+    tag.className = 'lrow__tag';
+    tag.textContent = 'direct';
+    tag.title = 'Went straight out, around the exit (split tunnel)';
+    name.append(dot, who, tag);
     const sub = document.createElement('p');
     sub.className = 'lrow__sub';
-    sub.textContent = this.caption(g);
-
-    const [dn, du] = splitBytes(g.down);
-    const [un, uu] = splitBytes(g.up);
-    const split = document.createElement('p');
-    split.className = 'lrow__split mono';
-    const d = document.createElement('b');
-    d.textContent = `↓${dn}${du}`;
-    const u = document.createElement('i');
-    u.textContent = `↑${un}${uu}`;
-    split.append(d, document.createTextNode('  '), u);
-
-    el.append(name, sum, sub, split);
+    const dn = document.createElement('p');
+    dn.className = 'lrow__num mono';
+    const up = document.createElement('p');
+    up.className = 'lrow__num mono';
+    const bar = document.createElement('i');
+    bar.className = 'lrow__bar';
+    el.append(name, sub, dn, up, bar);
     return el;
   },
 
-  /* The other half of the pair, and how many times it was asked for. One
-     name when there is one, a count when there are several - "4 programs"
-     says as much as four names would in a row that is 200px wide. */
+  fill(el, g, top, fresh) {
+    el.dataset.by = this.by;
+    el.dataset.live = g.live > 0 ? '1' : '0';
+    el.dataset.direct = g.direct > 0 && g.direct === g.n ? '1' : '0';
+    const [name, sub, dn, up, bar] = el.children;
+    name.querySelector('.lrow__who').textContent = g.key;
+    sub.textContent = this.caption(g);
+    sub.title = [...g.others].join('\n');
+    el.title = `${g.hits} connection${g.hits === 1 ? '' : 's'}`;
+    const [d, du] = splitBytes(g.down);
+    const [u, uu] = splitBytes(g.up);
+    dn.textContent = `${d} ${du}`;
+    up.textContent = `${u} ${uu}`;
+    // Width as a share of the busiest row, never under 2% so a quiet host is
+    // still a mark rather than nothing.
+    const share = Math.max(0.02, (g.up + g.down) / (top || 1));
+    if (fresh || CALM || !window.gsap) {
+      if (window.gsap) gsap.set(bar, { scaleX: share });
+      else bar.style.transform = `scaleX(${share})`;
+    } else {
+      gsap.to(bar, { scaleX: share, duration: 0.25, ease: 'expo.out', overwrite: true });
+    }
+  },
+
+  /* The other half of the pair. One name when there is one, a count when
+     there are several. */
   caption(g) {
     const many = g.others.size;
-    const asked = `${g.hits} connection${g.hits === 1 ? '' : 's'}`;
-    if (!many) {
-      return this.by === 'host'
-        ? `not identified · ${asked}` : asked;
-    }
-    if (many === 1) return `${[...g.others][0]} · ${asked}`;
-    const what = this.by === 'host' ? 'programs' : 'destinations';
-    return `${many} ${what} · ${asked}`;
+    if (!many) return this.by === 'host' ? 'not identified' : '—';
+    if (many === 1) return [...g.others][0];
+    return `${many} ${this.by === 'host' ? 'programs' : 'hosts'}`;
   },
 
   pick(by) {
@@ -1583,13 +1614,14 @@ const log = {
       b.setAttribute('aria-selected', String(b.dataset.by === by));
     }
     this.slide();
+    this.heads();
+    for (const el of this.els.values()) el.remove();
+    this.els.clear();
     this.draw({ live: true, total: this.rows.length });
   },
 
   /* The lit backing, moved to sit under whichever word is chosen. Measured
-     rather than hard-coded: the two words are different lengths, and they
-     are different lengths again in every language this is ever translated
-     into. */
+     rather than hard-coded: the two words are different lengths. */
   slide() {
     const chosen = $('logPair').querySelector('[aria-selected="true"]');
     const bar = $('logPair').querySelector('.pair__slide');
@@ -1599,23 +1631,28 @@ const log = {
   },
 };
 
+$('logFilter').addEventListener('input', (e) => {
+  log.filter = e.target.value;
+  log.draw({ live: true, total: log.rows.length });
+});
+
 /* -------------------------------------------------------------- actions */
 
 async function onAct() {
   if (state.mode === 'busy') {
-    setStatus('CANCELLING', 'off', 'Stopping', '');
+    setStatus('Cancelling', 'off', 'Stopping', '');
     await window.pywebview.api.cancel();
     return;
   }
   if (state.mode === 'on') {
-    setStatus('DISCONNECTING', 'off', 'Putting Windows back', '');
+    setStatus('Disconnecting', 'off', 'Putting Windows back', '');
     const r = await window.pywebview.api.disconnect();
     window.onDisconnected(r && r.session);
     return;
   }
   state.mode = 'busy';
   render();
-  setStatus('CONNECTING', 'busy', 'Looking for a server', '');
+  setStatus('Connecting', 'busy', 'Looking for a server', '');
   setHint('');
   const r = await window.pywebview.api.connect(state.picked);
   if (!r.ok) { state.mode = 'off'; render(); }
@@ -1679,10 +1716,10 @@ function paintWay() {
   // here can tell a tunnel that is not set up from one not yet asked about.
   if (state.serverCount !== undefined && state.tunnelReady !== undefined) {
     const open = waysOpen();
-    for (const b of $('way').querySelectorAll('.seg__opt')) {
+    for (const b of $('way').querySelectorAll('.dd__opt')) {
       b.hidden = !open.includes(b.dataset.way);
     }
-    // One way left is nothing to choose, so the strip is not drawn at all.
+    // One way left is nothing to choose, so the menu is not drawn at all.
     $('wayWrap').querySelector('.way__row').hidden = open.length < 2;
     if (open.length && !open.includes(way)) {
       chooseWay(open[0]);
@@ -1692,11 +1729,10 @@ function paintWay() {
 
   $('way').dataset.way = way;
   $('wayWrap').dataset.way = way;
-  for (const b of $('way').querySelectorAll('.seg__opt')) {
-    b.setAttribute('aria-pressed', String(b.dataset.way === way));
-  }
+  wayMenu.sync(way);
   // The picker belongs to the two ways that have a country in them.
-  document.querySelector('.stack').dataset.way = way;
+  const stack = document.querySelector('.stack');
+  if (stack) stack.dataset.way = way;
 
   $('wayWhy').textContent = WAY_SAID[way];
   const note = $('wayNote');
@@ -1716,6 +1752,194 @@ async function chooseWay(way) {
   const r = await window.pywebview.api.setMode(way);
   if (!r || !r.ok) said($('wayNote'), 'That could not be saved.', 'bad');
 }
+
+/* ------------------------------------------------------- share on Wi-Fi */
+
+/* The proxy, offered to other devices on the same network.
+
+   Off, it listens on this machine only. On, it listens on the LAN too, which
+   needs a Windows Firewall rule - the backend asks for it with a UAC prompt,
+   so the page says so before the click. What the other device should type is
+   read from lanShareState(), which shells out to PowerShell and takes one to
+   six seconds, so it is asked on opening, on Connected, and every ten
+   seconds while this screen is the one in view - never faster, never when
+   nobody is looking. */
+const lanPane = (() => {
+  const api = () => window.pywebview.api;
+  let on = false;
+  let busy = false;        // a switch press is out
+  let asking = false;      // a lanShareState is out
+  let applied = null;      // 'now' | 'next' from the last switch press
+  let snap = null;         // the last lanShareState answer
+  let timer = null;
+  let note = null;         // {text, kind} from the last press, until the next
+
+  const supported = () => typeof api().setLanShare === 'function'
+    && typeof api().lanShareState === 'function';
+
+  function visible() {
+    return state.screen === 'connection' && $('prefs').open;
+  }
+
+  function lines() {
+    const out = [];
+    if (!snap) return out;
+    const fw = snap.firewall;
+    if (fw === 'ok') out.push(['Windows lets other devices in.', '']);
+    else if (fw === 'missing') {
+      out.push(['Windows is blocking other devices. A firewall rule for Relay is missing.', 'bad']);
+    } else if (fw === 'public-network') {
+      out.push(['Windows treats this Wi-Fi as Public and blocks other devices — set it to Private in Windows settings.', 'bad']);
+    } else out.push(['Could not check the Windows firewall.', '']);
+    return out;
+  }
+
+  function paint() {
+    const row = $('lanRow');
+    const sw = $('lanSwitch');
+    sw.setAttribute('aria-checked', String(on));
+    sw.dataset.busy = busy ? '1' : '0';
+    sw.disabled = busy;
+    const pill = $('lanPill');
+    pill.dataset.state = on ? 'on' : '';
+    pill.textContent = on ? 'on' : 'off';
+    row.dataset.on = on ? '1' : '0';
+    $('lanBody').hidden = !on;
+    $('lanUac').hidden = on;
+    said($('lanSaid'), note ? note.text : '', note && note.kind);
+    if (!on) return;
+
+    const s = snap || {};
+    const addrs = s.addrs || [];
+    const main = addrs[0];
+    $('lanAddr').textContent = main || (snap ? 'no address found' : 'looking…');
+    $('lanPort').textContent = String(s.port || state.port);
+    $('lanCopyAddr').hidden = !main;
+
+    // Every other way in, small. adapters carry the network's name when
+    // Windows has one; addrs alone is enough when it has not.
+    const names = new Map((s.adapters || []).map((a) => [a.ip, a]));
+    const more = addrs.slice(1).map((ip) => {
+      const a = names.get(ip);
+      const tag = a ? [a.name, a.network].filter(Boolean).join(', ') : '';
+      return tag ? `${ip} (${tag})` : ip;
+    });
+    $('lanOthers').textContent = more.length
+      ? `Also reachable at ${more.join(' · ')}` : '';
+    $('lanOthers').hidden = !more.length;
+
+    const n = s.clients | 0;
+    $('lanClients').textContent = snap
+      ? (n ? `${n} device${n === 1 ? '' : 's'} connected now.` : 'No device is connected yet.')
+      : '';
+
+    const fwEl = $('lanFw');
+    const ls = lines();
+    fwEl.textContent = ls.length ? ls[0][0] : '';
+    fwEl.classList.toggle('is-bad', !!ls.length && ls[0][1] === 'bad');
+    $('lanFix').hidden = !(snap && s.firewall === 'missing');
+
+    // Listening is the proxy bound to the LAN. On but not listening means
+    // the setting is saved and the proxy has not been restarted with it.
+    const wait = $('lanLater');
+    const later = applied === 'next' || (snap && s.listening === false);
+    wait.hidden = !later;
+    wait.textContent = 'Applies when you reconnect.';
+  }
+
+  async function poll() {
+    if (asking || !on || !supported()) return;
+    asking = true;
+    try {
+      const r = await api().lanShareState();
+      if (r) snap = r;
+      if (r && typeof r.on === 'boolean' && r.on !== on && !busy) on = r.on;
+    } catch (err) { /* keep the last answer */ }
+    asking = false;
+    paint();
+  }
+
+  function schedule() {
+    if (timer) return;
+    timer = setInterval(() => {
+      if (!on || !visible()) { stop(); return; }
+      poll();
+    }, 10000);
+  }
+
+  function stop() {
+    clearInterval(timer);
+    timer = null;
+  }
+
+  async function set(want) {
+    if (busy) return;
+    busy = true;
+    note = { text: want ? 'Waiting for Windows to ask permission…' : 'Turning off…', kind: 'work' };
+    paint();
+    let r;
+    try {
+      r = await api().setLanShare(want);
+    } catch (err) {
+      r = { ok: false, error: String(err) };
+    }
+    busy = false;
+    if (r && r.ok) {
+      on = !!r.lanShare;
+      state.lanShare = on;
+      applied = r.applied || null;
+      note = r.warning ? { text: r.warning, kind: 'bad' } : null;
+    } else {
+      note = { text: (r && r.error) || 'Could not change it.', kind: 'bad' };
+    }
+    if (on) { snap = null; schedule(); }
+    paint();
+    if (on) poll();
+  }
+
+  async function fix() {
+    $('lanFix').disabled = true;
+    note = { text: 'Waiting for Windows to ask permission…', kind: 'work' };
+    paint();
+    let r;
+    try { r = await api().fixLanShareFirewall(); } catch (err) { r = { ok: false, error: String(err) }; }
+    $('lanFix').disabled = false;
+    note = r && r.ok ? null : { text: (r && r.error) || 'Could not add the rule.', kind: 'bad' };
+    if (r && r.firewall && snap) snap.firewall = r.firewall;
+    paint();
+    poll();
+  }
+
+  $('lanSwitch').addEventListener('click', () => set(!on));
+  $('lanFix').addEventListener('click', fix);
+  $('lanCopyAddr').addEventListener('click', (e) => {
+    const a = (snap && snap.addrs && snap.addrs[0]) || '';
+    copyText(e.currentTarget, a);
+  });
+  $('lanCopyPort').addEventListener('click', (e) => {
+    copyText(e.currentTarget, String((snap && snap.port) || state.port));
+  });
+
+  return {
+    take(info) {
+      const has = 'lanShare' in info && supported();
+      $('prefLan').hidden = !has;
+      if (!has) return;
+      if (!busy) on = !!info.lanShare;
+      state.lanShare = on;
+      paint();
+      if (on && visible()) { poll(); schedule(); }
+    },
+    /* Called by showScreen with the slug now showing. */
+    screen(slug) {
+      if (slug === 'connection' && on) { poll(); schedule(); } else if (slug !== 'connection') stop();
+    },
+    /* Connected / disconnected: whether it is listening has probably changed. */
+    refresh() {
+      if (on && visible()) poll();
+    },
+  };
+})();
 
 /* --------------------------------------------------------- your own tunnel */
 
@@ -1739,9 +1963,66 @@ function paintTunnel(plan) {
   // it is, so the placeholder is the only thing that can say so.
   $('tunnelPass').placeholder = t.hasPassword ? 'saved' : 'made for you';
   $('tunnelApi').placeholder = t.hasApiPassword ? 'saved' : 'made for you';
+  paintVia(t);
   paintWayIn(t.edges, t);
-  // An address is not behind Cloudflare: there is no other way in to find.
-  $('tunnelScan').hidden = !!t.isAddress;
+  // An address is not behind Cloudflare, and Shadowsocks goes straight to
+  // the address either way: in both there is no other way in to find.
+  $('tunnelScan').hidden = !!t.isAddress || t.transport === 'ss';
+}
+
+/* Shadowsocks or the WebSocket, for a server whose key offered both. */
+function paintVia(t) {
+  $('tunnelViaBox').hidden = !t.hasSs;
+  const seg = $('tunnelVia');
+  seg.dataset.via = t.transport === 'ss' ? 'ss' : 'ws';
+  for (const b of seg.querySelectorAll('.seg__opt')) {
+    b.setAttribute('aria-pressed', String(b.dataset.via === seg.dataset.via));
+  }
+}
+
+async function useTunnelKey() {
+  const btn = $('tunnelKeyUse');
+  const text = $('tunnelKey').value.trim();
+  if (!text) {
+    said($('tunnelKeySaid'), 'Paste the relay:// line first.', 'bad');
+    return;
+  }
+  busy(btn, true);
+  const r = await window.pywebview.api.importKey(text);
+  busy(btn, false);
+  if (!r || !r.ok) {
+    said($('tunnelKeySaid'), (r && r.error) || 'That key could not be used.', 'bad');
+    return;
+  }
+  // Out of the page the moment it is on disk: it holds three passwords.
+  $('tunnelKey').value = '';
+  paintTunnel(r);
+  paintWay();
+  said($('tunnelKeySaid'),
+       `Set up for ${r.domain}${r.transport === 'ss' ? ', over Shadowsocks' : ''}. `
+       + 'Press Test below to check it carries.', 'good');
+}
+
+for (const b of $('tunnelVia').querySelectorAll('.seg__opt')) {
+  b.addEventListener('click', async () => {
+    const want = b.dataset.via;
+    const seg = $('tunnelVia');
+    if (seg.dataset.via === want || seg.dataset.busy === '1') return;
+    const was = seg.dataset.via;
+    seg.dataset.busy = '1';
+    paintVia({ hasSs: true, transport: want });
+    const r = await window.pywebview.api.setTunnelTransport(want);
+    seg.dataset.busy = '0';
+    if (!r || !r.ok) {
+      paintVia({ hasSs: true, transport: was });
+      said($('tunnelKeySaid'), (r && r.error) || 'That could not be changed.', 'bad');
+      return;
+    }
+    paintTunnel(r);
+    said($('tunnelKeySaid'), want === 'ss'
+      ? 'Straight to the server over Shadowsocks.'
+      : 'Through the WebSocket, as before.', 'good');
+  });
 }
 
 /* Which address the client is dialling, which is normally nobody's business
@@ -1749,6 +2030,12 @@ function paintTunnel(plan) {
    one, so the pane does not grow a line saying nothing. */
 function paintWayIn(edges, t) {
   const line = $('tunnelWayIn');
+  if (t && t.transport === 'ss') {
+    line.textContent = `Straight to ${t.domain}:${t.ssPort || ''} over Shadowsocks`
+      + (t.ssPort ? `, and :${t.ssPort + 1} for server + exit.` : '.');
+    line.hidden = false;
+    return;
+  }
   // A server by address: the certificate kept the first time it was met is
   // the one it has to show from then on, and this is how to check it.
   if (t && t.isAddress) {
@@ -1856,8 +2143,14 @@ function peek(fieldId, buttonId) {
 
 function paintPrefs(info) {
   $('sysProxy').setAttribute('aria-checked', String(state.systemProxy));
+  if (info.routeWith) state.routeWith = info.routeWith;
+  if ('tunReady' in info) state.tunReady = info.tunReady !== false;
+  state.elevated = !!info.elevated;
+  paintRouteWith();
+  splitPane.take(info);
+  sharePane.take(info);
+  lanPane.take(info);
   if (info.orbColors) state.orbColors = info.orbColors;
-  paintOrbColors();
   if (info.theme) applyTheme(info.theme);
   state.onClose = info.onClose || '';
   paintOnClose();
@@ -1886,7 +2179,7 @@ function paintPrefs(info) {
   // "Saved and in use" behind a window still reading NOT SET UP and refusing
   // to connect, and only a restart cleared it.
   if (!had && state.hasCredentials && state.mode === 'off') {
-    setStatus('DISCONNECTED', 'off', '', '');
+    setStatus('Disconnected', 'off', '', '');
     setHint(`${state.countries.length} countries ready.`);
   }
 
@@ -2739,6 +3032,11 @@ async function bootSteps() {
   state.way = info.mode || 'surfshark';
   state.systemProxy = info.systemProxy !== false;
   state.port = info.port || state.port;
+  // Read now, not on the first visit to Settings: the list puts starred
+  // places in a group of their own at the top, and drawn before this it
+  // had no starred places to put there.
+  state.favourites = info.favourites || state.favourites;
+  state.sortBy = info.sortBy || state.sortBy;
   state.fuse = new Fuse(state.countries, {
     keys: ['name', 'code', 'alias'], threshold: 0.4, ignoreLocation: true,
   });
@@ -2754,7 +3052,7 @@ async function bootSteps() {
   ready();
 
   if (!info.hasCredentials) {
-    setStatus('NOT SET UP', 'fail', 'No sign-in details yet', '');
+    setStatus('Not set up', 'fail', 'No sign-in details yet', '');
     setHint('Add an account, or your own server, and this can connect.', true);
     render();
     // Nothing to connect with: the welcome above asks how it will
@@ -2767,6 +3065,8 @@ async function bootSteps() {
   }
   if (info.recovered) {
     setHint('The app did not close properly last time. Windows proxy settings have been put back.');
+  } else if (info.recoveredTun) {
+    setHint('The app did not close properly last time. The network adapter it left up has been taken down.');
   }
 
   const s = info.status || {};
@@ -2774,8 +3074,8 @@ async function bootSteps() {
     window.onConnected(s);
   } else {
     state.mode = 'off';
-    setStatus('DISCONNECTED', 'off', '', '');
-    if (!info.recovered) setHint(`${state.countries.length} countries ready.`);
+    setStatus('Disconnected', 'off', '', '');
+    if (!info.recovered && !info.recoveredTun) setHint(`${state.countries.length} countries ready.`);
     render();
   }
   // Signed in, but an account with no servers yet: get them ready now.
@@ -2802,9 +3102,9 @@ async function bootSteps() {
 /* Whether anything can see the front of the app right now.
 
    The sheets are full-screen opaque dialogs, and `document.hidden` does not
-   go true for one - so with Settings open the WebGL sphere went on drawing
+   go true for one - so with Settings open the WebGL globe went on drawing
    at full rate behind it, and the blurred card it sits on went on being
-   recomposited with it. sphere.js reads this flag and stops.
+   recomposited with it. globe.js reads this flag and stops.
 
    Watched rather than set beside each showModal(): there are six dialogs in
    here, and the seventh would have been the one nobody remembered. */
@@ -2818,7 +3118,7 @@ for (const sheet of document.querySelectorAll('dialog.sheet')) {
 
 $('act').addEventListener('click', onAct);
 
-/* The orb as a button. A press does what the Connect button does; held for
+/* The globe as a button. A press does what the Connect button does; held for
    600 ms it reconnects - disconnect, then connect to the same pick - which
    is the one thing a stuck connection usually needs, without two presses
    and a wait between them. */
@@ -2829,21 +3129,25 @@ async function reconnect() {
 }
 
 (function () {
-  const orb = $('orb');
+  const orb = $('globeHit');
   let timer = 0;
   let held = false;
   const lift = () => { clearTimeout(timer); orb.classList.remove('is-pressed'); };
+  const onSphere = (e) => !window.Globe || window.Globe.hit(e.clientX, e.clientY);
+  orb.addEventListener('pointermove', (e) => {
+    orb.classList.toggle('is-over', state.hasCredentials && onSphere(e));
+  });
   orb.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0 || !state.hasCredentials) return;
+    if (e.button !== 0 || !state.hasCredentials || !onSphere(e)) return;
     held = false;
     orb.classList.add('is-pressed');
     timer = setTimeout(() => { held = true; lift(); reconnect(); }, 600);
   });
   orb.addEventListener('pointerup', lift);
-  orb.addEventListener('pointerleave', lift);
-  orb.addEventListener('click', () => {
+  orb.addEventListener('pointerleave', () => { lift(); orb.classList.remove('is-over'); });
+  orb.addEventListener('click', (e) => {
     if (held) { held = false; return; }
-    if (state.hasCredentials) onAct();
+    if (state.hasCredentials && onSphere(e)) onAct();
   });
   orb.addEventListener('keydown', (e) => {
     if ((e.key === 'Enter' || e.key === ' ') && state.hasCredentials) {
@@ -2853,25 +3157,9 @@ async function reconnect() {
   });
 })();
 
-/* The orb's colours: traffic light or the desktop's own. */
-function paintOrbColors() {
-  const seg = $('orbColors');
-  seg.dataset.orb = state.orbColors || 'signal';
-  for (const b of seg.querySelectorAll('.seg__opt')) {
-    b.setAttribute('aria-pressed', String(b.dataset.orb === seg.dataset.orb));
-  }
-}
-
-for (const b of $('orbColors').querySelectorAll('.seg__opt')) {
-  b.addEventListener('click', async () => {
-    state.orbColors = b.dataset.orb;
-    paintOrbColors();
-    render();
-    await window.pywebview.api.setOrbColors(b.dataset.orb);
-  });
-}
 $('pick').addEventListener('click', openPicker);
 $('pickerClose').addEventListener('click', () => shut($('picker')));
+$('pickAny').addEventListener('click', () => choose('auto'));
 $('search').addEventListener('input', (e) => {
   state.cursor = 0;
   // The wash over the placeholder is only there to soften a hint. Once there
@@ -2917,11 +3205,7 @@ $('list').addEventListener('click', (e) => {
   const open = e.target.closest('[data-expand]');
   if (open) {
     e.stopPropagation();
-    const code = open.dataset.expand;
-    if (state.openCities.has(code)) state.openCities.delete(code);
-    else state.openCities.add(code);
-    $('list').dataset.key = '';
-    drawList($('search').value.trim());
+    toggleCities(open.dataset.expand);
     return;
   }
   // An exit row picks that one exit; the row that opens them is not a pick
@@ -2985,15 +3269,212 @@ $('settings').addEventListener('click', async () => {
 $('prefsClose').addEventListener('click', () => shut($('prefs')));
 
 
-$('way').addEventListener('click', (e) => {
-  const opt = e.target.closest('.seg__opt');
-  if (opt && !opt.disabled) chooseWay(opt.dataset.way);
-});
+/* The way-out menu: a field that opens onto the three ways.
+
+   Motion, and why each piece moves:
+   - the field sinks to 0.98 under the pointer and springs back, so a press
+     is felt before anything opens;
+   - the list grows down out of the field (scaleY from its top edge, a few
+     pixels of drop, a fade) rather than appearing, so it reads as coming
+     from the thing that was pressed;
+   - the options follow 30 ms apart, top first - the eye lands on the first
+     choice, which is the default one;
+   - the chevron turns over with a slight overshoot, the one playful note;
+   - choosing pops the check in on the new row, lets the old one go, slides
+     the field's word out upward and the new one in from below, and only
+     then folds the list back - about 160 ms, enough to see what was taken.
+   Closing is the opening run backwards, a little faster: leaving should
+   cost less than arriving. Under reduced motion every one of these is a
+   plain switch. */
+const wayMenu = (() => {
+  const root = $('way');
+  const field = $('wayField');
+  const list = $('wayList');
+  const value = $('wayValue');
+  const chev = field.querySelector('.dd__chev');
+  const shown = () => [...list.querySelectorAll('.dd__opt')].filter((o) => !o.hidden);
+  const nameOf = (way) => {
+    const o = list.querySelector(`.dd__opt[data-way="${way}"] .dd__name`);
+    return o ? o.textContent : '';
+  };
+
+  let calm = false;
+  gsap.matchMedia().add('(prefers-reduced-motion: reduce)', () => {
+    calm = true;
+    return () => { calm = false; };
+  });
+
+  let open = false;
+  let run = null;        // the opening timeline, reversed to close
+  let swapping = false;  // the field's word is mid-change; sync must wait
+
+  function opening() {
+    const t = gsap.timeline({
+      paused: true,
+      defaults: { ease: 'power3.out' },
+      onReverseComplete: () => { list.hidden = true; },
+    });
+    t.fromTo(list, { autoAlpha: 0, y: -6, scaleY: 0.92 },
+                   { autoAlpha: 1, y: 0, scaleY: 1, duration: 0.26 }, 0)
+     .fromTo(shown(), { autoAlpha: 0, y: -4 },
+                      { autoAlpha: 1, y: 0, duration: 0.22, stagger: 0.03,
+                        ease: 'power2.out' }, 0.05)
+     .to(chev, { rotation: 180, duration: 0.38, ease: 'expo.out' }, 0);
+    return t;
+  }
+
+  function show() {
+    if (open) return;
+    open = true;
+    root.dataset.open = '1';
+    field.setAttribute('aria-expanded', 'true');
+    list.hidden = false;
+    if (run) run.kill();
+    run = null;
+    if (calm) {
+      gsap.set(chev, { rotation: 180 });
+    } else {
+      run = opening();
+      run.play(0);
+    }
+    const here = list.querySelector('.dd__opt[aria-selected="true"]:not([hidden])')
+      || shown()[0];
+    if (here) here.focus({ preventScroll: true });
+    document.addEventListener('pointerdown', outside, true);
+  }
+
+  function hide(refocus) {
+    if (!open) return;
+    open = false;
+    root.dataset.open = '0';
+    field.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('pointerdown', outside, true);
+    if (run && !calm) {
+      run.timeScale(1.6).reverse();
+    } else {
+      list.hidden = true;
+      gsap.set(chev, { rotation: 0 });
+    }
+    if (refocus) field.focus({ preventScroll: true });
+  }
+
+  function outside(e) {
+    if (!root.contains(e.target)) hide(false);
+  }
+
+  /* The field's word, swapped in place: out upward, in from below. */
+  function swap(text) {
+    if (calm || value.textContent === text) {
+      value.textContent = text;
+      return;
+    }
+    swapping = true;
+    gsap.timeline({ onComplete: () => { swapping = false; } })
+      .to(value, { yPercent: -70, autoAlpha: 0, duration: 0.13, ease: 'power2.in' })
+      .add(() => { value.textContent = text; })
+      .fromTo(value, { yPercent: 70, autoAlpha: 0 },
+                     { yPercent: 0, autoAlpha: 1, duration: 0.26, ease: 'power3.out',
+                       clearProps: 'transform,opacity,visibility' });
+  }
+
+  /* Which row is the chosen one, said by the state rather than by a click -
+     the tray and the first paint arrive here too. The check's own motion is
+     pick()'s; here it is only made true. */
+  function sync(way) {
+    for (const o of list.querySelectorAll('.dd__opt')) {
+      o.setAttribute('aria-selected', String(o.dataset.way === way));
+    }
+    if (!swapping) value.textContent = nameOf(way);
+  }
+
+  function pick(opt) {
+    const way = opt.dataset.way;
+    if (way !== state.way) {
+      const was = list.querySelector('.dd__opt[aria-selected="true"]');
+      if (!calm) {
+        // Inline styles only while they move, then handed back to the CSS,
+        // which already says a chosen row shows its check.
+        gsap.fromTo(opt.querySelector('.dd__check'), { scale: 0.4, autoAlpha: 0 },
+          { scale: 1, autoAlpha: 1, duration: 0.42, ease: 'expo.out',
+            clearProps: 'all' });
+        if (was && was !== opt) {
+          gsap.fromTo(was.querySelector('.dd__check'), { scale: 1, autoAlpha: 1 },
+            { scale: 0.4, autoAlpha: 0, duration: 0.16, ease: 'power2.in',
+              clearProps: 'all' });
+        }
+      }
+      swap(nameOf(way));
+      chooseWay(way);
+    }
+    gsap.delayedCall(calm ? 0 : 0.16, () => hide(true));
+  }
+
+  function step(by) {
+    const items = shown();
+    if (!items.length) return;
+    const at = items.indexOf(document.activeElement);
+    const next = items[(at + by + items.length) % items.length];
+    next.focus({ preventScroll: true });
+  }
+
+  field.addEventListener('click', () => (open ? hide(false) : show()));
+  field.addEventListener('pointerdown', () => {
+    if (!calm) gsap.to(field, { scale: 0.98, duration: 0.12, ease: 'power2.out', overwrite: 'auto' });
+  });
+  const lift = () => {
+    if (!calm) gsap.to(field, { scale: 1, duration: 0.5, ease: 'expo.out', overwrite: 'auto' });
+  };
+  field.addEventListener('pointerup', lift);
+  field.addEventListener('pointerleave', lift);
+  field.addEventListener('keydown', (e) => {
+    if (['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(e.key)) {
+      e.preventDefault();
+      show();
+    }
+  });
+
+  list.addEventListener('click', (e) => {
+    const opt = e.target.closest('.dd__opt');
+    if (opt && !opt.hidden) pick(opt);
+  });
+  // The pointer moves the keyboard's place too, so the two never disagree
+  // about which row Enter would take.
+  list.addEventListener('pointermove', (e) => {
+    const opt = e.target.closest('.dd__opt');
+    if (opt && document.activeElement !== opt) opt.focus({ preventScroll: true });
+  });
+  list.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); step(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); step(-1); }
+    else if (e.key === 'Home') { e.preventDefault(); shown()[0]?.focus(); }
+    else if (e.key === 'End') { e.preventDefault(); shown().at(-1)?.focus(); }
+    else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      const opt = document.activeElement.closest('.dd__opt');
+      if (opt) pick(opt);
+    } else if (e.key === 'Escape') {
+      // Here and not in the sheet's handler: Escape closes the menu, not the
+      // window behind it.
+      e.preventDefault();
+      e.stopPropagation();
+      hide(true);
+    } else if (e.key === 'Tab') {
+      hide(false);
+    }
+  });
+
+  return { sync, hide, isOpen: () => open };
+})();
 
 $('tunnelSave').addEventListener('click', saveTunnel);
 $('tunnelTest').addEventListener('click', testTunnel);
 $('tunnelScan').addEventListener('click', rescanEdges);
 $('tunnelPeek').addEventListener('click', () => peek('tunnelPass', 'tunnelPeek'));
+$('tunnelKeyPeek').addEventListener('click', () => peek('tunnelKey', 'tunnelKeyPeek'));
+$('tunnelKeyUse').addEventListener('click', useTunnelKey);
+$('tunnelKey').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') useTunnelKey();
+});
 $('tunnelApiPeek').addEventListener('click', () => peek('tunnelApi', 'tunnelApiPeek'));
 $('tunnelApi').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') saveTunnel();
@@ -3260,6 +3741,7 @@ $('sysProxy').addEventListener('click', async () => {
   const was = state.systemProxy;
   state.systemProxy = !was;
   sw.setAttribute('aria-checked', String(state.systemProxy));
+  paintRouteWith();
   busy(sw, true);
   const r = await window.pywebview.api.setSystemProxy(state.systemProxy);
   busy(sw, false);
@@ -3268,7 +3750,1646 @@ $('sysProxy').addEventListener('click', async () => {
     sw.setAttribute('aria-checked', String(was));
     setHint(r.error || 'Windows would not take that.', true);
   }
+  paintRouteWith();
 });
+
+/* How Windows is routed, under the switch that says whether it is. Out of
+   reach while that switch is off: neither answer does anything then, and a
+   choice that changes nothing should not look like one. Tunnel is out of
+   reach too in a copy with no sing-box.exe, unless it is somehow already
+   chosen - then it stays pressable, so it can be chosen away from. */
+function paintRouteWith() {
+  const seg = $('routeWith');
+  const off = !state.systemProxy;
+  const busyNow = seg.dataset.busy === '1';
+  seg.dataset.with = state.routeWith === 'tun' ? 'tun' : 'proxy';
+  $('prefRouteWith').dataset.off = off ? '1' : '0';
+  for (const b of seg.querySelectorAll('.seg__opt')) {
+    b.setAttribute('aria-pressed', String(b.dataset.with === seg.dataset.with));
+    b.disabled = off || busyNow
+      || (b.dataset.with === 'tun' && !state.tunReady && seg.dataset.with !== 'tun');
+  }
+  // Which programs a split tunnel can tell apart depends on this answer,
+  // and the pane below says so.
+  splitPane.note();
+  if (busyNow) return;
+  $('routeWithSaid').textContent = !state.tunReady
+    ? 'Tunnel needs sing-box.exe beside Relay, and this copy does not have it.'
+    : (seg.dataset.with === 'tun' && !state.elevated
+        ? 'Windows will ask for administrator approval each time this connects.'
+        : '');
+}
+
+/* Same promise as the switch above: it moves on the press, holds while the
+   machine answers, and goes back if the answer is no. With a connection up
+   the answer can take a while - it is a UAC prompt waiting for a person. */
+for (const b of $('routeWith').querySelectorAll('.seg__opt')) {
+  b.addEventListener('click', async () => {
+    const seg = $('routeWith');
+    const want = b.dataset.with;
+    if (seg.dataset.busy === '1' || want === state.routeWith) return;
+    const was = state.routeWith;
+    state.routeWith = want;
+    seg.dataset.busy = '1';
+    paintRouteWith();
+    if (want === 'tun' && state.mode === 'on') {
+      $('routeWithSaid').textContent = 'Bringing up the network adapter…';
+    }
+    busy(null, true);
+    let r = null;
+    try {
+      r = await window.pywebview.api.setRouteWith(want);
+    } catch (e) {
+      r = null;
+    }
+    busy(null, false);
+    seg.dataset.busy = '0';
+    if (!r || r.ok === false) {
+      state.routeWith = (r && r.routeWith) || was;
+      paintRouteWith();
+      $('routeWithSaid').textContent =
+        (r && r.error) || 'Windows would not take that.';
+      return;
+    }
+    paintRouteWith();
+  });
+}
+
+/* Split tunnel: which traffic goes round Relay rather than through it.
+
+   The pane holds a draft. What the backend says is in force is state.split;
+   what the pane shows is the draft, and the two only become one again on
+   Apply - with a tunnel up, applying restarts the adapter, and that should
+   happen once, when somebody says so, not once per chip. A repaint from the
+   backend replaces the draft only while it is untouched, which is the rule
+   the port field keeps too: never under somebody's hands.
+
+   Motion, and why each piece moves:
+   - a chip grows in out of nothing with a little overshoot, so the eye
+     finds the one just added in a row of look-alikes;
+   - a chip shrinks away when it is removed, and the ones after it slide
+     into the gap from where they were instead of jumping - the list shows
+     what happened to it;
+   - a duplicate is not added a second time: the chip already there nods
+     instead, which answers "is it in?" without a sentence;
+   - the running-programs list grows down out of its row the way the way-out
+     menu does, its first rows a beat apart;
+   - Apply's answer lifts in, so it reads as the reply to the press.
+   Under reduced motion every one of these is a plain change. */
+const splitPane = (() => {
+  const pane = $('prefSplit');
+  const seg = $('splitMode');
+  const apps = $('splitApps');
+  const sites = $('splitSites');
+  const input = $('splitSite');
+  const siteSaid = $('splitSiteSaid');
+  const apply = $('splitApply');
+  const told = $('splitApplied');
+  const runBtn = $('splitRunning');
+  const pop = $('splitRun');
+  const find = $('splitRunFind');
+  const runList = $('splitRunList');
+  const runNone = $('splitRunNone');
+
+  let calm = false;
+  gsap.matchMedia().add('(prefers-reduced-motion: reduce)', () => {
+    calm = true;
+    return () => { calm = false; };
+  });
+
+  const MODES = ['off', 'bypass', 'only'];
+  const SAID = {
+    off: 'Everything goes through Relay. The list waits here until one of the other two is chosen.',
+    bypass: 'Everything goes through Relay except what is listed, which goes straight out.',
+    only: 'Only what is listed goes through Relay; everything else goes straight out.',
+  };
+  // The pill is what is in force, not what is on screen - the two differ
+  // between an edit and its Apply, and that difference is worth seeing.
+  const PILL = { off: 'off', bypass: 'except list', only: 'only list' };
+
+  let draft = null;     // what the pane shows; null on a backend without one
+  let answer = null;    // the last Apply's {text, kind}, until the next edit
+  let applying = false;
+  let running = [];     // the last runningApps() answer
+  let open = false;     // whether the running-programs list is up
+  let run = null;       // its opening timeline, reversed to close
+  let siteErr = '';     // 'local' | 'rejected' - who wrote the line under Sites
+
+  /* Whatever arrived, in the one shape the rest of this reads. */
+  const tidy = (s) => ({
+    mode: MODES.includes(s && s.mode) ? s.mode : 'off',
+    iran: !!(s && s.iran),
+    apps: Array.isArray(s && s.apps) ? s.apps.map(String) : [],
+    domains: Array.isArray(s && s.domains) ? s.domains.map(String) : [],
+  });
+  const copy = (s) => ({ ...s, apps: s.apps.slice(), domains: s.domains.slice() });
+  // Order-blind: taking a chip off and putting it back is not a change.
+  const key = (list) => list.map((v) => v.toLowerCase()).sort().join('\n');
+  const same = (a, b) => !!a && !!b && a.mode === b.mode && a.iran === b.iran
+    && key(a.apps) === key(b.apps) && key(a.domains) === key(b.domains);
+  const listOf = (kind) => (kind === 'program' ? apps : sites);
+  const valuesOf = (kind) => (kind === 'program' ? draft.apps : draft.domains);
+  const rowFor = (list, value) =>
+    [...list.children].find((li) => li.dataset.value === value);
+
+  /* From the described state - boot() or info(), by way of paintPrefs. */
+  function take(info) {
+    if (!info || !info.split) {
+      // A backend from before split tunnelling has nothing to stand this
+      // pane on, so the pane is not there at all.
+      if (!state.split) pane.hidden = true;
+      return;
+    }
+    const was = state.split;
+    state.split = tidy(info.split);
+    if (info.splitLists) state.splitLists = info.splitLists;
+    if (!draft || same(draft, was)) draft = copy(state.split);
+    paint();
+  }
+
+  function paint() {
+    if (!draft) { pane.hidden = true; return; }
+    pane.hidden = false;
+    const d = draft;
+    seg.dataset.split = d.mode;
+    pane.dataset.off = d.mode === 'off' ? '1' : '0';
+    for (const b of seg.querySelectorAll('.seg__opt')) {
+      b.setAttribute('aria-pressed', String(b.dataset.split === d.mode));
+    }
+    $('splitSaid').textContent = SAID[d.mode];
+    $('splitIran').setAttribute('aria-checked', String(d.iran));
+    paintLists();
+    chips(apps, d.apps, 'program');
+    chips(sites, d.domains, 'site');
+    note();
+    $('splitEmpty').hidden = !(d.mode === 'only' && !d.iran
+                               && !d.apps.length && !d.domains.length);
+    paintPill();
+    if (applying) return;
+    const dirty = !same(d, state.split);
+    apply.disabled = !dirty;
+    if (answer) said(told, answer.text, answer.kind);
+    else said(told, dirty ? 'Not applied yet.' : '');
+  }
+
+  function paintPill() {
+    const pill = $('splitPill');
+    const mode = (state.split || {}).mode || 'off';
+    pill.dataset.state = mode === 'off' ? '' : 'on';
+    if (pill.textContent === PILL[mode]) return;
+    pill.textContent = PILL[mode];
+  }
+
+  /* The counts are the backend's, read off the lists it ships. Zero of both
+     is a copy without them, and saying so beats a switch that matches
+     nothing while looking as though it matches all of Iran. */
+  function paintLists() {
+    const l = state.splitLists;
+    const n = (x) => Number(x || 0).toLocaleString('en-US');
+    $('splitIranSaid').textContent = !l
+      ? 'Iranian domains and Iranian address ranges'
+      : (l.domains || l.ranges)
+        ? `${n(l.domains)} domains and ${n(l.ranges)} address ranges, updated with each release`
+        : 'The lists are missing from this copy, so this has nothing to match';
+  }
+
+  /* Programs are only told apart by the tunnel. Through the proxy setting
+     the only traffic Relay ever sees is the traffic a program chose to send
+     it, so a program that ignores the setting is not "except" anything - it
+     was never coming through in the first place. */
+  function note() {
+    $('splitAppsNote').textContent = state.routeWith === 'tun'
+      ? 'Every program is affected.'
+      : 'In proxy mode only programs that use the Windows proxy setting are '
+        + 'affected — switch to Tunnel above to cover every program.';
+  }
+
+  /* -------------------------------------------------------------- chips */
+
+  /* Built, not written as a string: these are whatever somebody typed. */
+  function chip(value) {
+    const li = document.createElement('li');
+    li.dataset.value = value;
+    const c = document.createElement('span');
+    c.className = 'chip chip--x';
+    const name = document.createElement('span');
+    name.className = 'chip__name';
+    name.textContent = value;
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'chip__x';
+    x.title = 'Remove';
+    x.setAttribute('aria-label', `Remove ${value}`);
+    x.append(icon('#i-x', 'ico'));
+    c.append(name, x);
+    li.append(c);
+    return li;
+  }
+
+  /* Matched up by value rather than rebuilt, so a repaint that changes
+     nothing moves nothing, and focus on a remove button survives it. */
+  function chips(list, values) {
+    const have = new Map([...list.children].map((li) => [li.dataset.value, li]));
+    const keep = new Set(values);
+    for (const [v, li] of have) {
+      if (!keep.has(v)) { gsap.killTweensOf(li.firstElementChild); li.remove(); }
+    }
+    let at = list.firstElementChild;
+    for (const v of values) {
+      const li = have.get(v) || chip(v);
+      if (li === at) at = at.nextElementSibling;
+      else list.insertBefore(li, at);
+    }
+  }
+
+  function arrive(li) {
+    if (!li || calm) return;
+    gsap.fromTo(li.firstElementChild, { scale: 0.6, autoAlpha: 0 },
+      { scale: 1, autoAlpha: 1, duration: 0.38, ease: 'expo.out',
+        clearProps: 'transform,opacity,visibility' });
+  }
+
+  function nod(li) {
+    if (!li) return;
+    lit(li.firstElementChild);
+    if (calm) return;
+    gsap.fromTo(li.firstElementChild, { scale: 1 },
+      { scale: 1.07, duration: 0.11, ease: 'power2.out', yoyo: true, repeat: 1,
+        overwrite: 'auto', clearProps: 'transform' });
+  }
+
+  /* Whatever moved because the list changed under it slides from where it
+     was. Transforms only - the measuring is two reads either side of one
+     write, and nothing animates the layout itself. */
+  function slide(list, change) {
+    if (calm) { change(); return; }
+    const before = new Map([...list.children].map((li) => [li, li.getBoundingClientRect()]));
+    change();
+    for (const li of list.children) {
+      const was = before.get(li);
+      if (!was) continue;
+      const now = li.getBoundingClientRect();
+      const dx = was.left - now.left;
+      const dy = was.top - now.top;
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+      gsap.fromTo(li, { x: dx, y: dy },
+        { x: 0, y: 0, duration: 0.34, ease: 'power3.out', clearProps: 'transform' });
+    }
+  }
+
+  /* Anything changed by hand: the last answer no longer describes what is
+     on screen, so it goes, and the pane says what it does instead. */
+  function edited() {
+    answer = null;
+    paint();
+    if (open) marks();
+  }
+
+  function add(kind, values) {
+    if (!draft) return 0;
+    const into = valuesOf(kind);
+    const list = listOf(kind);
+    const fresh = [];
+    for (const v of values) {
+      const hit = into.find((x) => x.toLowerCase() === v.toLowerCase());
+      if (hit) { nod(rowFor(list, hit)); continue; }
+      into.push(v);
+      fresh.push(v);
+    }
+    if (!fresh.length) return 0;
+    edited();
+    for (const v of fresh) arrive(rowFor(list, v));
+    return fresh.length;
+  }
+
+  function leave(li, kind) {
+    if (!li || li.dataset.leaving === '1') return;
+    li.dataset.leaving = '1';
+    const list = listOf(kind);
+    const value = li.dataset.value;
+    // Where the keyboard goes once its chip has gone: the next remove
+    // button along, else the one before, else back to the way things are
+    // added - never dropped on the body of the page.
+    const near = li.nextElementSibling || li.previousElementSibling;
+    const held = li.contains(document.activeElement);
+    const done = () => {
+      const into = valuesOf(kind);
+      const i = into.indexOf(value);
+      if (i >= 0) into.splice(i, 1);
+      slide(list, edited);
+      if (!held) return;
+      const to = (near && near.isConnected && near.querySelector('.chip__x'))
+        || (kind === 'program' ? $('splitPick') : input);
+      to.focus({ preventScroll: true });
+    };
+    if (calm) { done(); return; }
+    // Opacity rather than autoAlpha: a focused button that goes
+    // visibility:hidden is blurred on the spot, and the keyboard would be
+    // somewhere else before done() could hand it on.
+    gsap.to(li.firstElementChild, { scale: 0.6, opacity: 0, duration: 0.16,
+                                    ease: 'power2.in', onComplete: done });
+  }
+
+  for (const [list, kind] of [[apps, 'program'], [sites, 'site']]) {
+    list.addEventListener('click', (e) => {
+      const x = e.target.closest('.chip__x');
+      if (x) leave(x.closest('li'), kind);
+    });
+    // The remove button already answers Enter and Space; Delete and
+    // Backspace are what a hand on the keyboard reaches for first.
+    list.addEventListener('keydown', (e) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      const x = e.target.closest('.chip__x');
+      if (!x) return;
+      e.preventDefault();
+      leave(x.closest('li'), kind);
+    });
+  }
+
+  /* ---------------------------------------------------- the three parts */
+
+  for (const b of seg.querySelectorAll('.seg__opt')) {
+    b.addEventListener('click', () => {
+      if (!draft || draft.mode === b.dataset.split) return;
+      draft.mode = b.dataset.split;
+      edited();
+    });
+  }
+
+  $('splitIran').addEventListener('click', () => {
+    if (!draft) return;
+    draft.iran = !draft.iran;
+    edited();
+  });
+
+  /* A Windows dialog, and its own feedback while it is up. The button holds
+     until it has closed, so a second one cannot be asked for behind it. */
+  $('splitPick').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    hide(false);
+    busy(btn, true);
+    let r = null;
+    try {
+      r = await window.pywebview.api.pickApps();
+    } catch (err) {
+      r = null;
+    }
+    busy(btn, false);
+    btn.focus({ preventScroll: true });
+    if (!r) {
+      answer = { text: 'The program picker would not open.', kind: 'bad' };
+      paint();
+      return;
+    }
+    add('program', (Array.isArray(r.apps) ? r.apps : []).map(String));
+  });
+
+  /* A light look before the backend's real one: something there, and no
+     spaces in it. Commas and new lines separate entries, so a list pasted
+     from somewhere else goes in as the several chips it is. */
+  function addSites() {
+    const parts = input.value.split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean);
+    if (!parts.length) {
+      siteErr = 'local';
+      said(siteSaid, 'Type a site, an address or a range first.', 'bad');
+      input.focus({ preventScroll: true });
+      return;
+    }
+    const spaced = parts.find((p) => /\s/.test(p));
+    if (spaced) {
+      siteErr = 'local';
+      said(siteSaid, `“${spaced}” has a space in it.`, 'bad');
+      return;
+    }
+    if (siteErr === 'local') { siteErr = ''; said(siteSaid, ''); }
+    add('site', parts);
+    input.value = '';
+  }
+
+  $('splitSiteAdd').addEventListener('click', addSites);
+  // Enter adds; it does not apply. Applying can restart the adapter, and
+  // that is not something to do by accident at the end of typing a name.
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); addSites(); }
+  });
+  input.addEventListener('input', () => {
+    if (siteErr === 'local') { siteErr = ''; said(siteSaid, ''); }
+  });
+
+  /* ------------------------------------------------------ running now */
+
+  function marks() {
+    const mine = new Set(draft.apps.map((a) => a.toLowerCase()));
+    for (const b of runList.querySelectorAll('.runpop__opt')) {
+      b.setAttribute('aria-pressed', String(mine.has(b.dataset.app.toLowerCase())));
+    }
+  }
+
+  function drawRunning() {
+    const q = find.value.trim().toLowerCase();
+    const shown = running.filter((a) => a.toLowerCase().includes(q));
+    runList.replaceChildren(...shown.map((a) => {
+      const li = document.createElement('li');
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'runpop__opt';
+      b.dataset.app = a;
+      const name = document.createElement('span');
+      name.className = 'runpop__name';
+      name.textContent = a;
+      b.append(name, icon('#i-check', 'ico runpop__check'));
+      li.append(b);
+      return li;
+    }));
+    marks();
+    runNone.hidden = shown.length > 0;
+    runNone.textContent = running.length
+      ? `Nothing running matches “${find.value.trim()}”.`
+      : 'Windows named nothing running that could be listed.';
+  }
+
+  function show() {
+    open = true;
+    pop.hidden = false;
+    runBtn.setAttribute('aria-expanded', 'true');
+    if (run) run.kill();
+    run = null;
+    if (!calm) {
+      // Opacity, not autoAlpha: autoAlpha's first frame is visibility:hidden,
+      // and the filter cannot take focus inside something that is hidden.
+      // [hidden] is what keeps it out of the way when it is closed.
+      const rows = [...runList.children].slice(0, 8);
+      run = gsap.timeline({
+        defaults: { ease: 'power3.out' },
+        onReverseComplete: () => { pop.hidden = true; },
+      });
+      run.fromTo(pop, { opacity: 0, y: -6, scaleY: 0.94 },
+                      { opacity: 1, y: 0, scaleY: 1, duration: 0.24 }, 0);
+      if (rows.length) {
+        run.fromTo(rows, { opacity: 0, y: -4 },
+                         { opacity: 1, y: 0, duration: 0.2, stagger: 0.025,
+                           ease: 'power2.out' }, 0.05);
+      }
+    }
+    find.focus({ preventScroll: true });
+    // The row it hangs off can be the last thing on screen.
+    pop.scrollIntoView({ block: 'nearest', behavior: calm ? 'auto' : 'smooth' });
+    document.addEventListener('pointerdown', outside, true);
+  }
+
+  function hide(refocus) {
+    if (!open) return;
+    open = false;
+    runBtn.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('pointerdown', outside, true);
+    if (run && !calm) run.timeScale(1.6).reverse();
+    else pop.hidden = true;
+    if (refocus) runBtn.focus({ preventScroll: true });
+  }
+
+  function outside(e) {
+    if (!pop.contains(e.target) && !runBtn.contains(e.target)) hide(false);
+  }
+
+  runBtn.addEventListener('click', async () => {
+    if (open) { hide(true); return; }
+    if (!draft || runBtn.dataset.busy === '1') return;
+    busy(runBtn, true);
+    let r = null;
+    try {
+      r = await window.pywebview.api.runningApps();
+    } catch (err) {
+      r = null;
+    }
+    busy(runBtn, false);
+    running = r && Array.isArray(r.apps) ? r.apps.map(String) : [];
+    find.value = '';
+    drawRunning();
+    if (!r) runNone.textContent = 'Windows would not say what is running.';
+    show();
+  });
+
+  function toggleRunning(b) {
+    const a = b.dataset.app;
+    const hit = draft.apps.find((x) => x.toLowerCase() === a.toLowerCase());
+    if (hit) {
+      const li = rowFor(apps, hit);
+      if (li) leave(li, 'program');
+      else { draft.apps.splice(draft.apps.indexOf(hit), 1); edited(); }
+      b.setAttribute('aria-pressed', 'false');
+      return;
+    }
+    add('program', [a]);
+    if (!calm) {
+      gsap.fromTo(b.querySelector('.runpop__check'), { scale: 0.4, autoAlpha: 0 },
+        { scale: 1, autoAlpha: 1, duration: 0.42, ease: 'expo.out',
+          clearProps: 'transform,opacity,visibility' });
+    }
+  }
+
+  find.addEventListener('input', drawRunning);
+  runList.addEventListener('click', (e) => {
+    const b = e.target.closest('.runpop__opt');
+    if (b) toggleRunning(b);
+  });
+  pop.addEventListener('keydown', (e) => {
+    const rows = [...runList.querySelectorAll('.runpop__opt')];
+    const at = rows.indexOf(document.activeElement);
+    if (e.key === 'Escape') {
+      // Here and not in the sheet's handler: Escape puts the list away, not
+      // the screen behind it.
+      e.preventDefault();
+      e.stopPropagation();
+      hide(true);
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      (rows[Math.min(at + 1, rows.length - 1)] || find).focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      (at > 0 ? rows[at - 1] : find).focus();
+    } else if ((e.key === 'Home' || e.key === 'End') && at >= 0) {
+      e.preventDefault();
+      rows[e.key === 'Home' ? 0 : rows.length - 1].focus();
+    } else if (e.key === 'Enter' && e.target === find) {
+      // Type, Enter: the first match goes in. Only ever in - taking one out
+      // is a press on the row itself, where you can see what it is.
+      e.preventDefault();
+      const first = rows[0];
+      if (first && first.getAttribute('aria-pressed') !== 'true') toggleRunning(first);
+    }
+  });
+  // Tabbing out of it is leaving it.
+  pop.addEventListener('focusout', (e) => {
+    const to = e.relatedTarget;
+    if (open && to && !pop.contains(to) && to !== runBtn) hide(false);
+  });
+
+  /* ------------------------------------------------------------- apply */
+
+  function reveal(el) {
+    if (calm || !el.textContent) return;
+    gsap.fromTo(el, { y: 4, autoAlpha: 0 },
+      { y: 0, autoAlpha: 1, duration: 0.3, ease: 'power3.out',
+        clearProps: 'transform,opacity,visibility' });
+  }
+
+  /* Same promise as the switches above it: the button holds while the
+     machine answers, and what is in force afterwards is whatever the
+     backend says, not what was sent. With a tunnel up the answer waits on
+     the adapter coming back - possibly behind a UAC prompt, so possibly
+     behind a person. */
+  async function commit() {
+    if (applying || !draft || same(draft, state.split)) return;
+    hide(false);
+    const want = copy(draft);
+    const before = state.split;
+    // Only a tunnel that is up has an adapter to restart, and a list saved
+    // under Off that stays Off gives it no reason to.
+    const tunUp = state.mode === 'on' && state.systemProxy && state.routeWith === 'tun'
+      && !(want.mode === 'off' && (!before || before.mode === 'off'));
+    applying = true;
+    answer = null;
+    busy(apply, true);
+    said(told, tunUp
+      ? `Restarting the network adapter with the new list…${
+        state.elevated ? '' : ' Windows may ask for approval.'}`
+      : 'Applying…', 'work');
+    let r = null;
+    try {
+      r = await window.pywebview.api.setSplit(want);
+    } catch (err) {
+      r = null;
+    }
+    applying = false;
+    busy(apply, false);
+    // Edited while it was out: that edit is newer than the answer, so the
+    // draft keeps it and only what is in force is brought up to date.
+    const moved = !same(draft, want);
+    let fresh = [];
+    if (!r || r.ok === false) {
+      if (r && r.split) state.split = tidy(r.split);
+      answer = { text: (r && r.error) || 'That could not be applied.', kind: 'bad' };
+    } else {
+      state.split = tidy(r.split || want);
+      if (!moved) {
+        // What the backend made of what was typed replaces it - so the
+        // chips that changed spelling are the ones that arrive again.
+        const sent = new Set([...want.apps, ...want.domains]);
+        fresh = [...state.split.apps, ...state.split.domains].filter((v) => !sent.has(v));
+        draft = copy(state.split);
+      }
+      const rejected = Array.isArray(r.rejected) ? r.rejected.map(String) : [];
+      siteErr = rejected.length ? 'rejected' : '';
+      said(siteSaid, rejected.length
+        ? `Left out — not a site, address or range: ${rejected.join(', ')}`
+        : '', 'bad');
+      // Three different things a press of Apply can have done, and each
+      // says only what it did. A list saved under Off changes nothing that
+      // is running, so "in force" would be a claim about nothing.
+      const now = r.applied === 'now';
+      let text;
+      if (state.split.mode !== 'off') {
+        text = !now ? 'Saved. It takes effect the next time Relay connects.'
+          : tunUp ? 'In force — the adapter is back up with the new list.'
+            : 'In force on the connection that is up now.';
+      } else if (before && before.mode !== 'off') {
+        text = now ? 'Off. Everything goes through Relay again.'
+          : 'Saved. It is off from the next time Relay connects.';
+      } else {
+        text = 'Saved. The list is kept for when it is turned on.';
+      }
+      answer = { kind: 'good', text };
+    }
+    paint();
+    for (const v of fresh) arrive(rowFor(apps, v) || rowFor(sites, v));
+    reveal(told);
+    if (siteErr === 'rejected') reveal(siteSaid);
+  }
+
+  apply.addEventListener('click', commit);
+
+  return { take, paint, note, hide };
+})();
+
+/* Other devices: the server set up under Your own tunnel, handed to a phone.
+
+   The server keeps a few numbered slots for this. Slot 0 comes out at the
+   server itself and is always made; every place added here takes one of the
+   others, and the backend times that place's exits from the server and pins
+   the slot to the one that uploads best from where the server stands. What
+   comes back is a link per slot in each kind the server speaks, and this
+   draws each one as a code to scan.
+
+   The places are the ones the exit list is drawn from - a country, a city,
+   or one provider's share of either - and a pick goes to the backend in the
+   same pieces connect() takes a code apart into, so "fr/par:windscribe"
+   means the same place here as it does on the front of the app.
+
+   Motion, and why each piece moves:
+   - a place arrives as a chip and the others slide into its gap when it
+     goes, the same as the split tunnel's list: one idiom for a list;
+   - a place added past the server's last slot is refused by the row shaking
+     its head, and the line under the chips says how many there is room for;
+   - the list of places grows down out of its button, as the running-
+     programs list does;
+   - the lines of progress arrive a beat apart, and a line's mark pops when
+     its place is settled, one way or the other;
+   - the cards rise in one after another when they land, and a code that
+     changes kind crossfades rather than blinking.
+   Under reduced motion every one of these is a plain change. */
+const sharePane = (() => {
+  const menuRow = $('shareRow');
+  const out = $('shareOut');
+  const body = $('shareBody');
+  const whyLine = $('shareWhy');
+  const chipList = $('shareChips');
+  const addBtn = $('shareAdd');
+  const pop = $('sharePop');
+  const find = $('shareFind');
+  const list = $('shareList');
+  const none = $('shareNone');
+  const limit = $('shareLimit');
+  const fullLine = $('shareFull');
+  const make = $('shareMake');
+  const stop = $('shareStop');
+  const told = $('shareSaid');
+  const runs = $('shareRuns');
+  const cards = $('shareCards');
+  const kindSeg = $('shareKind');
+
+  let calm = false;
+  gsap.matchMedia().add('(prefers-reduced-motion: reduce)', () => {
+    calm = true;
+    return () => { calm = false; };
+  });
+
+  // Byte mode reads a string a character at a time and keeps the low eight
+  // bits of each, which is right for every link the server writes today and
+  // silently wrong the day a name has a letter outside Latin-1 in it.
+  if (window.qrcode && qrcode.stringToBytesFuncs && qrcode.stringToBytesFuncs['UTF-8']) {
+    qrcode.stringToBytes = qrcode.stringToBytesFuncs['UTF-8'];
+  }
+
+  const NOT_READY = 'This needs your own server, set up under Connection '
+    + '→ Your own tunnel.';
+  const KINDS = { vless: 'VLESS', vmess: 'VMess', ss: 'SS' };
+  const PHASE_SAID = {
+    waiting: 'waiting its turn',
+    testing: 'timing its exits from the server…',
+    pinned: 'pinned',
+    failed: 'no exit there answered',
+    stopped: 'not reached',
+  };
+  const QR_SIDE = 220;   // css px, give or take a module - see drawQr
+  const QR_MAX = 270;    // and never wider than this, so it fits a narrow card
+  const QUIET = 4;       // modules of white round the code, as the spec asks
+
+  const ex = { ready: false, slots: 0, why: '', host: '' };   // the backend's word
+  let known = false;     // whether this backend describes it at all
+  let picks = [];        // [{code, country, city, provider, only, label}]
+  let offered = new Map();   // code -> pick, for the rows the list is showing
+  let working = false;   // a run is out
+  let stopping = false;
+  let held = { make: false, stop: false };   // which buttons busy() holds
+  let result = null;     // {at, links, subscription}
+  let kind = 'vless';    // what the strip, Copy all and Copy subscription take
+  let open = false;      // whether the list of places is up
+  let run = null;        // its opening timeline, reversed to close
+  const byCard = new WeakMap();   // a result card -> its link record
+  const copyTimers = new WeakMap();
+
+  /* ------------------------------------------------------------- state */
+
+  /* From the described state - boot() or info(), by way of paintPrefs. */
+  function take(info) {
+    if (!info || !info.export) {
+      // A backend from before this has nothing to put on the screen, so the
+      // way to the screen is not there either.
+      if (!known) menuRow.hidden = true;
+      return;
+    }
+    known = true;
+    menuRow.hidden = false;
+    adopt(info.export);
+  }
+
+  function adopt(e) {
+    ex.ready = !!e.ready;
+    ex.slots = Math.max(0, Number(e.slots) || 0);
+    ex.why = String(e.why || '');
+    if (e.host) ex.host = String(e.host);
+    // A server set up again with fewer slots than places chosen: the ones
+    // past the end are the ones that no longer have anywhere to go.
+    if (picks.length > ex.slots) picks = picks.slice(0, ex.slots);
+    paint();
+  }
+
+  /* Asked each time the screen opens rather than carried in info(): the
+     last set of links is the server's business and only this screen wants
+     it. A set made in this session already is not replaced by an older one. */
+  async function opened() {
+    if (!known) return;
+    let r = null;
+    try {
+      r = await window.pywebview.api.exportState();
+    } catch (err) {
+      r = null;
+    }
+    if (!r) return;
+    adopt(r);
+    const last = r.last;
+    if (!working && last && Array.isArray(last.links)
+        && (!result || (Number(last.at) || 0) > (result.at || 0))) {
+      result = { at: Number(last.at) || 0, links: last.links,
+                 subscription: last.subscription || null };
+      drawResult(false);
+      paint();
+    }
+    // "Made just now" was true when it was written, and the screen can be
+    // come back to an hour later.
+    paintAt();
+  }
+
+  function paintAt() {
+    $('shareAt').textContent = result && result.at ? `made ${whenAgo(result.at)}` : '';
+  }
+
+  function paint() {
+    whyLine.hidden = ex.ready;
+    whyLine.textContent = ex.ready ? '' : (ex.why || NOT_READY);
+    body.hidden = !ex.ready;
+    out.hidden = !ex.ready || !result;
+    paintPill();
+    if (!ex.ready) { hide(false); return; }
+    paintChips();
+    $('shareCount').textContent = ex.slots ? `${picks.length} of ${ex.slots}` : '';
+    addBtn.hidden = ex.slots === 0;
+    addBtn.disabled = working;
+    stop.hidden = !working;
+    for (const x of chipList.querySelectorAll('.chip__x')) x.disabled = working;
+    // Room, said where it is wanted. Under the chips for a server with no
+    // slots at all, where there is no list to open; inside the list once
+    // the slots there are have all been taken, because the list covers
+    // the line under the chips and the next press is in the list.
+    said(limit, ex.slots === 0
+      ? 'This server keeps no slots for other places, so only the server '
+        + 'itself can be shared. Running the installer again adds them.' : '');
+    const full = ex.slots > 0 && picks.length >= ex.slots;
+    fullLine.hidden = !full;
+    fullLine.textContent = full
+      ? `All ${ex.slots} slot${ex.slots === 1 ? ' is' : 's are'} taken. `
+        + 'Take a place off to add another.' : '';
+  }
+
+  function paintPill() {
+    const pill = $('sharePill');
+    let text = 'ready';
+    let mark = '';
+    if (!ex.ready) { text = 'not ready'; mark = 'off'; }
+    else if (working) { text = 'making'; mark = 'work'; }
+    else if (result) {
+      const n = result.links.filter((l) => !l.error).length;
+      text = `${n} config${n === 1 ? '' : 's'}`;
+      mark = 'on';
+    }
+    pill.dataset.state = mark;
+    if (pill.textContent === text) return;
+    pill.textContent = text;
+  }
+
+  /* -------------------------------------------------------------- places */
+
+  /* One place as the backend wants it. The label is what the config is
+     called on the phone, so it says the place the way a person would. */
+  function pickOf(c, city, via) {
+    const code = (city ? `${c.code}/${city.code}` : c.code) + (via ? `:${via}` : '');
+    const where = city ? `${city.name}, ${c.name}` : c.name;
+    return {
+      code,
+      country: c.code,
+      city: city ? city.code : null,
+      provider: via || null,
+      only: null,
+      label: via ? `${where} · ${PROVIDER_NAMES[via] || via}` : where,
+    };
+  }
+
+  /* Built, not written as a string: the names are the backend's. */
+  function chip(p) {
+    const li = document.createElement('li');
+    li.dataset.value = p.code;
+    const c = document.createElement('span');
+    c.className = 'chip chip--x';
+    const name = document.createElement('span');
+    name.className = 'chip__name';
+    name.textContent = p.label;
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'chip__x';
+    x.title = 'Remove';
+    x.setAttribute('aria-label', `Remove ${p.label}`);
+    x.append(icon('#i-x', 'ico'));
+    c.append(name, x);
+    li.append(c);
+    return li;
+  }
+
+  /* The server itself, which is always made and cannot be taken off - so
+     it is a fact in the row rather than an entry with a cross on it. */
+  function serverChip() {
+    const li = document.createElement('li');
+    li.dataset.value = '';
+    li.dataset.fixed = '1';
+    const c = document.createElement('span');
+    c.className = 'chip chip--fixed';
+    c.title = 'Slot 0 comes out at the server itself, and is always made.';
+    const name = document.createElement('span');
+    name.className = 'chip__name';
+    name.textContent = 'The server itself';
+    const host = document.createElement('span');
+    host.className = 'chip__host mono';
+    c.append(icon('#i-socket', 'ico'), name, host);
+    li.append(c);
+    return li;
+  }
+
+  /* Matched up by value rather than rebuilt, so a repaint that changes
+     nothing moves nothing, and focus on a remove button survives it. */
+  function paintChips() {
+    let first = chipList.firstElementChild;
+    if (!first || first.dataset.fixed !== '1') {
+      first = serverChip();
+      chipList.prepend(first);
+    }
+    first.querySelector('.chip__host').textContent = ex.host || '';
+    const have = new Map([...chipList.children].filter((li) => li !== first)
+      .map((li) => [li.dataset.value, li]));
+    const keep = new Set(picks.map((p) => p.code));
+    for (const [v, li] of have) {
+      if (!keep.has(v)) { gsap.killTweensOf(li.firstElementChild); li.remove(); }
+    }
+    let at = first.nextElementSibling;
+    for (const p of picks) {
+      const li = have.get(p.code) || chip(p);
+      if (li === at) at = at.nextElementSibling;
+      else chipList.insertBefore(li, at);
+    }
+  }
+
+  const chipFor = (code) =>
+    [...chipList.children].find((li) => li.dataset.value === code && !li.dataset.fixed);
+
+  function arrive(li) {
+    if (!li || calm) return;
+    gsap.fromTo(li.firstElementChild, { scale: 0.6, autoAlpha: 0 },
+      { scale: 1, autoAlpha: 1, duration: 0.38, ease: 'expo.out',
+        clearProps: 'transform,opacity,visibility' });
+  }
+
+  /* Whatever moved because the row changed under it slides from where it
+     was - transforms only, the same as the split tunnel's chips. */
+  function slide(change) {
+    if (calm) { change(); return; }
+    const before = new Map([...chipList.children].map((li) => [li, li.getBoundingClientRect()]));
+    change();
+    for (const li of chipList.children) {
+      const was = before.get(li);
+      if (!was) continue;
+      const now = li.getBoundingClientRect();
+      const dx = was.left - now.left;
+      const dy = was.top - now.top;
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+      gsap.fromTo(li, { x: dx, y: dy },
+        { x: 0, y: 0, duration: 0.34, ease: 'power3.out', clearProps: 'transform' });
+    }
+  }
+
+  function edited() {
+    paint();
+    if (open) marks();
+  }
+
+  function leave(li) {
+    if (!li || li.dataset.leaving === '1') return;
+    li.dataset.leaving = '1';
+    const code = li.dataset.value;
+    const near = li.nextElementSibling
+      || (li.previousElementSibling && !li.previousElementSibling.dataset.fixed
+        ? li.previousElementSibling : null);
+    const hadFocus = li.contains(document.activeElement);
+    const done = () => {
+      picks = picks.filter((p) => p.code !== code);
+      slide(edited);
+      if (!hadFocus) return;
+      const to = (near && near.isConnected && near.querySelector('.chip__x')) || addBtn;
+      to.focus({ preventScroll: true });
+    };
+    if (calm) { done(); return; }
+    // Opacity rather than autoAlpha, for the split tunnel's reason: a
+    // focused button that goes visibility:hidden is blurred on the spot.
+    gsap.to(li.firstElementChild, { scale: 0.6, opacity: 0, duration: 0.16,
+                                    ease: 'power2.in', onComplete: done });
+  }
+
+  /* No room. The row that was pressed shakes its head, and the line at the
+     top of the list - already there, saying the slots are taken - nods, so
+     the eye goes from the refusal to the reason. Under reduced motion the
+     line is still there to read; it just does not move. */
+  function refuse(el) {
+    if (calm) return;
+    if (el) {
+      gsap.fromTo(el, { x: 0 },
+        { keyframes: { x: [0, -5, 5, -3, 3, 0] }, duration: 0.38,
+          ease: 'power1.inOut', overwrite: 'auto', clearProps: 'transform' });
+    }
+    gsap.fromTo(fullLine, { scale: 1 },
+      { scale: 1.035, duration: 0.12, ease: 'power2.out', yoyo: true, repeat: 1,
+        overwrite: 'auto', clearProps: 'transform' });
+  }
+
+  function toggle(code, el) {
+    if (working) return;
+    if (picks.some((p) => p.code === code)) {
+      const li = chipFor(code);
+      if (li) leave(li);
+      else { picks = picks.filter((p) => p.code !== code); edited(); }
+      if (el) el.setAttribute('aria-pressed', 'false');
+      return;
+    }
+    const p = offered.get(code);
+    if (!p) return;
+    if (picks.length >= ex.slots) { refuse(el && el.closest('.sharepop__row')); return; }
+    picks.push(p);
+    edited();
+    arrive(chipFor(code));
+    if (!calm && el) {
+      const check = el.querySelector('.runpop__check');
+      if (check) {
+        gsap.fromTo(check, { scale: 0.4, autoAlpha: 0 },
+          { scale: 1, autoAlpha: 1, duration: 0.42, ease: 'expo.out',
+            clearProps: 'transform,opacity,visibility' });
+      }
+    }
+  }
+
+  chipList.addEventListener('click', (e) => {
+    const x = e.target.closest('.chip__x');
+    if (x && !working) leave(x.closest('li'));
+  });
+  chipList.addEventListener('keydown', (e) => {
+    if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+    const x = e.target.closest('.chip__x');
+    if (!x || working) return;
+    e.preventDefault();
+    leave(x.closest('li'));
+  });
+
+  /* ------------------------------------------------- the list of places */
+
+  /* A place's row, and when two providers reach it, one small button for
+     each provider's share of it alone - which is the same choice the exit
+     list makes with a provider's sign, made pressable here because there is
+     no second screen to make it on. */
+  function placeRow(c, city) {
+    const base = pickOf(c, city, null);
+    offered.set(base.code, base);
+    const li = document.createElement('li');
+    li.className = 'sharepop__row' + (city ? ' sharepop__row--city' : '');
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'runpop__opt sharepop__opt';
+    b.dataset.code = base.code;
+    const flag = document.createElement('span');
+    flag.className = city ? 'flag flag--dot' : 'flag';
+    flag.setAttribute('aria-hidden', 'true');
+    if (!city) flag.style.setProperty('--flag', flagUrl(c.code));
+    const name = document.createElement('span');
+    name.className = 'runpop__name';
+    name.textContent = city ? city.name : c.name;
+    const meta = document.createElement('span');
+    meta.className = 'sharepop__meta';
+    const n = city ? city.count : c.count;
+    const cities = (c.cityList || []).length;
+    meta.textContent = (!city && cities > 1 ? `${cities} cities · ` : '')
+      + `${n || 0} relay${n === 1 ? '' : 's'}`;
+    b.append(flag, name, meta, icon('#i-check', 'ico runpop__check'));
+    li.append(b);
+
+    // Always there, empty or not, so the counts line up in one column
+    // whether a row has the provider buttons after it or not.
+    const ways = document.createElement('span');
+    ways.className = 'sharepop__ways';
+    const by = (city || c).by || {};
+    const who = Object.keys(by).filter((k) => by[k] > 0).sort();
+    if (who.length > 1) {
+      for (const via of who) {
+        const p = pickOf(c, city, via);
+        offered.set(p.code, p);
+        const w = document.createElement('button');
+        w.type = 'button';
+        w.className = 'sharepop__via';
+        w.dataset.code = p.code;
+        w.title = `${p.label} — only ${PROVIDER_NAMES[via] || via}'s exits`;
+        w.setAttribute('aria-label', w.title);
+        w.append(providerMark(via, 'ico'));
+        ways.append(w);
+      }
+    }
+    li.append(ways);
+    return li;
+  }
+
+  /* Alphabetical rather than fastest first: this list is for finding a
+     place by name, and how quickly it answers this window says nothing
+     about how it answers the server. A country's cities follow it when it
+     has more than one; a filter that names a city keeps the country above
+     it, so the city is never shown without saying where it is. */
+  function drawPlaces() {
+    const q = find.value.trim().toLowerCase();
+    const has = (s) => String(s || '').toLowerCase().includes(q);
+    offered = new Map();
+    const rows = [];
+    const all = state.countries.slice().sort((a, b) => a.name.localeCompare(b.name));
+    for (const c of all) {
+      const cityList = (c.cityList || []).length > 1 ? c.cityList : [];
+      const whole = !q || has(c.name) || has(c.code) || [].concat(c.alias || []).some(has);
+      const cities = whole ? cityList : cityList.filter((x) => has(x.name) || has(x.nick));
+      if (!whole && !cities.length) continue;
+      rows.push(placeRow(c, null));
+      for (const city of cities) rows.push(placeRow(c, city));
+    }
+    list.replaceChildren(...rows);
+    // The column for them is only held open when some row has them; with
+    // one provider signed in there are none, and it would be a gap.
+    list.dataset.ways = list.querySelector('.sharepop__via') ? '1' : '';
+    marks();
+    none.hidden = rows.length > 0;
+    none.textContent = state.countries.length
+      ? `No place matches “${find.value.trim()}”.`
+      : 'The exit list is empty. Add an account under Accounts first.';
+  }
+
+  function marks() {
+    const mine = new Set(picks.map((p) => p.code));
+    for (const b of list.querySelectorAll('[data-code]')) {
+      b.setAttribute('aria-pressed', String(mine.has(b.dataset.code)));
+    }
+  }
+
+  function show() {
+    open = true;
+    pop.hidden = false;
+    addBtn.setAttribute('aria-expanded', 'true');
+    if (run) run.kill();
+    run = null;
+    if (!calm) {
+      // Opacity, not autoAlpha: the filter has to take focus on the first
+      // frame, and nothing inside visibility:hidden can.
+      const first = [...list.children].slice(0, 8);
+      run = gsap.timeline({
+        defaults: { ease: 'power3.out' },
+        onReverseComplete: () => { pop.hidden = true; },
+      });
+      run.fromTo(pop, { opacity: 0, y: -6, scaleY: 0.94 },
+                      { opacity: 1, y: 0, scaleY: 1, duration: 0.24 }, 0);
+      if (first.length) {
+        run.fromTo(first, { opacity: 0, y: -4 },
+                          { opacity: 1, y: 0, duration: 0.2, stagger: 0.025,
+                            ease: 'power2.out' }, 0.05);
+      }
+    }
+    find.focus({ preventScroll: true });
+    pop.scrollIntoView({ block: 'nearest', behavior: calm ? 'auto' : 'smooth' });
+    document.addEventListener('pointerdown', outside, true);
+  }
+
+  function hide(refocus) {
+    if (!open) return;
+    open = false;
+    addBtn.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('pointerdown', outside, true);
+    if (run && !calm) run.timeScale(1.6).reverse();
+    else pop.hidden = true;
+    if (refocus) addBtn.focus({ preventScroll: true });
+  }
+
+  function outside(e) {
+    if (!pop.contains(e.target) && !addBtn.contains(e.target)) hide(false);
+  }
+
+  addBtn.addEventListener('click', () => {
+    if (open) { hide(true); return; }
+    if (working || !ex.ready) return;
+    find.value = '';
+    drawPlaces();
+    show();
+  });
+
+  find.addEventListener('input', drawPlaces);
+  list.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-code]');
+    if (b) toggle(b.dataset.code, b);
+  });
+  pop.addEventListener('keydown', (e) => {
+    const rows = [...list.querySelectorAll('.sharepop__opt')];
+    const at = rows.indexOf(document.activeElement);
+    if (e.key === 'Escape') {
+      // Here and not in the sheet's handler: Escape puts the list away, not
+      // the screen behind it.
+      e.preventDefault();
+      e.stopPropagation();
+      hide(true);
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      (rows[Math.min(at + 1, rows.length - 1)] || find).focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      (at > 0 ? rows[at - 1] : find).focus();
+    } else if ((e.key === 'Home' || e.key === 'End') && at >= 0) {
+      e.preventDefault();
+      rows[e.key === 'Home' ? 0 : rows.length - 1].focus();
+    } else if (e.key === 'Enter' && e.target === find) {
+      // Type, Enter: the first match goes in. Only ever in - taking one
+      // out is a press on the row itself, where you can see what it is.
+      e.preventDefault();
+      const first = rows[0];
+      if (first && first.getAttribute('aria-pressed') !== 'true') {
+        toggle(first.dataset.code, first);
+      }
+    }
+  });
+  pop.addEventListener('focusout', (e) => {
+    const to = e.relatedTarget;
+    if (open && to && !pop.contains(to) && to !== addBtn) hide(false);
+  });
+
+  /* ------------------------------------------------------------ the run */
+
+  function runRow(p) {
+    const rows = [...runs.children];
+    const byLabel = rows.find((li) => li.dataset.label === String(p.label || ''));
+    if (byLabel) return byLabel;
+    const i = Number(p.i);
+    return Number.isInteger(i) && i >= 0 && i < rows.length ? rows[i] : null;
+  }
+
+  function setRun(li, phase, detail) {
+    const was = li.dataset.phase;
+    li.dataset.phase = phase;
+    li.querySelector('.run__detail').textContent = detail || PHASE_SAID[phase] || '';
+    if (calm || was === phase || (phase !== 'pinned' && phase !== 'failed')) return;
+    gsap.fromTo(li.querySelector('.run__mark'), { scale: 0.5 },
+      { scale: 1, duration: 0.42, ease: 'expo.out', clearProps: 'transform' });
+  }
+
+  function drawRuns(sent) {
+    runs.replaceChildren(...sent.map((p) => {
+      const li = document.createElement('li');
+      li.className = 'run';
+      li.dataset.label = p.label;
+      const mark = document.createElement('span');
+      mark.className = 'run__mark';
+      mark.setAttribute('aria-hidden', 'true');
+      mark.append(icon('#i-check', 'ico run__ok'), icon('#i-x', 'ico run__no'));
+      const copy = document.createElement('span');
+      copy.className = 'run__copy';
+      const name = document.createElement('span');
+      name.className = 'run__name';
+      name.textContent = p.label;
+      const detail = document.createElement('span');
+      detail.className = 'run__detail';
+      copy.append(name, detail);
+      li.append(mark, copy);
+      setRun(li, 'waiting');
+      return li;
+    }));
+    runs.hidden = !sent.length;
+    if (calm || !sent.length) return;
+    gsap.fromTo([...runs.children], { y: 6, autoAlpha: 0 },
+      { y: 0, autoAlpha: 1, duration: 0.28, stagger: 0.045, ease: 'power3.out',
+        clearProps: 'transform,opacity,visibility' });
+  }
+
+  function release() {
+    working = false;
+    stopping = false;
+    if (held.make) { held.make = false; busy(make, false); }
+    if (held.stop) { held.stop = false; busy(stop, false); }
+  }
+
+  /* The server itself is always in the set, so an empty list of places is
+     still something to make: the one config that comes out at the server. */
+  async function commit() {
+    if (working || !ex.ready) return;
+    hide(false);
+    const sent = picks.map(({ country, city, provider, only, label }) =>
+      ({ country, city, provider, only, label }));
+    working = true;
+    stopping = false;
+    held.make = true;
+    busy(make, true);
+    drawRuns(sent);
+    said(told, sent.length ? 'Timing each place from the server…'
+      : 'Asking the server for its own config…', 'work');
+    paint();
+    let r = null;
+    try {
+      r = await window.pywebview.api.buildExport(sent);
+    } catch (err) {
+      r = null;
+    }
+    // Only the refusal is handled here. Yes is "started", and everything
+    // after that arrives as events - possibly before this line does.
+    if (r && r.ok !== false) return;
+    if (!working) return;
+    release();
+    runs.hidden = true;
+    said(told, (r && r.error) || 'The server could not be asked.', 'bad');
+    paint();
+  }
+
+  function progress(p) {
+    if (!p || !working) return;
+    if (p.phase === 'saving') {
+      said(told, p.detail || 'Writing the slots on the server…', 'work');
+      return;
+    }
+    const li = runRow(p);
+    if (!li) return;
+    setRun(li, p.phase in PHASE_SAID ? p.phase : 'testing', p.detail || '');
+    if (stopping) return;
+    const rows = [...runs.children];
+    const at = rows.indexOf(li) + 1;
+    said(told, p.phase === 'testing'
+      ? `Timing ${at} of ${rows.length}: ${p.label || li.dataset.label}…`
+      : `${at} of ${rows.length} done.`, 'work');
+  }
+
+  function done(d) {
+    const cut = stopping;
+    release();
+    // Whatever was still waiting or being timed did not finish, and the
+    // marks say so rather than turning for ever.
+    for (const li of runs.children) {
+      if (li.dataset.phase === 'testing' || li.dataset.phase === 'waiting') {
+        setRun(li, 'stopped');
+      }
+    }
+    if (!d || !d.ok) {
+      said(told, (d && d.error) || (cut ? 'Stopped before anything was made.'
+        : 'Nothing was made.'), 'bad');
+      paint();
+      return;
+    }
+    const links = Array.isArray(d.links) ? d.links : [];
+    result = { at: Date.now() / 1000, links, subscription: d.subscription || null };
+    const made = links.filter((l) => !l.error).length;
+    const failed = links.length - made;
+    said(told, `${made} config${made === 1 ? '' : 's'} made`
+      + (failed ? `; ${failed} place${failed === 1 ? '' : 's'} found no exit that worked.`
+        : '.') + (cut ? ' Stopped early.' : ''), failed ? '' : 'good');
+    // The cards say everything the lines did, and say it with the code.
+    runs.hidden = true;
+    drawResult(true);
+    paint();
+    out.scrollIntoView({ block: 'start', behavior: calm ? 'auto' : 'smooth' });
+  }
+
+  make.addEventListener('click', commit);
+
+  stop.addEventListener('click', async () => {
+    if (!working || stopping) return;
+    stopping = true;
+    held.stop = true;
+    busy(stop, true);
+    said(told, 'Stopping once the place being timed is done…', 'work');
+    let r = null;
+    try {
+      r = await window.pywebview.api.cancelExport();
+    } catch (err) {
+      r = null;
+    }
+    if (r && r.ok !== false) return;
+    if (!working) return;
+    stopping = false;
+    held.stop = false;
+    busy(stop, false);
+    said(told, (r && r.error) || 'It would not stop.', 'bad');
+  });
+
+  /* ------------------------------------------------------------ results */
+
+  const kindsOf = (l) => ['vless', 'vmess', 'ss'].filter((k) => l[k]);
+
+  /* The standard subscription is the links one to a line, in base64. Built
+     here only when the backend did not send one - a set read back from
+     exportState() carries its links and nothing else. */
+  function b64(text) {
+    const bytes = new TextEncoder().encode(text);
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 1) s += String.fromCharCode(bytes[i]);
+    return btoa(s);
+  }
+
+  function lines(k) {
+    return (result ? result.links : []).filter((l) => !l.error && l[k]).map((l) => l[k]);
+  }
+
+  /* A code is the one picture in here that has to be exact: a module that
+     smears across two pixels is a module a phone camera reads as grey. So it
+     is drawn in whole device pixels per module, at whatever size that comes
+     to nearest 220, and shown at exactly that size - never scaled by CSS.
+     Nearest rather than under: a VMess link is long enough that rounding
+     down left it at 170px of two-pixel modules, which is a code a camera has
+     to be held very still for. QR_MAX keeps it inside a card at 400 wide. */
+  function drawQr(canvas, text) {
+    if (typeof window.qrcode !== 'function') return false;
+    let qr = null;
+    try {
+      qr = qrcode(0, 'M');
+      qr.addData(text, 'Byte');
+      qr.make();
+    } catch (err) {
+      return false;   // longer than a code can hold
+    }
+    const n = qr.getModuleCount();
+    const cells = n + QUIET * 2;
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    let unit = Math.max(1, Math.round((QR_SIDE * dpr) / cells));
+    if (unit > 1 && (unit * cells) / dpr > QR_MAX) unit -= 1;
+    const side = unit * cells;
+    canvas.width = side;
+    canvas.height = side;
+    canvas.style.width = `${side / dpr}px`;
+    const g = canvas.getContext('2d');
+    g.fillStyle = '#fff';
+    g.fillRect(0, 0, side, side);
+    g.fillStyle = '#000';
+    for (let r = 0; r < n; r += 1) {
+      for (let c = 0; c < n; c += 1) {
+        if (qr.isDark(r, c)) g.fillRect((c + QUIET) * unit, (r + QUIET) * unit, unit, unit);
+      }
+    }
+    return true;
+  }
+
+  function card(l) {
+    const li = document.createElement('li');
+    li.className = 'qr';
+    const k = Number(l.k) || 0;
+    li.dataset.k = String(k);
+    byCard.set(li, l);
+
+    const head = document.createElement('div');
+    head.className = 'qr__head';
+    const name = document.createElement('span');
+    name.className = 'qr__name';
+    name.textContent = l.name || (k === 0 ? 'The server itself' : `Slot ${k}`);
+    const slot = document.createElement('span');
+    slot.className = 'qr__slot';
+    slot.textContent = `slot ${k}`;
+    head.append(name, slot);
+
+    const meta = document.createElement('p');
+    meta.className = 'qr__meta';
+    if (k === 0) {
+      meta.textContent = `Comes out at your server${ex.host ? `, ${ex.host}` : ''}.`;
+    } else if (l.exit || l.upload !== undefined) {
+      meta.append(l.exit ? `Comes out at ${l.exit}` : 'Pinned');
+      const up = uploadSaid(l.upload);
+      if (up) {
+        const b = document.createElement('b');
+        b.textContent = up;
+        meta.append(' · ', b);
+      }
+    }
+    li.append(head);
+    if (meta.childNodes.length) li.append(meta);
+
+    if (l.error || !kindsOf(l).length) {
+      li.dataset.failed = '1';
+      const err = document.createElement('p');
+      err.className = 'qr__err';
+      err.textContent = l.error || 'The server sent no link for this slot.';
+      li.append(err);
+      return li;
+    }
+
+    const kinds = kindsOf(l);
+    const seg = document.createElement('div');
+    seg.className = 'seg qr__kind' + (kinds.length === 3 ? ' seg--three' : '');
+    seg.setAttribute('role', 'group');
+    seg.setAttribute('aria-label', `Which kind of link for ${name.textContent}`);
+    const slide = document.createElement('i');
+    slide.className = 'seg__slide';
+    slide.setAttribute('aria-hidden', 'true');
+    seg.append(slide);
+    if (kinds.length > 1) {
+      for (const kk of kinds) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'seg__opt';
+        b.dataset.proto = kk;
+        b.textContent = KINDS[kk];
+        seg.append(b);
+      }
+    }
+
+    const box = document.createElement('div');
+    box.className = 'qr__code';
+    const canvas = document.createElement('canvas');
+    canvas.setAttribute('role', 'img');
+    box.append(canvas);
+    const nocode = document.createElement('p');
+    nocode.className = 'qr__none';
+    nocode.hidden = true;
+
+    const link = document.createElement('code');
+    link.className = 'qr__link mono';
+
+    const acts = document.createElement('div');
+    acts.className = 'qr__acts';
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'btn btn--quiet btn--auto qr__copy';
+    const copyWord = document.createElement('span');
+    copyWord.textContent = 'Copy link';
+    copyBtn.append(icon('#i-copy', 'ico'), copyWord);
+    acts.append(copyBtn);
+
+    if (kinds.length > 1) li.append(seg);
+    li.append(box, nocode, link, acts);
+    setKind(li, kind, false);
+    return li;
+  }
+
+  /* Bytes a second, or the backend's own words for it. */
+  function uploadSaid(up) {
+    if (up === undefined || up === null || up === '') return '';
+    if (typeof up === 'number') {
+      const [v, u] = splitBytes(up);
+      return `${v} ${u}/s up`;
+    }
+    const s = String(up);
+    return /\bup\b/i.test(s) ? s : `${s} up`;
+  }
+
+  function setKind(li, want, animate) {
+    const l = byCard.get(li);
+    if (!l || li.dataset.failed === '1') return;
+    const kinds = kindsOf(l);
+    const k = kinds.includes(want) ? want : (kinds.includes('vless') ? 'vless' : kinds[0]);
+    li.dataset.proto = k;
+    const seg = li.querySelector('.qr__kind');
+    if (seg) {
+      seg.dataset.proto = k;
+      for (const b of seg.querySelectorAll('.seg__opt')) {
+        b.setAttribute('aria-pressed', String(b.dataset.proto === k));
+      }
+    }
+    const text = String(l[k]);
+    li.querySelector('.qr__link').textContent = text;
+    const canvas = li.querySelector('canvas');
+    const drew = drawQr(canvas, text);
+    li.querySelector('.qr__code').hidden = !drew;
+    canvas.setAttribute('aria-label', `QR code of the ${KINDS[k]} link`);
+    const nocode = li.querySelector('.qr__none');
+    nocode.hidden = drew;
+    nocode.textContent = drew ? '' : 'This one is too long for a code. Copy the link instead.';
+    if (drew && animate && !calm) {
+      gsap.fromTo(canvas, { autoAlpha: 0, scale: 0.97 },
+        { autoAlpha: 1, scale: 1, duration: 0.26, ease: 'power2.out',
+          clearProps: 'transform,opacity,visibility' });
+    }
+  }
+
+  function paintKind() {
+    kindSeg.dataset.proto = kind;
+    for (const b of kindSeg.querySelectorAll('.seg__opt')) {
+      b.setAttribute('aria-pressed', String(b.dataset.proto === kind));
+    }
+    $('shareCopySub').disabled = !lines(kind).length;
+    $('shareCopyAll').disabled = !lines(kind).length;
+  }
+
+  function drawResult(fresh) {
+    out.hidden = !ex.ready || !result;
+    if (!result) return;
+    paintAt();
+    const links = result.links.slice().sort((a, b) => (Number(a.k) || 0) - (Number(b.k) || 0));
+    cards.replaceChildren(...links.map(card));
+    paintKind();
+    if (!fresh || calm) return;
+    gsap.fromTo([...cards.children], { y: 10, autoAlpha: 0 },
+      { y: 0, autoAlpha: 1, duration: 0.34, stagger: 0.06, ease: 'power3.out',
+        clearProps: 'transform,opacity,visibility' });
+  }
+
+  /* The word on the button says it was done, for a moment. The clipboard
+     itself is copyText's, which knows the way round a WebView that will
+     not let a file:// page near it. */
+  async function copyWith(btn, text) {
+    if (!text) return;
+    await copyText(btn, text);
+    const word = btn.querySelector('span');
+    if (word && !word.dataset.was) word.dataset.was = word.textContent;
+    if (word) word.textContent = 'Copied';
+    btn.dataset.copied = '1';
+    clearTimeout(copyTimers.get(btn));
+    copyTimers.set(btn, setTimeout(() => {
+      delete btn.dataset.copied;
+      if (!word) return;
+      word.textContent = word.dataset.was;
+      delete word.dataset.was;
+    }, 1400));
+    const mark = btn.querySelector('.ico');
+    if (mark && !calm) {
+      gsap.fromTo(mark, { scale: 0.6 },
+        { scale: 1, duration: 0.4, ease: 'expo.out', clearProps: 'transform' });
+    }
+  }
+
+  cards.addEventListener('click', (e) => {
+    const li = e.target.closest('.qr');
+    if (!li) return;
+    const opt = e.target.closest('.seg__opt');
+    if (opt) {
+      if (opt.dataset.proto !== li.dataset.proto) setKind(li, opt.dataset.proto, true);
+      return;
+    }
+    const btn = e.target.closest('.qr__copy');
+    const l = byCard.get(li);
+    if (btn && l) copyWith(btn, String(l[li.dataset.proto] || ''));
+  });
+
+  // The strip at the top turns every card at once; a card turned by hand
+  // afterwards keeps its own until the strip is pressed again.
+  for (const b of kindSeg.querySelectorAll('.seg__opt')) {
+    b.addEventListener('click', () => {
+      kind = b.dataset.proto;
+      paintKind();
+      for (const li of cards.children) {
+        if (li.dataset.proto !== kind) setKind(li, kind, true);
+      }
+    });
+  }
+
+  $('shareCopyAll').addEventListener('click', (e) =>
+    copyWith(e.currentTarget, lines(kind).join('\n')));
+
+  $('shareCopySub').addEventListener('click', (e) => {
+    const sent = result && result.subscription && result.subscription[kind];
+    const all = lines(kind);
+    copyWith(e.currentTarget, sent || (all.length ? b64(all.join('\n')) : ''));
+  });
+
+  return { take, opened, hide, progress, done };
+})();
+
+/* A run of Other devices, as the backend reports it: a line per place while
+   the server times it, then the links. */
+window.onExportProgress = (p) => sharePane.progress(p);
+window.onExportDone = (d) => sharePane.done(d);
 
 /* change, not input, and not blur either. Every other port box in this sheet
    commits as you type because the worst it costs is a socket test; this one
@@ -3744,6 +5865,9 @@ function wireInfoButtons() {
   const whys = document.querySelectorAll(
     '.pane__why:not(.pane__why--tight)');
   for (const why of whys) {
+    // A short description is the row's second line, in plain sight. Only
+    // the paragraphs too long to sit under a title move into the (i).
+    if (why.textContent.trim().length <= 170) continue;
     // A step inside a pane explains itself the same way a pane does, and the
     // line it belongs on is the step's caption rather than the pane's title
     // three inches above it. Nearest host wins.
@@ -4305,6 +6429,10 @@ function fillFloor() {
 }
 
 function showScreen(slug) {
+  // A list left open over a screen that is going away would still be open,
+  // and still listening for the click that closes it, on the way back in.
+  splitPane.hide(false);
+  sharePane.hide(false);
   for (const s of document.querySelectorAll('.screen')) {
     s.hidden = s.dataset.screen !== slug;
   }
@@ -4318,7 +6446,16 @@ function showScreen(slug) {
     ? row.querySelector('.menu__name').textContent : 'Settings';
   if (found) found.scrollTop = 0;
   $('prefsBody').scrollTop = 0;
+  const shown = found || $('prefsMenu');
+  if (window.gsap && !CALM) {
+    gsap.fromTo(shown, { opacity: 0 },
+                { opacity: 1, duration: 0.333, ease: 'expo.out', clearProps: 'opacity' });
+  }
+  if (typeof lanPane !== 'undefined') lanPane.screen(slug);
   state.screen = found ? slug : null;
+  // The last set of links is asked for on the way in, not at boot: it is
+  // the server's to keep, and nothing else in the window wants it.
+  if (state.screen === 'share') sharePane.opened();
   // The floor belongs to the top level and nowhere else. Behind a screen
   // full of panes it would be texture under furniture; behind four rows and
   // a lot of nothing it is the reason the nothing has a bottom to it.
@@ -4336,6 +6473,13 @@ function showScreen(slug) {
 function showSettingsMenu() {
   showScreen(null);
 }
+
+$('prefsBody').addEventListener('click', (e) => {
+  const row = e.target.closest('.pane--line');
+  if (!row || e.target.closest('button, input, a, label, select, .tip')) return;
+  const sw = row.querySelector('.toggle:not(:disabled)');
+  if (sw) sw.click();
+});
 
 $('prefsMenu').addEventListener('click', (e) => {
   const row = e.target.closest('.menu__row');
@@ -4641,7 +6785,6 @@ function paintQuick() {
   run.disabled = !!state.testing && !running;
 }
 
-$('testAll').addEventListener('click', () => startQuick(false));
 $('quickRun').addEventListener('click', () => startQuick(false));
 $('autoQuick').addEventListener('click', async () => {
   state.autoQuick = state.autoQuick === false;
@@ -4662,14 +6805,6 @@ function paintTesting() {
       : 'Test the servers here');
     el.title = busy ? 'Stop' : 'Test these';
   }
-  const all = $('testAll');
-  const quick = state.testing === 'quick';
-  all.dataset.running = quick ? '1' : '0';
-  all.disabled = !!state.testing && !quick;
-  $('testAllLabel').textContent = quick ? 'Stop' : 'Test all';
-  // The word is out of sight now, so the tooltip says it as well.
-  all.title = quick ? 'Stop'
-    : 'Test all: time one exit in every country. Times are from the last test.';
   paintQuick();
 }
 
@@ -4700,19 +6835,18 @@ function patchRow(file, rec) {
   }
 
   const country = canonCode(file.replace(/^\d+\.\d+s-/, '').slice(0, 2));
-  const row = document.querySelector(`.row[data-code="${country}"] .row__meta`);
+  const row = document.querySelector(`.row[data-code="${country}"] .row__ping`);
   if (!row) return;
   if (rec.ms !== null && rec.ms !== undefined) {
     const was = row.dataset.best ? Number(row.dataset.best) : null;
     if (was === null || rec.ms < was) {
       row.dataset.best = String(rec.ms);
-      const base = row.textContent.split(' · ')[0];
-      row.textContent = `${base} · ${msSaid(rec.ms)}`;
+      delete row.dataset.blocked;
+      row.textContent = msSaid(rec.ms);
       lit(row);
     }
   } else if (rec.ok === false && !row.dataset.best) {
-    const base = row.textContent.split(' · ')[0];
-    row.textContent = `${base} · no answer`;
+    row.textContent = 'no answer';
     lit(row);
   }
 }
@@ -5179,12 +7313,6 @@ function buildCity(c, city, via) {
     : city.ok ? (city.ok < city.tested ? 'some' : 'ok')
       : (city.tested >= city.count ? 'blocked' : 'some');
 
-  // A dot where the country has its flag, so the names line up in one
-  // column rather than stepping in and out under it.
-  const dot = document.createElement('span');
-  dot.className = 'flag flag--dot';
-  row.append(dot);
-
   const copy = document.createElement('span');
   copy.className = 'row__copy';
 
@@ -5225,8 +7353,8 @@ function buildCity(c, city, via) {
   if (blocked || (city.ping !== null && city.ping !== undefined)) {
     const ping = document.createElement('span');
     ping.className = 'row__ping';
-    ping.textContent = blocked ? 'blocked' : msSaid(city.ping);
-    ping.dataset.level = blocked ? 'high' : pingLevel(city.ping);
+    ping.textContent = blocked ? 'Blocked' : msSaid(city.ping);
+    if (blocked) ping.dataset.blocked = '1';
     marks.append(ping);
   }
   // The nickname after the name, where it is the part of the line that can
@@ -5688,7 +7816,7 @@ $('srcBrowse').addEventListener('click', async (e) => {
 
 /* ------------------------------------------------------------ first run */
 
-/* The intro: five slides, the first time this copy opens. Resolves when it
+/* The intro: four slides, the first time this copy opens. Resolves when it
    is finished with, by Skip or Get started, and says so to Python so it is
    never shown again. */
 function runIntro() {
@@ -5702,8 +7830,12 @@ function runIntro() {
       slides.forEach((s, i) => {
         s.classList.toggle('is-here', i === at);
         s.classList.toggle('is-gone', i < at);
-        s.style.setProperty('--tint', s.dataset.tint);
       });
+      const here = slides[at];
+      if (here && window.gsap && !CALM) {
+        gsap.fromTo(here, { opacity: 0, x: 24 },
+                    { opacity: 1, x: 0, duration: 0.333, ease: 'expo.out', clearProps: 'opacity,transform' });
+      }
       dots.forEach((d, i) => d.classList.toggle('is-here', i === at));
       $('introNext').textContent = at === slides.length - 1 ? 'Get started' : 'Next';
     };
@@ -5805,7 +7937,7 @@ async function prepareServers(provider) {
   $('setupDetail').textContent = `${p.written} servers pinned`;
   dlg.querySelector('.logo-mark').classList.remove('logo-mark--spin');
   if (state.mode === 'off') {
-    setStatus('DISCONNECTED', 'off', '', '');
+    setStatus('Disconnected', 'off', '', '');
     setHint(`${state.countries.length} countries ready.`);
   }
   render();
@@ -5840,29 +7972,27 @@ function providersWithoutServers(info) {
 
 /* ---------------------------------------------------------------- themes */
 
-/* The Android app's nine, with the page and card colour each swatch draws. */
+/* Three themes, with the page and surface colour each swatch draws. A copy
+   that saved one of the older names opens in Graphite, or White if it was a
+   light one. */
 const THEMES = [
-  ['midnight', 'Midnight', '#09090e', '#17171f'],
-  ['graphite', 'Graphite', '#111113', '#18191b'],
-  ['black', 'Black', '#000000', '#0e0e12'],
-  ['ocean', 'Ocean', '#060b16', '#0f1828'],
-  ['forest', 'Forest', '#060e0b', '#0f1a16'],
-  ['plum', 'Plum', '#0e0812', '#1b1222'],
-  ['ember', 'Ember', '#110a08', '#1e1512'],
-  ['slate', 'Slate', '#0c0f13', '#161b21'],
-  ['white', 'White', '#f4f5f8', '#ffffff'],
+  ['graphite', 'Graphite', '#121316', '#1a1b1f'],
+  ['white', 'White', '#f6f6f7', '#ffffff'],
+  ['black', 'Black', '#000000', '#0d0d0f'],
 ];
 
 function applyTheme(key) {
-  const theme = THEMES.some((t) => t[0] === key) ? key : 'midnight';
+  const k = String(key || '').toLowerCase();
+  const theme = k === 'white' || k === 'light' ? 'white' : k === 'black' ? 'black' : 'graphite';
   state.theme = theme;
-  if (theme === 'midnight') delete document.documentElement.dataset.theme;
+  if (theme === 'graphite') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = theme;
   // For the next start, so it opens in this theme rather than changing to it.
   try { localStorage.setItem('relay.theme', theme); } catch (e) { /* private window */ }
   for (const b of document.querySelectorAll('.theme')) {
     b.setAttribute('aria-checked', String(b.dataset.theme === theme));
   }
+  // The globe watches data-theme itself (it paints ink on White, light on the dark themes).
 }
 
 (function () {

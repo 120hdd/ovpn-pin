@@ -71,12 +71,12 @@ class Page:
 
 def _idle(p):
     p.do("state.mode = 'off'; render();"
-         "setStatus('DISCONNECTED', 'off', '', '')")
+         "setStatus('Disconnected', 'off', '', '')")
 
 
 def _busy(p):
     p.do("document.getElementById('act').dataset.mode = 'busy';"
-         "setStatus('CONNECTING', 'busy', 'Frankfurt, Germany', '')")
+         "setStatus('Connecting', 'busy', 'Frankfurt, Germany', '')")
 
 
 def _connected(p):
@@ -84,9 +84,9 @@ def _connected(p):
          "document.getElementById('hero').dataset.state = 'on';"
          "document.getElementById('swap').dataset.state = 'on';"
          "document.getElementById('card').dataset.state = 'on';"
-         "setStatus('CONNECTED', 'on', 'Frankfurt, Germany"
-         "<span class=\"status__clock mono\" id=\"statusClock\">1:02:33</span>',"
+         "setStatus('Connected', 'on', 'Frankfurt, Germany',"
          "          '146.70.160.237:1443');"
+         "document.getElementById('statusClock').textContent = '1:02:33';"
          "document.getElementById('exitIp').textContent = '146.70.160.237';"
          "document.getElementById('exitPlace').textContent = 'Frankfurt, DE'")
 
@@ -99,7 +99,7 @@ def _crowded(p):
     in. These are real: the countries list has every one of them.
     """
     p.do("document.getElementById('act').dataset.mode = 'on';"
-         "setStatus('CONNECTED', 'on',"
+         "setStatus('Connected', 'on',"
          "          'South Georgia and the South Sandwich Islands',"
          "          'de-fra-v046.prod.surfshark.com:1443');"
          "document.getElementById('pickLabel').textContent ="
@@ -220,7 +220,9 @@ def _prefs_working(p):
     """
     p.click('#settings', 1.0)
     p.click('.menu__row[data-goto="connection"]', 0.5)
-    p.do("document.getElementById('prefsBody').scrollTop = 720", 0.2)
+    # The tunnel's setup sits behind an expander row now; Test is inside it.
+    p.do("document.getElementById('tunnelMore').open = true;"
+         "document.getElementById('tunnelMore').scrollIntoView()", 0.2)
     p.do("busy(document.getElementById('tunnelTest'), true);"
          "said(document.getElementById('tunnelSaid'),"
          "     'Starting the client and asking the server…', 'work');"
@@ -229,7 +231,8 @@ def _prefs_working(p):
 
 
 def _shut_prefs_working(p):
-    p.do("busy(document.getElementById('tunnelTest'), false);"
+    p.do("document.getElementById('tunnelMore').open = false;"
+         "busy(document.getElementById('tunnelTest'), false);"
          "said(document.getElementById('tunnelSaid'), '');"
          # Put the pill back from where it came, rather than from a guess:
          # paintTunnel on an empty object would leave it reading "no client"

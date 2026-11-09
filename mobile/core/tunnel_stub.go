@@ -25,3 +25,5 @@ func (t *Tunnel) Close() error      { return nil }
 func (t *Tunnel) SetWay(Way) error             { return ErrNoTunnelHere }
 func (t *Tunnel) Health() (int, time.Duration) { return 0, 0 }
 func (t *Tunnel) Way() Way                     { return nil }
+func (t *Tunnel) SetSplit(*Split)              {}
+func (t *Tunnel) Split() *Split                { return nil }

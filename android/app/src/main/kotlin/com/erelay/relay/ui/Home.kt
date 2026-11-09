@@ -2,30 +2,25 @@ package com.erelay.relay.ui
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -34,6 +29,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -43,37 +39,33 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.erelay.relay.data.Conn
 import com.erelay.relay.data.Mode
 import com.erelay.relay.data.Place
 import com.erelay.relay.data.Traffic
 import com.erelay.relay.data.Way
-import com.erelay.relay.orb.OrbStage
+import com.erelay.relay.orb.GlobeBackdrop
 import com.erelay.relay.ui.theme.Shape
+import com.erelay.relay.ui.theme.Space
 import com.erelay.relay.ui.theme.Tone
 import com.erelay.relay.ui.theme.Type
-import com.erelay.relay.ui.theme.toneOf
+import kotlinx.coroutines.delay
 
 /** Everything the main screen draws, gathered by [Root] from the core's flows. */
 data class HomeState(
@@ -114,16 +106,18 @@ fun Home(
     onReconnect: () -> Unit = {},
 ) {
     Backdrop {
+        // While connected, the country's flag washes the whole page, deep and dim.
+        FlagWash(connectedCode(s))
+        // The hologram globe, half of it, on the right edge, behind everything.
+        GlobeBackdrop(s.conn.mode, orbPaused, connectedCode(s), still = !s.feel.orbMotion)
         BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            // The desktop window is a fixed 400x740; a phone is taller. The
-            // spare height goes to the orb's stage, and the orb grows into
-            // it, rather than to a band of empty background. What the rest
-            // needs is measured, not guessed from the screen's height - a
-            // large font setting makes the cards under the orb twice as
-            // tall - and only when even the smallest orb does not fit in
-            // what they leave does the screen scroll.
+            // The spare height of a tall phone goes to the gap between the
+            // status block and the controls, over the globe; what the rest
+            // needs is measured, not guessed, so a large font only costs the
+            // gap, and when even that is gone the screen scrolls.
             val screen = maxHeight
             val scroll = rememberScrollState()
+            val gutter = if (maxWidth < 360.dp) Space.x4 else Space.x5
             // A tablet gets the phone's column, in the middle of the screen.
             Box(
                 Modifier
@@ -131,67 +125,262 @@ fun Home(
                     .widthIn(max = CONTENT_MAX)
                     .fillMaxSize()
                     .verticalScroll(scroll, enabled = scroll.maxValue > 0)
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = gutter),
             ) {
-                FillColumn(screen, flex = 1, least = ORB_LEAST) {
+                FillColumn(screen, flex = 2, least = 0.dp) {
                     Header(s, onLog, onDrop, onSettings)
-                    Stage(s, orbPaused, onAct, onReconnect)
-                    Meter(s)
-                    Swap(s, onCopy)
-                    Spacer(Modifier.height(12.dp))
-                    StatusCard(s, onWay, onPick, onAct)
-                    Text(
-                        s.hint, textAlign = TextAlign.Center,
-                        style = Type.small.copy(color = if (s.hintBad) Tone.fail else Tone.textOff),
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp),
-                    )
+                    Readout(s, onPick, onCopy)
+                    Spacer(Modifier)
+                    Footer(s, onWay, onAct)
                 }
             }
         }
     }
 }
 
+// -- the connected country's backdrop ----------------------------------------------
+
+/** The country the tunnel comes out in, once there is one; empty when there is nothing to show. */
+private fun connectedCode(s: HomeState): String {
+    if (s.conn.mode != Mode.ON) return ""
+    val measured = s.seen?.country.orEmpty()
+    return when {
+        measured.isNotEmpty() -> measured.lowercase()
+        s.way == Way.PROVIDER -> s.conn.exitName.take(2).lowercase()
+        s.way == Way.SERVER_EXIT -> countryOfPick(s.picked).lowercase()
+        else -> ""
+    }.takeIf { it.length == 2 } ?: ""
+}
+
+/**
+ * The flag, cover-cropped, at a tenth of its strength, under a gradient that
+ * dissolves it into the page (more toward the bottom and the text side) and
+ * a dark vignette at the edges. In on Connected, out on disconnect or fail;
+ * with animations off it just swaps.
+ */
+@Composable
+private fun FlagWash(code: String) {
+    val reduced = rememberReducedMotion()
+    Crossfade(code, Modifier.fillMaxSize(),
+        animationSpec = tween(if (reduced) 0 else Shape.LARGE_MS, easing = Shape.ease),
+        label = "flagWash") { c ->
+        val bitmap = if (c.isEmpty()) null else rememberFlagBitmap(c)
+        if (bitmap != null) {
+            Box(Modifier.fillMaxSize()) {
+                Image(bitmap, null, Modifier.fillMaxSize().alpha(if (Tone.light) 0.20f else 0.30f),
+                    contentScale = ContentScale.Crop)
+                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
+                    0f to Tone.bg.copy(alpha = 0.10f), 0.45f to Tone.bg.copy(alpha = 0.55f),
+                    1f to Tone.bg.copy(alpha = 0.96f))))
+                Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(
+                    0f to Tone.bg.copy(alpha = 0.55f), 0.7f to Color.Transparent)))
+                Box(Modifier.fillMaxSize().drawWithContent {
+                    val r = kotlin.math.hypot(size.width, size.height) / 2f
+                    drawRect(Brush.radialGradient(
+                        0.55f to Color.Transparent,
+                        1f to Color.Black.copy(alpha = if (Tone.light) 0.10f else 0.55f),
+                        center = Offset(size.width / 2f, size.height / 2f), radius = r))
+                })
+            }
+        }
+    }
+}
+
+// -- header -----------------------------------------------------------------------------
+
 @Composable
 private fun Header(s: HomeState, onLog: () -> Unit, onDrop: () -> Unit, onSettings: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Spacer(Modifier.width(4.dp))
-        RelayMark(Modifier.size(26.dp))
-        Spacer(Modifier.width(10.dp))
-        // The buttons are measured first and the name takes what they leave,
-        // so a large font setting cannot push Settings off the edge.
-        androidx.compose.foundation.text.BasicText("Relay",
-            style = Type.strong.copy(fontSize = 20.sp, fontWeight = FontWeight.W600),
-            maxLines = 1, softWrap = false, modifier = Modifier.weight(1f),
-            autoSize = FitText(20.sp, floor = 14.dp))
+    Row(Modifier.fillMaxWidth().padding(top = Space.x2), verticalAlignment = Alignment.CenterVertically) {
+        RelayMark(Modifier.size(24.dp))
+        Spacer(Modifier.width(Space.x2))
+        Text("Relay", style = Type.subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f))
         Box {
             IconButton(Glyph.activity, "What is using the connection", onLog)
             if (s.traffic.live && s.traffic.downRate + s.traffic.upRate > 512) {
-                Box(Modifier.align(Alignment.TopEnd).offset((-8).dp, 9.dp).size(6.dp)
+                Box(Modifier.align(Alignment.TopEnd).offset((-Space.x2), Space.x3).size(Space.x2)
                     .clip(CircleShape).background(Tone.ok))
             }
         }
         if (s.deadCount > 0) {
             Box {
                 IconButton(Glyph.archive, "Exits that stopped answering", onDrop)
-                Text(s.deadCount.toString(), style = Type.mono.copy(fontSize = 9.sp, color = Tone.ink),
-                    modifier = Modifier.align(Alignment.TopEnd).offset((-2).dp, 4.dp)
-                        .clip(CircleShape).background(Tone.fail).padding(horizontal = 4.dp))
+                Text(s.deadCount.toString(), style = Type.mono.copy(color = Tone.ink),
+                    modifier = Modifier.align(Alignment.TopEnd).offset((-Space.x1), Space.x1)
+                        .clip(CircleShape).background(Tone.fail).padding(horizontal = Space.x1))
             }
         }
         IconButton(Glyph.settings, "Settings", onSettings)
     }
 }
 
-private val ROUTE = mapOf(
-    Mode.OFF to "READY TO RELAY",
-    Mode.BUSY to "NEGOTIATING ROUTE",
-    Mode.ON to "PRIVATE ROUTE ACTIVE",
-    Mode.FAIL to "ROUTE UNAVAILABLE",
+// -- the readout ------------------------------------------------------------------------
+
+private val STAGES = mapOf(
+    "finding" to "Finding a way in",
+    "racing" to "Looking for a server",
+    "asked" to "Looking for a server",
+    "checking" to "Checking the server answers",
+    "opening" to "Opening the connection",
 )
 
-/** The label's row over the orb, and the smallest orb under it. */
-private val ORB_LABEL = 34.dp
-private val ORB_LEAST = ORB_LABEL + 180.dp + 22.dp
+private fun wordOf(mode: Mode) = when (mode) {
+    Mode.OFF -> "Disconnected"
+    Mode.BUSY -> "Connecting"
+    Mode.ON -> "Connected"
+    Mode.FAIL -> "Not connected"
+}
+
+/**
+ * Top-left: the status word in the state's colour, the place under it, the
+ * address in mono, the timer, and under them the throughput line. Left-aligned,
+ * every line a fixed height so nothing under it moves when the words change.
+ */
+@Composable
+private fun Readout(s: HomeState, onPick: () -> Unit, onCopy: (String) -> Unit) {
+    val mode = s.conn.mode
+    val reduced = rememberReducedMotion()
+    val ms = if (reduced) 0 else Shape.LARGE_MS
+    val word = wordOf(mode)
+    val stateColor by animateColorAsState(if (mode == Mode.OFF) Tone.text2 else Tone.stateOf(mode),
+        tween(ms, easing = Shape.ease), label = "word")
+
+    Column(Modifier.fillMaxWidth().padding(top = Space.x6)) {
+        AnimatedContent(word, transitionSpec = {
+            fadeIn(tween(if (reduced) 0 else Shape.ENTER_MS, easing = Shape.ease)) togetherWith
+                fadeOut(tween(if (reduced) 0 else Shape.FADE_MS))
+        }, label = "word") { w ->
+            // One word: smaller rather than broken over two lines.
+            androidx.compose.foundation.text.BasicText(w, style = Type.status.copy(color = stateColor),
+                maxLines = 1, softWrap = false, autoSize = FitText(Type.status.fontSize, floor = 24.dp))
+        }
+        Spacer(Modifier.height(Space.x2))
+        LocationLine(s, onPick)
+        Spacer(Modifier.height(Space.x1))
+        AddressLine(s, onCopy)
+        Spacer(Modifier.height(Space.x1))
+        Timer(s)
+        // The last minute of traffic, under the status block (the slot is
+        // always reserved, so the Connect button never moves when it appears).
+        Box(Modifier.padding(top = Space.x2).height(if (shortScreen()) SPARK_SLOT_SHORT else SPARK_SLOT)
+            .fillMaxWidth(0.72f), contentAlignment = Alignment.CenterStart) {
+            if (s.feel.meter) Sparkline(s.traffic, shown = mode == Mode.ON, reduced = reduced)
+        }
+    }
+}
+
+/** The place, as one line: flag, name. It is also the way into the list of places. */
+@Composable
+private fun LocationLine(s: HomeState, onPick: () -> Unit) {
+    val mode = s.conn.mode
+    val pickable = s.way != Way.SERVER && mode != Mode.BUSY
+    val any = s.picked == "auto" && s.way != Way.SERVER
+    val pickCode = countryOfPick(s.picked).lowercase()
+
+    val connectedCode = connectedCode(s)
+    val place: String
+    val code: String
+    when {
+        s.way == Way.SERVER && mode != Mode.ON -> { place = "Your server"; code = "" }
+        mode == Mode.ON && s.seen == null && s.way != Way.PROVIDER -> { place = "Your server"; code = "" }
+        mode == Mode.ON && connectedCode.isNotEmpty() -> {
+            // The exact place the pick named, when that is where traffic comes out.
+            place = if (!any && pickCode == connectedCode) s.pickLabel else countryName(connectedCode)
+            code = connectedCode
+        }
+        any -> { place = "Any country"; code = "" }
+        else -> { place = s.pickLabel.ifEmpty { "Choose a location" }; code = pickCode }
+    }
+    val dim = any && mode != Mode.ON
+
+    val shape = RoundedCornerShape(Shape.control)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .press(pickable, shape, onClick = onPick)
+            .clip(shape),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (code.isNotEmpty()) {
+            Flag(code, 20.dp)
+        } else {
+            Icon(Glyph.globe, null, Modifier.size(20.dp), tint = Tone.text2)
+        }
+        Spacer(Modifier.width(Space.x3))
+        Text(place, style = Type.title.copy(color = if (dim) Tone.text2 else Tone.text),
+            maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        if (pickable) {
+            Spacer(Modifier.width(Space.x2))
+            Icon(Glyph.chevRight, "Change location", Modifier.size(16.dp), tint = Tone.text3)
+        }
+    }
+}
+
+/** What the world sees (or, before a connection, what it sees now), in mono. */
+@Composable
+private fun AddressLine(s: HomeState, onCopy: (String) -> Unit) {
+    val mode = s.conn.mode
+    val line: String
+    val copy: String?
+    when (mode) {
+        Mode.ON -> {
+            val ip = when {
+                s.seen != null -> s.seen.ip
+                s.seenFailed -> "unconfirmed"
+                else -> "checking…"
+            }
+            val via = s.conn.exitAddress.takeIf { it.isNotEmpty() }
+                ?.let { if (s.way == Way.PROVIDER) "$it:443" else it }
+            line = if (via != null) "$ip  ·  via $via" else ip
+            copy = s.seen?.ip
+        }
+        Mode.BUSY -> {
+            val stage = STAGES.entries.firstOrNull { s.conn.note.startsWith(it.key) }?.value
+                ?: "Looking for a server"
+            line = if (s.conn.total > 0) "$stage  ·  ${s.conn.asked} of ${s.conn.total}" else stage
+            copy = null
+        }
+        else -> {
+            val real = when {
+                s.realIp != null -> s.realIp.ip
+                s.realIpAsked -> "unknown"
+                else -> "checking…"
+            }
+            line = "Your address  $real"
+            copy = s.realIp?.ip
+        }
+    }
+    Text(line, style = Type.mono, maxLines = 2, overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .heightIn(min = 16.dp)
+            .then(if (copy != null) Modifier.press(shape = RoundedCornerShape(4.dp)) { onCopy(copy) } else Modifier))
+}
+
+/** How long the tunnel has been up: h:mm:ss, ticking once a second. */
+@Composable
+private fun Timer(s: HomeState) {
+    val on = s.conn.mode == Mode.ON
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(on, s.conn.since) {
+        while (on) {
+            now = System.currentTimeMillis()
+            delay(1000L - now % 1000L)
+        }
+    }
+    val secs = if (on && s.conn.since > 0) (now / 1000 - s.conn.since).coerceAtLeast(0) else 0
+    Text(
+        if (on) "%d:%02d:%02d".format(secs / 3600, secs / 60 % 60, secs % 60) else " ",
+        style = Type.monoBody.copy(color = Tone.text2), maxLines = 1,
+        modifier = Modifier.heightIn(min = 20.dp),
+    )
+}
+
+// -- layout ---------------------------------------------------------------------------------
+
+/** The strip under the status block for the throughput line; reserved so nothing jumps when it appears. */
+private val SPARK_SLOT = 52.dp
+private val SPARK_SLOT_SHORT = 44.dp
 
 /**
  * A column [height] tall, its [flex]th child given whatever the others leave
@@ -199,8 +388,7 @@ private val ORB_LEAST = ORB_LABEL + 180.dp + 22.dp
  * taller than [height] and whatever holds it scrolls.
  */
 @Composable
-private fun FillColumn(height: androidx.compose.ui.unit.Dp, flex: Int, least: androidx.compose.ui.unit.Dp,
-                       content: @Composable () -> Unit) {
+private fun FillColumn(height: Dp, flex: Int, least: Dp, content: @Composable () -> Unit) {
     androidx.compose.ui.layout.Layout(content) { measurables, constraints ->
         val loose = constraints.copy(minHeight = 0, maxHeight = androidx.compose.ui.unit.Constraints.Infinity)
         val placed = arrayOfNulls<androidx.compose.ui.layout.Placeable>(measurables.size)
@@ -219,201 +407,7 @@ private fun FillColumn(height: androidx.compose.ui.unit.Dp, flex: Int, least: an
     }
 }
 
-@Composable
-private fun Stage(s: HomeState, orbPaused: Boolean, onAct: () -> Unit, onReconnect: () -> Unit) {
-    val mode = s.conn.mode
-    val accent by animateColorAsState(toneOf(mode).accent, tween(460), label = "routeDot")
-    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        // The label has a row of its own above the sphere rather than
-        // sitting over the top of its stage, so however small the orb
-        // gets - the meter takes its share of this height - the two never
-        // touch. The orb is sized to what is left under it.
-        //
-        // Sized by scale, not by layout. When the meter slides in on
-        // connect the space left changes every frame, and an orb laid out
-        // at each new size snapped smaller - and made its GL surface
-        // reallocate its buffers mid-animation, which was the stutter on
-        // every connect and disconnect. The surface keeps the largest
-        // size it has needed and the shrink is a smooth scale of it.
-        val label = ORB_LABEL
-        val target = minOf(maxWidth * 0.86f, maxHeight - label).coerceIn(180.dp, 380.dp)
-        var full by remember { mutableStateOf(target) }
-        if (target > full) full = target
-        // Slow and soft on purpose: the shrink is part of the moment the
-        // tunnel comes up, not a layout catching up with itself.
-        val shown by androidx.compose.animation.core.animateDpAsState(target,
-            tween(900, easing = androidx.compose.animation.core.FastOutSlowInEasing), label = "orbSize")
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Row(Modifier.height(label), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(5.dp).clip(CircleShape).background(accent))
-                Spacer(Modifier.width(7.dp))
-                val tappable = s.feel.orbTap && (mode == Mode.BUSY || mode == Mode.ON || s.canStart)
-                // The row is a fixed height: a second line would be cut in half.
-                androidx.compose.foundation.text.BasicText(
-                    if (tappable && (mode == Mode.OFF || mode == Mode.FAIL)) "PRESS TO CONNECT"
-                    else ROUTE.getValue(mode),
-                    style = Type.eyebrow.copy(color = Tone.textMuted, fontWeight = FontWeight.W700),
-                    maxLines = 1, softWrap = false, modifier = Modifier.weight(1f, fill = false),
-                    autoSize = FitText(Type.eyebrow.fontSize, floor = 8.dp))
-            }
-            val tappable = s.feel.orbTap && (mode == Mode.BUSY || mode == Mode.ON || s.canStart)
-            Box(Modifier.size(shown), contentAlignment = Alignment.Center) {
-                OrbStage(mode, paceOf(s.traffic), orbPaused,
-                    Modifier
-                        .requiredSize(full)
-                        .graphicsLayer {
-                            val k = shown / full
-                            scaleX = k
-                            scaleY = k
-                        },
-                    size = full,
-                    still = !s.feel.orbMotion, onTap = if (tappable) onAct else null,
-                    onHold = if (tappable && mode == Mode.ON) onReconnect else null)
-            }
-        }
-    }
-}
-
-/** Up and down, under the orb while traffic moves. */
-@Composable
-private fun Meter(s: HomeState) {
-    AnimatedVisibility(
-        visible = s.conn.mode == Mode.ON && s.traffic.live && s.feel.meter,
-        // Paced with the orb, which gives up the room it takes.
-        enter = fadeIn(tween(700, delayMillis = 150)) +
-            expandVertically(tween(900, easing = androidx.compose.animation.core.FastOutSlowInEasing)),
-        exit = fadeOut(tween(250)) +
-            shrinkVertically(tween(900, easing = androidx.compose.animation.core.FastOutSlowInEasing)),
-    ) {
-        Flux(s.traffic, Modifier.padding(horizontal = 6.dp, vertical = 8.dp))
-    }
-}
-
-@Composable
-private fun Swap(s: HomeState, onCopy: (String) -> Unit) {
-    val mode = s.conn.mode
-    val on = mode == Mode.ON
-    val tone = toneOf(mode)
-
-    val realIp = when {
-        s.realIp != null -> s.realIp.ip
-        s.realIpAsked -> "unknown"
-        else -> "…"
-    }
-    val realPlace = when {
-        s.realIp != null -> countryName(s.realIp.country).ifEmpty { "could not check" }
-        s.realIpAsked -> "could not check"
-        else -> "checking…"
-    }
-
-    val claimed = if (s.way == Way.PROVIDER) s.conn.exitName.take(2).lowercase() else ""
-    val exitIp = when {
-        !on -> "—"
-        s.seen != null -> s.seen.ip
-        s.seenFailed -> "unconfirmed"
-        else -> "checking…"
-    }
-    val exitPlace = when {
-        !on -> "not connected"
-        s.way != Way.PROVIDER && s.seen == null -> "your server"
-        s.seen != null -> countryName(s.seen.country)
-        claimed.isNotEmpty() -> "${countryName(claimed)} (checking)"
-        else -> "checking…"
-    }
-
-    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), verticalAlignment = Alignment.CenterVertically) {
-        Side(
-            cap = "YOUR ADDRESS", ip = realIp, place = realPlace, alignEnd = false,
-            struck = on, dot = Tone.textOff, ipColor = if (on) Tone.textOff else Tone.text,
-            modifier = Modifier.weight(1f).fillMaxHeight(), onCopy = { s.realIp?.let { onCopy(it.ip) } },
-        )
-        Icon(Glyph.wide, null, Modifier.padding(horizontal = 6.dp).width(24.dp).height(14.dp),
-            tint = if (on) tone.accent else Tone.textOff)
-        Side(
-            cap = "SEEN AS", ip = exitIp, place = exitPlace, alignEnd = true,
-            struck = false, dot = if (on) tone.accent else Tone.textOff,
-            ipColor = if (on && s.seen != null) tone.accent else Tone.textMuted,
-            modifier = Modifier.weight(1f).fillMaxHeight(), onCopy = { s.seen?.let { onCopy(it.ip) } },
-            lit = on,
-        )
-    }
-}
-
-@Composable
-private fun Side(
-    cap: String, ip: String, place: String, alignEnd: Boolean, struck: Boolean,
-    dot: Color, ipColor: Color, modifier: Modifier, onCopy: () -> Unit, lit: Boolean = false,
-) {
-    val border = if (lit) Tone.ok.copy(alpha = 0.35f) else Tone.border
-    Column(
-        modifier
-            .press(shape = RoundedCornerShape(14.dp), sink = true, onClick = onCopy)
-            .clip(RoundedCornerShape(14.dp))
-            .background(Tone.surface.copy(alpha = 0.6f))
-            .border(1.dp, border, RoundedCornerShape(14.dp))
-            .padding(horizontal = 12.dp, vertical = 11.dp),
-        horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start,
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (!alignEnd) {
-                Box(Modifier.size(4.dp).clip(CircleShape).background(dot))
-                Spacer(Modifier.width(6.dp))
-            }
-            // Two words: they go onto two lines before they get small.
-            androidx.compose.foundation.text.BasicText(cap, style = Type.eyebrow.copy(letterSpacing = 0.14.em,
-                textAlign = if (alignEnd) TextAlign.End else TextAlign.Start), maxLines = 2,
-                modifier = Modifier.weight(1f, fill = false),
-                autoSize = FitText(Type.eyebrow.fontSize, floor = 8.dp))
-            if (alignEnd) {
-                Spacer(Modifier.width(6.dp))
-                Box(Modifier.size(4.dp).clip(CircleShape).background(dot))
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        // An address is no use with its end cut off, and a phone with a large
-        // font setting did exactly that. It steps down in size until it fits.
-        androidx.compose.foundation.text.BasicText(ip,
-            style = Type.ip.copy(color = ipColor,
-                textDecoration = if (struck) TextDecoration.LineThrough else null),
-            maxLines = 1, softWrap = false,
-            autoSize = FitText(Type.ip.fontSize, floor = 9.dp))
-        Spacer(Modifier.height(4.dp))
-        Text(place, style = Type.small.copy(color = Tone.textMuted), maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = if (alignEnd) TextAlign.End else TextAlign.Start)
-    }
-}
-
-/** What the status line says in each look, with the two smaller lines under it. */
-private data class Status(val word: String, val where: String, val host: String)
-
-private val STAGES = mapOf(
-    "finding" to "Finding a way in",
-    "racing" to "Looking for a server",
-    "asked" to "Looking for a server",
-    "checking" to "Checking the server answers",
-    "opening" to "Opening the connection",
-)
-
-private fun statusOf(s: HomeState): Status {
-    val c = s.conn
-    return when (c.mode) {
-        Mode.OFF -> Status("DISCONNECTED", "", "")
-        Mode.BUSY -> Status(
-            "CONNECTING",
-            STAGES.entries.firstOrNull { c.note.startsWith(it.key) }?.value ?: "Looking for a server",
-            if (c.total > 0) "${c.asked} of ${c.total} asked" else "")
-        Mode.ON -> {
-            val place = when {
-                s.seen != null -> countryName(s.seen.country)
-                s.way != Way.PROVIDER -> "Your server"
-                else -> countryName(c.exitName.take(2))
-            }
-            Status("CONNECTED", place, c.exitAddress.let { if (it.isNotEmpty() && s.way == Way.PROVIDER) "$it:443" else it })
-        }
-        Mode.FAIL -> Status("NOT CONNECTED", "Could not connect", "")
-    }
-}
+// -- the thumb zone -------------------------------------------------------------------------
 
 private val WAY_SAID = mapOf(
     Way.PROVIDER to "The provider's own proxy. Nothing to set up, and every country below is " +
@@ -424,65 +418,29 @@ private val WAY_SAID = mapOf(
         "country's address, and uploads keep your server's speed.",
 )
 
+/** What each way is, in the few words its line in the menu has room for. */
+private val WAY_NOTE = mapOf(
+    Way.PROVIDER to "The provider's proxy, any country",
+    Way.SERVER to "Your server, through a CDN",
+    Way.SERVER_EXIT to "Your server, out by a provider exit",
+)
+
+private val WAY_ICON = mapOf(
+    Way.PROVIDER to Glyph.globe,
+    Way.SERVER to Glyph.tower,
+    Way.SERVER_EXIT to Glyph.route,
+)
+
 private const val WAY_NEEDS_TUNNEL = "Set the domain and passwords under Settings → Your own tunnel first."
 
 @Composable
-private fun StatusCard(s: HomeState, onWay: (Way) -> Unit, onPick: () -> Unit, onAct: () -> Unit) {
+private fun Footer(s: HomeState, onWay: (Way) -> Unit, onAct: () -> Unit) {
     val mode = s.conn.mode
-    val tone = toneOf(mode)
-    val status = statusOf(s)
-    var details by rememberSaveable { mutableStateOf(false) }
-    val statusColor by animateColorAsState(when (mode) {
-        Mode.ON -> Tone.ok
-        Mode.BUSY -> Tone.work
-        Mode.FAIL, Mode.OFF -> Tone.fail
-    }, tween(300), label = "status")
-
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(Shape.card))
-            .background(Tone.surface.copy(alpha = 0.78f))
-            .border(1.dp, Tone.border, RoundedCornerShape(Shape.card))
-            .padding(16.dp),
-    ) {
-        Row(verticalAlignment = Alignment.Top) {
-            Column(Modifier.weight(1f)) {
-                Text("CONNECTION STATUS", style = Type.eyebrow)
-                Spacer(Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    StatusDot(mode, statusColor)
-                    Spacer(Modifier.width(10.dp))
-                    AnimatedContent(status.word, transitionSpec = {
-                        fadeIn(tween(Shape.ENTER_MS)) togetherWith fadeOut(tween(Shape.FADE_MS))
-                    }, label = "word", modifier = Modifier.weight(1f, fill = false)) { w ->
-                        // One word: smaller rather than broken over two lines.
-                        androidx.compose.foundation.text.BasicText(w, style = Type.status.copy(color = statusColor),
-                            maxLines = 1, softWrap = false, autoSize = FitText(Type.status.fontSize, floor = 14.dp))
-                    }
-                }
-            }
-            if (mode == Mode.ON) {
-                IconButton(if (details) Glyph.chevDown else Glyph.chevRight, "Connection details",
-                    { details = !details }, size = 34.dp)
-            }
-        }
-        if (status.where.isNotEmpty() || status.host.isNotEmpty()) {
-            Row(Modifier.fillMaxWidth().padding(start = 16.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(status.where, style = Type.small.copy(color = Tone.textMuted), modifier = Modifier.weight(1f),
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                // At most half the line, so a long address and a large font
-                // cannot push the place off it.
-                Text(status.host, style = Type.mono.copy(fontSize = 11.sp), maxLines = 1,
-                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-            }
-        }
-        AnimatedVisibility(mode == Mode.ON && details) {
-            Column(Modifier.padding(top = 10.dp)) {
-                DetailRow("In", if (s.way == Way.PROVIDER) "${s.conn.exitAddress}:443" else s.conn.exitAddress)
-                DetailRow("Out", s.seen?.ip ?: "—")
-                DetailRow("Via", s.conn.exitName.ifEmpty { "—" })
-            }
+    Column(Modifier.fillMaxWidth().padding(top = Space.x2, bottom = Space.x4)) {
+        if (s.hint.isNotEmpty()) {
+            Text(s.hint, style = Type.caption.copy(color = if (s.hintBad) Tone.fail else Tone.text2),
+                maxLines = 4, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth().padding(bottom = Space.x3))
         }
 
         // Only the ways that can work: a provider needs an account and its
@@ -501,150 +459,63 @@ private fun StatusCard(s: HomeState, onWay: (Way) -> Unit, onPick: () -> Unit, o
             if (ways.isNotEmpty() && s.way !in ways) onWay(ways.first())
         }
         if (ways.size >= 2) {
-            Spacer(Modifier.height(14.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Segment(ways, s.way, { it.label }, onWay, Modifier.weight(1f), enabled = mode != Mode.BUSY)
+            Row(Modifier.padding(bottom = Space.x3), verticalAlignment = Alignment.CenterVertically) {
+                Dropdown(ways, s.way, { it.label }, onWay, caption = "Way out",
+                    modifier = Modifier.weight(1f), icon = { WAY_ICON.getValue(it) },
+                    note = { WAY_NOTE.getValue(it) }, enabled = mode != Mode.BUSY)
                 InfoTip(WAY_SAID.getValue(s.way))
             }
         }
         val ready = s.way == Way.PROVIDER || s.tunnelReady
         AnimatedVisibility(!ready) {
-            Text(WAY_NEEDS_TUNNEL, style = Type.small.copy(color = Tone.fail),
-                modifier = Modifier.padding(top = 8.dp, start = 2.dp, end = 2.dp))
+            Text(WAY_NEEDS_TUNNEL, style = Type.caption.copy(color = Tone.fail),
+                modifier = Modifier.padding(bottom = Space.x3))
         }
 
-        if (s.way != Way.SERVER) {
-            Spacer(Modifier.height(12.dp))
-            PickButton(s.picked, s.pickLabel, enabled = mode != Mode.BUSY, onPick)
-        }
-        Spacer(Modifier.height(12.dp))
-        GoButton(mode, enabled = mode == Mode.BUSY || mode == Mode.ON || s.canStart, tone.accent, onAct)
-    }
-}
-
-@Composable
-private fun StatusDot(mode: Mode, color: Color) {
-    val loop = rememberInfiniteTransition(label = "dot")
-    val pulse = loop.animateFloat(1f, 0.35f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "pulse")
-    Box(
-        Modifier.size(8.dp).drawBehind {
-            val a = if (mode == Mode.BUSY) pulse.value else 1f
-            if (mode == Mode.ON) {
-                drawCircle(Brush.radialGradient(listOf(color.copy(alpha = 0.5f), Color.Transparent)),
-                    radius = size.minDimension * 1.4f)
-            }
-            drawCircle(color.copy(alpha = a))
-        },
-    )
-}
-
-@Composable
-private fun DetailRow(label: String, value: String) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
-        Text(label, style = Type.small, modifier = Modifier.widthIn(min = 44.dp).padding(end = 8.dp))
-        Text(value, style = Type.mono.copy(color = Tone.textMuted), maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-}
-
-@Composable
-private fun PickButton(picked: String, label: String, enabled: Boolean, onPick: () -> Unit) {
-    val country = countryOfPick(picked)
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .press(enabled, RoundedCornerShape(14.dp), sink = true, onClick = onPick)
-            .clip(RoundedCornerShape(14.dp))
-            .background(Tone.control.copy(alpha = 0.7f))
-            .border(1.dp, Tone.border, RoundedCornerShape(14.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp)
-            .alpha(if (enabled) 1f else 0.5f),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (country.isNotEmpty()) {
-            Flag(country, 34.dp)
-        } else {
-            Box(
-                Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(Tone.controlActive)
-                    .border(1.dp, Tone.border, RoundedCornerShape(10.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Glyph.globe, null, Modifier.size(16.dp), tint = Tone.textMuted)
-            }
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text("EXIT LOCATION", style = Type.eyebrow)
-            Spacer(Modifier.height(2.dp))
-            Text(label, style = Type.strong.copy(fontSize = 14.sp), maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
-        Icon(Glyph.chevRight, null, Modifier.size(16.dp), tint = Tone.textOff)
+        GoButton(mode, enabled = mode == Mode.BUSY || mode == Mode.ON || s.canStart, onAct)
     }
 }
 
 /**
- * The big button. Connect is the jade gradient with dark text; Cancel
- * breathes amber while a route is being negotiated; Disconnect is the dark
- * jade with its two lights apart - the state it describes is the state it
- * looks like.
+ * The one primary action, full width, in the thumb zone. Filled with the
+ * state colour while connecting or connected; outlined when off.
  */
 @Composable
-private fun GoButton(mode: Mode, enabled: Boolean, accent: Color, onClick: () -> Unit) {
-    val loop = rememberInfiniteTransition(label = "go")
-    val breathe = loop.animateFloat(0.35f, 0.7f, infiniteRepeatable(tween(1100), RepeatMode.Reverse), label = "breathe")
-    val shape = RoundedCornerShape(14.dp)
+private fun GoButton(mode: Mode, enabled: Boolean, onClick: () -> Unit) {
+    val reduced = rememberReducedMotion()
+    val ms = if (reduced) 0 else Shape.LARGE_MS
+    val shape = RoundedCornerShape(Shape.control)
+    val filled = mode == Mode.BUSY || mode == Mode.ON
+    val state = Tone.stateOf(mode)
+    val fill by animateColorAsState(if (filled) state else state.copy(alpha = 0f),
+        tween(ms, easing = Shape.ease), label = "goFill")
+    val edge by animateColorAsState(if (filled) Color.Transparent else Tone.strokeStrong,
+        tween(ms, easing = Shape.ease), label = "goEdge")
+    val ink by animateColorAsState(if (filled) Tone.ink else Tone.text,
+        tween(ms, easing = Shape.ease), label = "goInk")
     val word = when (mode) {
         Mode.BUSY -> "Cancel"
         Mode.ON -> "Disconnect"
         else -> "Connect"
     }
-    val dim = if (enabled) 1f else 0.45f
-    val jade = listOf(Color(0xFF71F1BD), Tone.jade2, Color(0xFF3DD4EE)).map { it.copy(alpha = dim) }
     Box(
         Modifier
             .fillMaxWidth()
-            .heightIn(min = 52.dp)
-            .press(enabled, RoundedCornerShape(14.dp), sink = true,
+            .heightIn(min = 56.dp)
+            .press(enabled, shape, sink = true,
                 feel = androidx.compose.ui.hapticfeedback.HapticFeedbackType.Confirm, onClick = onClick)
-            .drawBehind {
-                val r = androidx.compose.ui.geometry.CornerRadius(14.dp.toPx())
-                when (mode) {
-                    Mode.ON -> {
-                        drawRoundRect(Tone.surface, cornerRadius = r)
-                        drawRoundRect(Tone.ok.copy(alpha = 0.14f), cornerRadius = r)
-                        drawRoundRect(Tone.ok.copy(alpha = 0.45f), cornerRadius = r,
-                            style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
-                        val far = Offset(size.width - 44.dp.toPx(), size.height / 2)
-                        val near = Offset(size.width - 76.dp.toPx(), size.height / 2)
-                        drawCircle(Brush.radialGradient(listOf(accent.copy(alpha = 0.55f), Color.Transparent),
-                            center = far, radius = 26.dp.toPx()), radius = 26.dp.toPx(), center = far)
-                        drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.35f), Color.Transparent),
-                            center = near, radius = 14.dp.toPx()), radius = 14.dp.toPx(), center = near)
-                    }
-                    Mode.BUSY -> {
-                        drawRoundRect(Tone.surface, cornerRadius = r)
-                        drawRoundRect(Tone.work.copy(alpha = 0.14f), cornerRadius = r)
-                        drawRoundRect(Tone.work.copy(alpha = 0.5f), cornerRadius = r,
-                            style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
-                        val at = Offset(size.width - 56.dp.toPx(), size.height / 2)
-                        drawCircle(Brush.radialGradient(listOf(Tone.work.copy(alpha = breathe.value), Color.Transparent),
-                            center = at, radius = 30.dp.toPx()), radius = 30.dp.toPx(), center = at)
-                    }
-                    else -> drawRoundRect(Brush.horizontalGradient(jade, startX = 0f, endX = size.width),
-                        cornerRadius = r)
-                }
-            }
             .clip(shape)
-            .padding(horizontal = 18.dp),
-        contentAlignment = if (mode == Mode.OFF || mode == Mode.FAIL) Alignment.Center else Alignment.CenterStart,
+            .background(fill)
+            .border(1.dp, edge, shape)
+            .alpha(if (enabled) 1f else 0.45f)
+            .padding(horizontal = Space.x4),
+        contentAlignment = Alignment.Center,
     ) {
         AnimatedContent(word, transitionSpec = {
-            fadeIn(tween(Shape.ENTER_MS)) togetherWith fadeOut(tween(Shape.FADE_MS))
+            fadeIn(tween(if (reduced) 0 else Shape.ENTER_MS, easing = Shape.ease)) togetherWith
+                fadeOut(tween(if (reduced) 0 else Shape.FADE_MS))
         }, label = "goWord") { w ->
-            Text(w, style = Type.button.copy(fontSize = 16.sp, color = when (mode) {
-                Mode.ON -> Tone.ok
-                Mode.BUSY -> Tone.work
-                else -> Tone.ink
-            }.copy(alpha = dim)))
+            Text(w, style = Type.button.copy(color = ink), maxLines = 1)
         }
     }
 }

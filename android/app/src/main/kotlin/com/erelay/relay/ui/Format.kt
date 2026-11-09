@@ -71,7 +71,7 @@ fun nameOfPick(
     code: String, countryNames: Map<String, String>,
     cities: Map<String, List<com.erelay.relay.data.City>> = emptyMap(),
 ): String {
-    if (code == "auto") return "Fastest available"
+    if (code == "auto") return "Any country"
     if (code.startsWith("file:")) {
         // One exit reads as where it is, not as the config's filename: the
         // city when it can be told, the country, and the server's number.

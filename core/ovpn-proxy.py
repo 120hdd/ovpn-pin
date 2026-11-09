@@ -48,6 +48,7 @@ does UDP, ICMP, or anything that ignores the proxy setting it was given.
 
 import argparse
 import base64
+import bisect
 import collections
 import concurrent.futures as cf
 import difflib
@@ -1134,6 +1135,187 @@ class Carried:
         self.row = None
 
 
+    def straight(self):
+        """This connection went around the exit, by split tunnelling. Said on
+        the row, so the list can show which destinations never touched it."""
+        if self.row is None:
+            return
+        with METER_LOCK:
+            self.row['direct'] = True
+
+
+#------------------------------------------------------------ split tunnelling
+
+class SplitRules:
+    """Which connections go straight out instead of through the exit.
+
+    Written by the window (app/split.py) as one JSON file and read again
+    here whenever it changes, at most once a second - so a change in the
+    window applies to the next connection, with no restart and nothing
+    dropped. The window writes {"mode": "off"} when the network adapter is
+    the one deciding, so nothing is decided twice.
+
+        bypass  what is listed goes straight out, the rest through the exit
+        only    what is listed goes through the exit, the rest straight out
+
+    Listed means: the program that opened the connection, a name or any
+    domain above it, or an address in a listed range. A name is matched as
+    a name and never looked up to compare its address - that would hand
+    every site anybody visits to this line's resolver.
+    """
+
+    def __init__(self, path=None):
+        self.path = path
+        self.stamp = None
+        self.checked = 0.0
+        self.lock = threading.Lock()
+        self._set({'mode': 'off'})
+
+    def _set(self, data):
+        mode = data.get('mode')
+        spans = []
+        for text in data.get('nets') or ():
+            try:
+                net = ipaddress.IPv4Network(text, strict=False)
+            except ValueError:
+                continue
+            spans.append((int(net.network_address), int(net.broadcast_address)))
+        spans.sort()
+        self.mode = mode if mode in ('bypass', 'only') else 'off'
+        self.names = frozenset(n.lower() for n in data.get('names') or ())
+        self.apps = frozenset(a.lower() for a in data.get('apps') or ())
+        self.lo = [a for a, _ in spans]
+        self.hi = [b for _, b in spans]
+
+    def _fresh(self):
+        if not self.path:
+            return
+        now = time.monotonic()
+        if now - self.checked < 1.0:
+            return
+        with self.lock:
+            if now - self.checked < 1.0:
+                return
+            self.checked = now
+            try:
+                st = os.stat(self.path)
+                stamp = (st.st_mtime_ns, st.st_size)
+            except OSError:
+                stamp = None
+            if stamp == self.stamp:
+                return
+            self.stamp = stamp
+            data = {'mode': 'off'}
+            if stamp is not None:
+                try:
+                    with open(self.path, encoding='utf-8') as f:
+                        data = json.load(f)
+                except (OSError, ValueError) as e:
+                    # Half-written, or not ours. Keep carrying everything
+                    # through the exit rather than guess, and say so once.
+                    log('WARN', f'split rules not read: {e}')
+                    data = {'mode': 'off'}
+            self._set(data if isinstance(data, dict) else {'mode': 'off'})
+
+    def listed(self, host, app=None):
+        if app and app.lower() in self.apps:
+            return True
+        host = (host or '').strip('[]').rstrip('.').lower()
+        try:
+            v = int(ipaddress.IPv4Address(host))
+        except ValueError:
+            v = None
+        if v is not None:
+            i = bisect.bisect_right(self.lo, v)
+            return i > 0 and self.hi[i - 1] >= v
+        while host:
+            if host in self.names:
+                return True
+            host = host.partition('.')[2]
+        return False
+
+    def straight(self, host, app=None):
+        self._fresh()
+        if self.mode == 'off':
+            return False
+        listed = self.listed(host, app)
+        return listed if self.mode == 'bypass' else not listed
+
+
+SPLIT = SplitRules()
+
+
+# Whether the connection being served came from another device (see "who may
+# use it" above). Thread-local because each client has its own thread, and
+# straight_to is called a long way below the place that knows.
+_CALLER = threading.local()
+
+
+def _reaches_this_machine(host):
+    """Whether a name or address is this machine itself: loopback or the
+    unspecified address, by literal or by what the name resolves to."""
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0].split('%')[0])
+        except ValueError:
+            continue
+        if getattr(ip, 'ipv4_mapped', None):
+            ip = ip.ipv4_mapped
+        if ip.is_loopback or ip.is_unspecified:
+            return True
+    return False
+
+
+def straight_to(host, port):
+    """A connection on this machine's own line, for what goes around."""
+    # A phone sharing this proxy is not at this keyboard. Going around the
+    # exit for it must not mean reaching the services this machine keeps on
+    # 127.0.0.1 - a database, a dev server, Relay's own window - that were
+    # only ever meant for whoever is sitting at it.
+    if getattr(_CALLER, 'lan', False) and _reaches_this_machine(host):
+        raise OSError('that is this machine, and you are not on it')
+    sock = socket.create_connection((host, int(port)), timeout=15)
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    return sock
+
+
+def split_target(target, default_port):
+    """`host:port`, `[v6]:port` or a bare host, as (host, port)."""
+    if target.startswith('['):
+        host, _, rest = target[1:].partition(']')
+        port = rest.lstrip(':')
+    elif target.count(':') == 1:
+        host, port = target.split(':')
+    else:
+        host, port = target, ''
+    return host, int(port) if port.isdigit() else default_port
+
+
+def origin_form(head):
+    """A plain-HTTP request as it is sent to the site itself rather than to
+    a proxy: the path instead of the whole URL, no Proxy- headers, and one
+    request per connection - a kept-alive client may name another site in
+    its next request, and this connection only reaches this one."""
+    lines = head.split(b'\r\n')
+    at = next((i for i, l in enumerate(lines) if l.strip()), 0)
+    parts = lines[at].split(b' ')
+    if len(parts) >= 2 and b'://' in parts[1]:
+        rest = parts[1].split(b'://', 1)[1]
+        parts[1] = b'/' + rest.split(b'/', 1)[1] if b'/' in rest else b'/'
+        lines[at] = b' '.join(parts)
+    kept = [l for i, l in enumerate(lines)
+            if i <= at or not (l.lower().startswith(b'proxy-')
+                               or l.lower().startswith(b'connection:'))]
+    while kept and not kept[-1]:
+        kept.pop()
+    kept.append(b'Connection: close')
+    return b'\r\n'.join(kept) + HEAD_END
+
+
 #------------------------------------------------------------ who asked for it
 
 # Which program opened the connection, on Windows, by looking its source port
@@ -1714,6 +1896,20 @@ def serve_socks(client, exit_, quiet, note):
 
     target = f'{host}:{port}'
     note.going_to(target)
+
+    if SPLIT.straight(host, note.app):
+        try:
+            upstream = straight_to(host, port)
+        except OSError as e:
+            log('FAIL', f'socks5 {target} (straight): {e}')
+            socks_refuse(client)
+            client.close()
+            return
+        note.straight()
+        client.sendall(b'\x05\x00\x00\x01' + b'\x00' * 6)
+        relay(client, upstream, note)
+        return
+
     try:
         upstream, reply, spare = open_tunnel(exit_, target)
     except (OSError, ssl.SSLError) as e:
@@ -1752,6 +1948,12 @@ def serve_http(client, exit_, quiet, first, note):
     if verb == 'CONNECT':
         target = head.split(b'\r\n', 1)[0].decode('latin-1', 'replace').split(' ')[1]
         note.going_to(target)
+        host, port = split_target(target, 443)
+        if SPLIT.straight(host, note.app):
+            serve_straight(client, note, host, port, quiet, target,
+                           b'HTTP/1.1 200 Connection established\r\n\r\n',
+                           rest)
+            return
         # The exit's answer is read here rather than relayed blind, because
         # anything the client pipelined behind its CONNECT belongs inside the
         # tunnel and not to the proxy. Sent before the 200 arrives, a refusal
@@ -1792,6 +1994,13 @@ def serve_http(client, exit_, quiet, first, note):
             shut(client, upstream)
             return
         relay(client, upstream, note)
+        return
+
+    host, port = split_target(head_host(head), 80)
+    if host and SPLIT.straight(host, note.app):
+        note.going_to(host)
+        serve_straight(client, note, host, port, quiet, f'{verb} {host}',
+                       origin_form(head), rest, to_site=True)
         return
 
     try:
@@ -1846,6 +2055,45 @@ def serve_http(client, exit_, quiet, first, note):
     shut(client, upstream)
 
 
+def serve_straight(client, note, host, port, quiet, what, said, rest,
+                   to_site=False):
+    """Carry one client connection on this machine's own line.
+
+    For CONNECT, `said` is the 200 the client waits for and `rest` is what
+    it pipelined behind its request, which belongs to the site. For a plain
+    request, `said` is the request itself, rewritten for the site.
+    """
+    try:
+        upstream = straight_to(host, port)
+    except OSError as e:
+        log('FAIL', f'{what} (straight): {e}')
+        if not quiet:
+            print(f'  straight {what}  {e}', file=sys.stderr, flush=True)
+        try:
+            client.sendall(b'HTTP/1.1 502 Bad Gateway\r\n'
+                           b'Connection: close\r\n'
+                           b'Content-Length: 0\r\n\r\n')
+        except OSError:
+            pass
+        client.close()
+        return
+    note.straight()
+    try:
+        if to_site:
+            upstream.sendall(said)
+            note.moved('up', len(said))
+        else:
+            client.sendall(said)
+        if rest:
+            upstream.sendall(rest)
+            note.moved('up', len(rest))
+    except OSError as e:
+        log('FAIL', f'{what} (straight): {e}')
+        shut(client, upstream)
+        return
+    relay(client, upstream, note)
+
+
 class Pushback:
     """A socket with one byte put back in front of it.
 
@@ -1868,7 +2116,8 @@ class Pushback:
         return getattr(self._sock, name)
 
 
-def serve_one(client, exit_, quiet, source_port=0):
+def serve_one(client, exit_, quiet, source_port=0, from_lan=False):
+    _CALLER.lan = from_lan
     # Asked once, here, and never again for this connection. The machine's
     # TCP table still has the row while the connection is being set up; by
     # the time it closes the row may be gone, and a program that is named at
@@ -2739,6 +2988,113 @@ def pick_live(folder, auth, jobs, timeout, bind=None, limit=140):
     return ip, host, name
 
 
+# -- who may use it, when it is shared -------------------------------------
+#
+# Listening on 127.0.0.1 is its own access control: only this machine can
+# reach the port, so the proxy never had to ask who was calling. Sharing it on
+# the Wi-Fi (--listen 0.0.0.0) takes that away, and an open proxy on a network
+# is a thing other people find and use - on a hotel's or a university's Wi-Fi,
+# in particular, where "same network" means hundreds of strangers and the
+# bandwidth is somebody's Surfshark account. So the second line of defence,
+# behind the firewall rule the window adds, is here: a client whose address
+# is not loopback, private, link-local or carrier-grade NAT is closed on
+# before a byte is read. Those are the ranges a home or office LAN is made
+# of (and a phone's hotspot, and Tailscale, which lives in 100.64/10);
+# nothing on the public internet is in them.
+
+LAN_ALLOWED = tuple(ipaddress.ip_network(n) for n in (
+    '127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16',
+    '100.64.0.0/10', '169.254.0.0/16'))
+
+
+def client_allowed(addr):
+    """Whether a connection from that address may use a shared proxy.
+
+    Anything that does not parse is refused, and an IPv4 address that arrived
+    wrapped in IPv6 (::ffff:192.168.1.5, which a dual-stack socket reports) is
+    unwrapped first - otherwise the check would turn away every phone on a
+    machine that happened to listen both ways.
+    """
+    try:
+        ip = ipaddress.ip_address(str(addr).split('%')[0])
+    except ValueError:
+        return False
+    if getattr(ip, 'ipv4_mapped', None):
+        ip = ip.ipv4_mapped
+    return any(ip in net for net in LAN_ALLOWED if ip.version == net.version)
+
+
+def is_loopback_host(host):
+    """Whether a --listen value keeps the proxy on this machine."""
+    try:
+        return ipaddress.ip_address(str(host).strip()).is_loopback
+    except ValueError:
+        return str(host).strip().lower() == 'localhost'
+
+
+# Who has been using a shared proxy, for the window to count. The worker is a
+# separate process, so it is a file: source address -> when it last connected.
+CLIENTS = {}
+CLIENTS_LOCK = threading.Lock()
+CLIENTS_WRITE_EVERY = 2.0
+_CLIENTS_WROTE = [0.0]
+_REFUSED_SAID = set()
+
+
+def clients_path(port):
+    return os.path.join(os.path.dirname(STATE_PATH), f'clients-{port}.json')
+
+
+def read_clients(port, within=300):
+    """Distinct non-loopback addresses seen in the last `within` seconds."""
+    try:
+        with open(clients_path(port), encoding='utf-8') as f:
+            seen = json.load(f).get('seen', {})
+    except (OSError, ValueError, AttributeError):
+        return []
+    now = time.time()
+    return sorted(ip for ip, at in seen.items()
+                  if isinstance(at, (int, float)) and now - at <= within)
+
+
+def note_client(port, ip, force=False):
+    """Remember that `ip` connected, and say so on disk - at most every couple
+    of seconds, because a browser opening thirty connections should not be
+    thirty file writes. A first sighting is written at once."""
+    now = time.time()
+    with CLIENTS_LOCK:
+        fresh = ip not in CLIENTS
+        CLIENTS[ip] = now
+        if len(CLIENTS) > 256:
+            for old in sorted(CLIENTS, key=CLIENTS.get)[:64]:
+                del CLIENTS[old]
+        if not (fresh or force
+                or now - _CLIENTS_WROTE[0] >= CLIENTS_WRITE_EVERY):
+            return
+        _CLIENTS_WROTE[0] = now
+        snapshot = dict(CLIENTS)
+    path = clients_path(port)
+    tmp = f'{path}.{os.getpid()}'
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump({'pid': os.getpid(), 'port': int(port),
+                       'seen': snapshot}, f)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def clear_clients(port):
+    try:
+        os.remove(clients_path(port))
+    except OSError:
+        pass
+
+
 def serve(listen_host, listen_port, exit_, quiet):
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     # Not on Windows. There SO_REUSEADDR does not mean "reuse the port I just
@@ -2839,6 +3195,11 @@ def serve(listen_host, listen_port, exit_, quiet):
                       lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
 
     served = 0
+    # Only a proxy that is open to the network needs to ask who is calling.
+    shared = not is_loopback_host(listen_host)
+    if shared:
+        log('SHARE', f'open to the local network on {listen_host}:{listen_port}'
+                     ' - private, link-local and CGNAT clients only')
     try:
         while True:
             try:
@@ -2850,9 +3211,32 @@ def serve(listen_host, listen_port, exit_, quiet):
                 # a browser is pointed at it.
                 warn('could not accept a connection', str(e))
                 continue
+            source_port = who[1]
+            from_lan = False
+            if shared:
+                if not client_allowed(who[0]):
+                    # Closed before a byte is read. Said once per address: a
+                    # scanner retrying forever should not fill the log.
+                    if who[0] not in _REFUSED_SAID and len(_REFUSED_SAID) < 64:
+                        _REFUSED_SAID.add(who[0])
+                        log('SHARE', f'refused {who[0]}: not a local-network '
+                                     'address')
+                    try:
+                        client.close()
+                    except OSError:
+                        pass
+                    continue
+                if not is_loopback_host(who[0]):
+                    note_client(listen_port, who[0])
+                    # The machine's TCP table is looked up by local port, and
+                    # a phone's ephemeral port means nothing there - it could
+                    # even match some unrelated local program's, and the
+                    # activity list would name the wrong one.
+                    source_port = 0
+                    from_lan = True
             served += 1
             threading.Thread(target=serve_one,
-                             args=(client, exit_, quiet, who[1]),
+                             args=(client, exit_, quiet, source_port, from_lan),
                              daemon=True).start()
     except KeyboardInterrupt:
         print()
@@ -2870,6 +3254,7 @@ def serve(listen_host, listen_port, exit_, quiet):
         metering.set()
         clear_traffic(listen_port)
         clear_hosts(listen_port)
+        clear_clients(listen_port)
         clear_state()
         try:
             srv.close()
@@ -3184,7 +3569,12 @@ def is_address(host):
         return False
 
 
-def tunnel_config_text(domain, password, edges=None, ca_file=None):
+def _yaml_quoted(text):
+    """A YAML single-quoted scalar, which escapes one character."""
+    return "'" + str(text).replace("'", "''") + "'"
+
+
+def tunnel_config_text(domain, password, edges=None, ca_file=None, ss=None):
     """The gost client's configuration, as gost wants it.
 
     Written rather than shipped: the domain and the password are the only
@@ -3197,6 +3587,13 @@ def tunnel_config_text(domain, password, edges=None, ca_file=None):
     dark mid-session costs a retry instead of the tunnel: measured at 1.8s
     for a request that had to step over two blocked addresses to reach a
     live one, against 0.9s for the ones after it.
+
+    Given `ss` - the server's Shadowsocks settings, as its key carries them -
+    the same three local ports dial the server's address directly instead,
+    with no WebSocket, no Cloudflare and no edges. Single and bulk go to the
+    port that exits at the server, multi to the one after it, which exits
+    through the server's exit-chain like /ex does. The window cannot tell the
+    difference, which is the point: it still talks HTTP to 127.0.0.1.
     """
     services, chains = [], []
     for mode, port in TUNNEL_PORTS.items():
@@ -3205,6 +3602,28 @@ def tunnel_config_text(domain, password, edges=None, ca_file=None):
             f'    addr: "127.0.0.1:{port}"\n'
             f'    handler: {{type: http, chain: ch-{mode}}}\n'
             f'    listener: {{type: tcp}}\n')
+        if ss:
+            to = ss['exitPort'] if mode == 'multi' else ss['port']
+            # nodelay: the address goes out with the first packet rather than
+            # waiting for the client to speak, so a protocol where the server
+            # speaks first - SMTP, SSH banners, FTP - is not left hanging.
+            nodes = (
+                f'          - name: ss\n'
+                f'            addr: {domain}:{int(to)}\n'
+                f'            connector:\n'
+                f'              type: ss\n'
+                f'              auth: {{username: {ss["method"]}, '
+                f'password: {_yaml_quoted(ss["password"])}}}\n'
+                f'              metadata: {{nodelay: true}}\n'
+                f'            dialer:\n'
+                f'              type: tcp\n')
+            chains.append(
+                f'  - name: ch-{mode}\n'
+                f'    hops:\n'
+                f'      - name: t\n'
+                f'        bypass: go-direct\n'
+                + '        nodes:\n' + nodes)
+            continue
         # Only the bulk path goes unmultiplexed, so one heavy transfer cannot
         # stall everything sharing the session with it.
         dialer = 'wss' if mode == 'bulk' else 'mwss'
@@ -4192,6 +4611,8 @@ def main():
                                   'and this would otherwise go through it')
     p.add_argument('--listen', default='127.0.0.1',
                    help='address to listen on (127.0.0.1)')
+    p.add_argument('--split', help='split-tunnelling rules, as the window '
+                   'writes them (JSON). Read again whenever the file changes.')
     p.add_argument('--warm', type=int, default=WARM_DEFAULT,
                    help=f'connections to the exit opened before they are '
                         f'asked for ({WARM_DEFAULT}, at most {WARM_MAX}). '
@@ -4268,6 +4689,8 @@ def main():
             f'{running["pid"]}.\n'
             f'    ovpn proxy stop --port {args.port}   ends it\n'
             f'    ovpn proxy connect --port 8899  puts this one beside it')
+
+    SPLIT.path = args.split
 
     # A tunnel is already up and already abroad; there is no exit to choose,
     # no certificate to pin and no account to authenticate. Everything the

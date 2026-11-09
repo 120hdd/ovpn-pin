@@ -49,11 +49,13 @@ class FormatTest {
     @Test
     fun theFourShapesOfAPick() {
         val names = mapOf("fr" to "France")
-        assertEquals("Fastest available", nameOfPick("auto", names))
+        assertEquals("Any country", nameOfPick("auto", names))
         assertEquals("France", nameOfPick("fr", names))
         assertEquals("France · Windscribe", nameOfPick("fr:windscribe", names))
         assertEquals("Par, France", nameOfPick("fr/par", names))
-        assertEquals("fr-par.prod.surfshark.com", nameOfPick("file:1.23s-fr-par.prod.surfshark.com.ovpn", names))
+        // One exit reads as where it is, not as its filename: the country
+        // here, since no cities were passed and this name carries no number.
+        assertEquals("France", nameOfPick("file:1.23s-fr-par.prod.surfshark.com.ovpn", names))
 
         assertEquals("", countryOfPick("auto"))
         assertEquals("fr", countryOfPick("fr/par:surfshark"))

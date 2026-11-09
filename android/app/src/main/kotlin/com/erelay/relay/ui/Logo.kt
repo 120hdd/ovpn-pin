@@ -39,8 +39,11 @@ private object Mark {
     const val BEAD_ANGLE = -45f
     const val BEAD_OUT = 132f
 
-    val disc get() = if (Tone.light) Color(0xFF12B886) else Color(0xFF61EFBF)
-    val ring get() = if (Tone.light) Color(0xFF111318) else Color(0xFFFFFFFF)
+    // The disc in the page's ink (white on dark, near-black on White) and the
+    // ring and bead in the connected green - the desktop's mark, the same way
+    // round.
+    val disc get() = Tone.text
+    val ring get() = Tone.ok
 }
 
 /**

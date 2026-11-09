@@ -125,6 +125,29 @@ CITIES = {
 }
 
 
+# Which part of the world a country is in, for grouping the list. Turkey and
+# the Caucasus are with Europe, where people looking for them look; the Gulf,
+# Iran's neighbours and the Levant are their own group, because from Iran they
+# are the near places and a list that buries them in Asia hides them.
+CONTINENT_ORDER = ('Europe', 'Middle East', 'Asia', 'North America', 'South America', 'Africa', 'Oceania', 'Antarctica')
+CONTINENTS = {
+    'Europe': ('ad', 'al', 'am', 'at', 'az', 'ba', 'be', 'bg', 'by', 'ch', 'cy', 'cz', 'de', 'dk', 'ee', 'es', 'fi', 'fr', 'gb', 'ge', 'gr', 'hr', 'hu', 'ie', 'is', 'it', 'lt', 'lu', 'lv', 'md', 'me', 'mk', 'mt', 'nl', 'no', 'pl', 'pt', 'ro', 'rs', 'ru', 'se', 'si', 'sk', 'tr', 'ua', 'uk'),
+    'Middle East': ('ae', 'bh', 'il', 'iq', 'ir', 'jo', 'kw', 'lb', 'om', 'qa', 'sa', 'sy', 'ye'),
+    'Asia': ('af', 'bd', 'bn', 'bt', 'cn', 'hk', 'id', 'in', 'jp', 'kg', 'kh', 'kr', 'kz', 'la', 'lk', 'mm', 'mn', 'mo', 'my', 'np', 'ph', 'pk', 'sg', 'th', 'tw', 'uz', 'vn'),
+    'North America': ('bs', 'bz', 'ca', 'cr', 'do', 'gl', 'gt', 'hn', 'jm', 'mx', 'pa', 'pr', 'sv', 'us'),
+    'South America': ('ar', 'bo', 'br', 'cl', 'co', 'ec', 'pe', 'py', 'uy', 've'),
+    'Africa': ('dz', 'eg', 'ke', 'ma', 'ng', 'tn', 'za'),
+    'Oceania': ('au', 'nz'),
+    'Antarctica': ('aq',),
+}
+_CONTINENT_OF = {code: name for name, codes in CONTINENTS.items() for code in codes}
+
+
+def continent(code):
+    """The group a country is listed under, or 'Elsewhere'."""
+    return _CONTINENT_OF.get((code or '').lower(), 'Elsewhere')
+
+
 def country_name(code):
     return NAMES.get((code or '').lower(), (code or '').upper())
 

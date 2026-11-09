@@ -34,6 +34,15 @@ enum class Sort(val key: String, val label: String) {
     }
 }
 
+/** The Wi-Fi share as the core reports it: lanShareJSON. */
+data class LanShareState(
+    val on: Boolean = false,
+    val port: Int = 0,
+    /** This phone's addresses on the networks it is on; the other device types one. */
+    val addrs: List<String> = emptyList(),
+    val clients: Int = 0,
+)
+
 /** How the app looks and answers a touch, as Settings → Look and feel has it. */
 data class Feel(
     val theme: String = "midnight",
@@ -41,8 +50,6 @@ data class Feel(
     val orbTap: Boolean = true,
     val orbMotion: Boolean = true,
     val meter: Boolean = true,
-    /** "signal": red, yellow, green. "desktop": app.css's lavender at rest. */
-    val orbColors: String = "signal",
 )
 
 /** Getting a newly signed-in provider's servers ready: fetch, then pin. */
@@ -108,6 +115,8 @@ data class Country(
     val byOk: Map<String, Int>,
     val byTested: Map<String, Int>,
     val byPing: Map<String, Int>,
+    /** The group the list shows it under - the core's ContinentOf. */
+    val continent: String = "Elsewhere",
 ) {
     /** Tested and nothing answered: the row sinks and says blocked. */
     val blocked get() = tested > 0 && ok == 0
@@ -166,11 +175,181 @@ data class TunnelPlan(
     val edges: List<String> = emptyList(),
     /** The certificate a server reached by IP serves, SHA-256 hex; learnt on the first Test. */
     val pin: String = "",
+    /** "ss" straight to the address over Shadowsocks, "ws" the WebSocket. */
+    val transport: String = "ws",
+    /** Whether the server's key offered Shadowsocks, so there is a choice to show. */
+    val hasSs: Boolean = false,
+    /** The Shadowsocks port that exits at the server; the one after it exits at the location. */
+    val ssPort: Int = 0,
 ) {
     val ready get() = domain.isNotEmpty() && hasPassword
 
     /** Reached by IP address rather than by a domain. */
     val isAddress get() = domain.matches(Regex("""\d{1,3}(\.\d{1,3}){3}"""))
+}
+
+/**
+ * Split tunnelling: what the tunnel carries, and what it leaves to the line
+ * the phone already has.
+ *
+ * The keys are what the prefs hold and what the core is told, so a grep for
+ * "bypass" finds the setting, the interface and the Go that acts on it.
+ */
+enum class SplitMode(val key: String, val label: String) {
+    /** Everything through Relay, as before there was a choice. */
+    OFF("off", "Off"),
+    /** Everything through Relay but the list, which goes straight out. */
+    BYPASS("bypass", "Except these"),
+    /** The list through Relay, and everything else straight out. */
+    ONLY("only", "Only these");
+
+    companion object {
+        fun of(key: String?) = entries.firstOrNull { it.key == key } ?: OFF
+    }
+}
+
+/** Settings → Split tunnel, as the prefs hold it. */
+data class SplitPlan(
+    val mode: SplitMode = SplitMode.OFF,
+    /** The Iranian preset: the core's domains and ranges, and its list of Iranian apps. */
+    val iran: Boolean = true,
+    /** Package names the user picked. */
+    val apps: Set<String> = emptySet(),
+    /** Domains, addresses and ranges, each as the core normalised it. */
+    val domains: List<String> = emptyList(),
+) {
+    /** Something is listed by where it goes rather than by which app sends it. */
+    val hasDestinations get() = iran || domains.isNotEmpty()
+
+    /** Nothing listed at all: Only these would then carry nothing, so it carries everything. */
+    val empty get() = !iran && apps.isEmpty() && domains.isEmpty()
+}
+
+/** An app the split tunnel's picker offers: one with an icon in the launcher. */
+data class InstalledApp(
+    val pkg: String,
+    val label: String,
+    /** On the core's list of Iranian apps, so the preset covers it while it is on. */
+    val iranian: Boolean,
+    val system: Boolean,
+)
+
+/*
+ * Settings → Share with other devices.
+ *
+ * The user's own server keeps a handful of numbered locations ("slots") for
+ * devices that have no Relay of their own - an iPhone, a laptop, a friend's
+ * phone - reached with an ordinary V2Ray link. Slot 0 leaves from the server
+ * itself; slot k leaves from a provider exit this app finds and pins there.
+ * The names below follow the Go side's (core/export.go) where there is one,
+ * so a grep for "slot" finds both halves.
+ */
+
+/** One location to share, as the chooser picked it: a pick code - "de", "de/fra" - and what to call it. */
+data class ExportPick(val code: String, val name: String)
+
+/** One location's part in a run: where it is in the queue, and what was found for it. */
+data class ExportStep(
+    /** The server's slot this location goes into: its place in the list, plus one. */
+    val k: Int,
+    val code: String,
+    val name: String,
+    /** "waiting", "testing", "pinned", "failed" or "skipped". */
+    val phase: String = "waiting",
+    /** The exit kept, as the core names it. */
+    val exit: String = "",
+    val provider: String = "",
+    /** The upload measured through it from the server, in KB/s; 0 when it was throttled. */
+    val upKBs: Int = 0,
+    val error: String = "",
+)
+
+/** One slot's links, and what stands behind them. */
+data class ExportSlotLinks(
+    val k: Int,
+    /** What the other device lists it as: "Relay · Germany". */
+    val name: String,
+    /** The place it leaves from, as the screen says it; empty for the server itself. */
+    val place: String,
+    /** The pick code it was made from; empty for the server itself. */
+    val code: String,
+    val exit: String = "",
+    val provider: String = "",
+    val upKBs: Int = 0,
+    /** Why it has no links: the location could not be pinned. Empty when it has. */
+    val error: String = "",
+    val vless: String = "",
+    val vmess: String = "",
+    /** Shadowsocks, only for the server itself and only when its key offered it. */
+    val ss: String = "",
+) {
+    val ok get() = error.isEmpty() && vless.isNotEmpty()
+}
+
+/** What the last run made, kept so it shows again after a restart. */
+data class ExportResult(
+    /** When it was made, epoch milliseconds. */
+    val at: Long,
+    val host: String,
+    val slots: List<ExportSlotLinks>,
+    /** Things that went wrong around the slots rather than in one of them. */
+    val notes: List<String> = emptyList(),
+)
+
+/** The share screen's whole state. */
+data class ExportRun(
+    /** A server is set up, and its key says it keeps locations for other devices. */
+    val ready: Boolean = false,
+    /** How many locations it keeps, besides itself. */
+    val slots: Int = 0,
+    val running: Boolean = false,
+    /** Stop was pressed: the location under test finishes, and nothing after it starts. */
+    val stopping: Boolean = false,
+    /** "", "starting", "locations", "restoring", "saving" or "links". */
+    val phase: String = "",
+    /** Which of [steps] is under test, while phase is "locations". */
+    val index: Int = 0,
+    val steps: List<ExportStep> = emptyList(),
+    val last: ExportResult? = null,
+    val error: String = "",
+)
+
+fun ExportResult.toJson(): String = JSONObject()
+    .put("at", at)
+    .put("host", host)
+    .put("notes", JSONArray(notes))
+    .put("slots", JSONArray().apply {
+        for (s in slots) put(JSONObject()
+            .put("k", s.k).put("name", s.name).put("place", s.place).put("code", s.code)
+            .put("exit", s.exit).put("provider", s.provider).put("upKBs", s.upKBs)
+            .put("error", s.error).put("vless", s.vless).put("vmess", s.vmess).put("ss", s.ss))
+    })
+    .toString()
+
+fun parseExportResult(json: String): ExportResult? = try {
+    val o = JSONObject(json)
+    ExportResult(
+        at = o.optLong("at"),
+        host = o.optString("host"),
+        notes = o.optJSONArray("notes").strings(),
+        slots = o.optJSONArray("slots").objects().map { s ->
+            ExportSlotLinks(
+                k = s.optInt("k"),
+                name = s.optString("name"),
+                place = s.optString("place"),
+                code = s.optString("code"),
+                exit = s.optString("exit"),
+                provider = s.optString("provider"),
+                upKBs = s.optInt("upKBs"),
+                error = s.optString("error"),
+                vless = s.optString("vless"),
+                vmess = s.optString("vmess"),
+                ss = s.optString("ss"),
+            )
+        },
+    )
+} catch (e: Exception) {
+    null
 }
 
 data class DeadRow(
@@ -258,6 +437,7 @@ fun parseCountries(json: String): List<Country> = try {
         Country(
             code = c.optString("code"),
             name = c.optString("name"),
+            continent = c.optString("continent").ifEmpty { "Elsewhere" },
             alias = c.optJSONArray("alias").strings(),
             cities = c.optJSONArray("cityList").objects().map { t ->
                 // The core gives a city's code on its own - "syd" - and a pick

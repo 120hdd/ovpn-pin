@@ -37,7 +37,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -51,7 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.erelay.relay.data.Captcha
 import com.erelay.relay.data.Said
-import com.erelay.relay.ui.theme.Shape
+import com.erelay.relay.ui.theme.Space
 import com.erelay.relay.ui.theme.Tone
 import com.erelay.relay.ui.theme.Type
 import kotlinx.coroutines.launch
@@ -103,48 +102,44 @@ fun AddAccount(
 
     // Its own page per provider: opened from that provider's card, for that
     // provider, with nothing to switch.
-    Sheet(open, "Accounts", "Add a ${who.label} account", onClose) {
-        Spacer(Modifier.height(4.dp))
+    Sheet(open, "Add a ${who.label} account", onClose) {
+        Spacer(Modifier.height(Space.x4))
         ProviderHero(who)
         if (who.key in taken) {
-            Spacer(Modifier.height(14.dp))
-            Pane {
+            Spacer(Modifier.height(Space.x4))
+            Block {
                 Text("${who.label} already has its account.", style = Type.strong)
                 Text("Each provider takes one account. Remove it in Accounts to add a different one.",
-                    style = Type.small, modifier = Modifier.padding(top = 4.dp))
+                    style = Type.caption, modifier = Modifier.padding(top = Space.x1))
             }
             return@Sheet
         }
 
-        Spacer(Modifier.height(18.dp))
-        Eyebrow(if (who == Who.SURFSHARK) "Service username" else "Username or email")
+        Spacer(Modifier.height(Space.x5))
+        FieldLabel(if (who == Who.SURFSHARK) "Service username" else "Username or email")
         Field(user, { user = it }, if (who == Who.SURFSHARK) "From the manual-setup page" else "Your Windscribe login")
-        Spacer(Modifier.height(12.dp))
-        Eyebrow("Password")
+        Spacer(Modifier.height(Space.x3))
+        FieldLabel("Password")
         Field(password, { password = it }, "Password", secret = true)
         if (who == Who.WINDSCRIBE) {
-            Spacer(Modifier.height(12.dp))
-            Eyebrow("Two-factor code", hint = "optional")
+            Spacer(Modifier.height(Space.x3))
+            FieldLabel("Two-factor code", hint = "optional")
             Field(twoFa, { twoFa = it }, "Only if it is on", keyboard = androidx.compose.ui.text.input.KeyboardType.Number)
         }
-        Spacer(Modifier.height(12.dp))
-        Eyebrow("Name", hint = "optional")
+        Spacer(Modifier.height(Space.x3))
+        FieldLabel("Name", hint = "optional")
         Field(label, { label = it }, "The username, if you leave this")
 
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(Space.x4))
         // Where it goes, said before it is typed rather than after.
-        Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Tone.control.copy(alpha = 0.6f))
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Glyph.key, null, Modifier.size(16.dp), tint = Tone.ok)
-            Spacer(Modifier.width(10.dp))
+        Row(Modifier.fillMaxWidth().padding(horizontal = Space.x1), verticalAlignment = Alignment.Top) {
+            Icon(Glyph.key, null, Modifier.size(16.dp), tint = Tone.text3)
+            Spacer(Modifier.width(Space.x3))
             Text("Kept on this phone, encrypted with a key the Android keystore holds. " +
-                "Sent only to ${who.label}.", style = Type.small)
+                "Sent only to ${who.label}.", style = Type.caption, modifier = Modifier.weight(1f))
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(Space.x4))
         Btn(
             when {
                 busy -> "Working…"
@@ -170,7 +165,8 @@ fun AddAccount(
                     }
                 }
             },
-            modifier = Modifier.fillMaxWidth().height(52.dp), strong = true,
+            // At least 52; taller when a large font sets the label on two lines.
+            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp), strong = true,
             enabled = !busy && who.key !in taken && user.isNotBlank() && password.isNotEmpty(),
             icon = if (who == Who.SURFSHARK) Glyph.check else Glyph.chevRight,
         )
@@ -194,51 +190,22 @@ fun AddAccount(
     )
 }
 
-/** A field's caption: small capitals over it, and a quiet word for optional. */
-@Composable
-private fun Eyebrow(text: String, hint: String? = null) {
-    Row(Modifier.padding(start = 2.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(text.uppercase(), style = Type.eyebrow.copy(color = Tone.textMuted))
-        if (hint != null) {
-            Spacer(Modifier.width(6.dp))
-            Text(hint, style = Type.small.copy(color = Tone.textOff, fontSize = 11.sp))
-        }
-    }
-}
-
 /**
- * The chosen provider, large: its mark in a lit tile, its name, and the one
- * thing worth knowing before typing - which login it wants.
+ * The chosen provider: its mark, its name, and the one thing worth knowing
+ * before typing - which login it wants. Bare on the page, not a card.
  */
 @Composable
 private fun ProviderHero(w: Who) {
-    val brand = if (w == Who.WINDSCRIBE) Tone.windscribe else Tone.surfshark
-    val shape = RoundedCornerShape(Shape.card)
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(Tone.surface.copy(alpha = 0.72f))
-            .background(Brush.linearGradient(listOf(brand.copy(alpha = 0.16f), Color.Transparent)))
-            .border(1.dp, brand.copy(alpha = 0.28f), shape)
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            Modifier.size(52.dp).clip(RoundedCornerShape(16.dp)).background(brand.copy(alpha = 0.16f))
-                .border(1.dp, brand.copy(alpha = 0.35f), RoundedCornerShape(16.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(if (w == Who.WINDSCRIBE) Glyph.windscribe else Glyph.surfshark, null,
-                Modifier.size(26.dp), tint = brand)
-        }
-        Spacer(Modifier.width(14.dp))
+    Row(Modifier.fillMaxWidth().padding(horizontal = Space.x1), verticalAlignment = Alignment.Top) {
+        Icon(if (w == Who.WINDSCRIBE) Glyph.windscribe else Glyph.surfshark, w.label,
+            Modifier.size(32.dp), tint = Tone.text2)
+        Spacer(Modifier.width(Space.x4))
         Column(Modifier.weight(1f)) {
-            Text("Connect ${w.label}", style = Type.strong.copy(fontSize = 17.sp))
+            Text("Connect ${w.label}", style = Type.subtitle)
             Text(if (w == Who.SURFSHARK)
                 "The service login from Surfshark's manual-setup page, not your email."
             else "Your Windscribe login. A short puzzle comes next, asked once.",
-                style = Type.small, modifier = Modifier.padding(top = 2.dp))
+                style = Type.body, modifier = Modifier.padding(top = Space.x1))
         }
         InfoTip(if (w == Who.SURFSHARK)
             "The service username and password from Surfshark's manual-setup page - not " +
@@ -276,17 +243,17 @@ private fun CaptchaSheet(
     var answer by remember(puzzle) { mutableStateOf("") }
     val scope = rememberCoroutineScope()
 
-    Sheet(captcha != null, "Windscribe", "Prove you are there", onClose) {
+    Sheet(captcha != null, "Prove you are there", onClose) {
         if (captcha == null) return@Sheet
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(Space.x2))
         if (captcha.kind == "ascii") {
-            Text("Type what the drawing says.", style = Type.small)
-            Spacer(Modifier.height(10.dp))
+            Text("Type what the drawing says.", style = Type.caption)
+            Spacer(Modifier.height(Space.x3))
             Text(captcha.art, style = Type.mono.copy(fontFamily = FontFamily.Monospace, fontSize = 7.sp,
                 lineHeight = 8.sp, color = Tone.text),
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-                    .clip(RoundedCornerShape(12.dp)).background(Tone.bg).padding(10.dp))
-            Spacer(Modifier.height(10.dp))
+                    .clip(RoundedCornerShape(12.dp)).background(Tone.bg).padding(Space.x3))
+            Spacer(Modifier.height(Space.x3))
             Field(answer, { answer = it }, "Answer")
             ButtonRow {
                 Btn(if (sending) "Checking…" else "Send", {
@@ -297,8 +264,8 @@ private fun CaptchaSheet(
             return@Sheet
         }
 
-        Text(if (sending) "Checking…" else "Drag the piece into the gap, then let go.", style = Type.small)
-        Spacer(Modifier.height(12.dp))
+        Text(if (sending) "Checking…" else "Drag the piece into the gap, then let go.", style = Type.caption)
+        Spacer(Modifier.height(Space.x3))
         val bg = remember(captcha) { decode(captcha.background) }
         val piece = remember(captcha) { decode(captcha.slider) }
         if (bg == null || piece == null) {
@@ -353,15 +320,15 @@ private fun CaptchaSheet(
                             .height(with(density) { (piece.height * scale).toDp() }),
                         contentScale = ContentScale.FillBounds)
                 }
-                Spacer(Modifier.height(14.dp))
+                Spacer(Modifier.height(Space.x4))
                 // The rail: a knob that reads as draggable, moving the same piece.
                 Box(
                     Modifier
                         .fillMaxWidth()
                         .height(40.dp)
                         .clip(CircleShape)
-                        .background(Tone.control)
-                        .border(1.dp, Tone.border, CircleShape)
+                        .background(Tone.surface2)
+                        .border(1.dp, Tone.strokeStrong, CircleShape)
                         .pointerInput(puzzle) {
                             detectDragGestures(
                                 onDragStart = { xs.clear(); ys.clear() },
@@ -378,12 +345,12 @@ private fun CaptchaSheet(
                             .width(with(density) { pieceW.toDp() })
                             .height(40.dp)
                             .clip(CircleShape)
-                            .background(Tone.ok.copy(alpha = 0.85f)),
+                            .background(Tone.text),
                     )
                 }
             }
         }
         Text("One try. If it is refused, nothing is retried - close this and sign in again.",
-            style = Type.small, modifier = Modifier.padding(top = 12.dp))
+            style = Type.caption, modifier = Modifier.padding(top = Space.x3))
     }
 }

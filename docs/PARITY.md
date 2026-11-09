@@ -16,6 +16,18 @@ changes a feature updates its row.
 | Pin from the account cards | part | yes | Windows: on the provider cards only |
 | Race the provider's exits, first to answer wins | yes | yes | |
 | Own server, and server + exit | yes | yes | by IP (self-signed, pinned on first Test) or domain; one install command from Settings with the app's own passwords; server + exit sends the picked location and its provider's account |
+| Every program through it, not only proxy-aware ones (TUN) | yes | yes | Windows: Settings → Connection → Tunnel, sing-box + UAC; Android: always, VpnService |
+| Own server set up from one pasted key (relay://…) | yes | yes | printed by install-server.sh, kept in /etc/relay/key; carries the pin, both passwords and Shadowsocks |
+| Shadowsocks straight to your own server's address | yes | yes | the server's port exits there, the next port goes through the exit-chain (server + exit); Windows via gost, Android in the Go core |
+| Way out chosen from a dropdown, not a three-way strip | yes | yes | three labels side by side did not fit narrow phones |
+| Split tunnel: all except a list, or only a list | yes | yes | sites, addresses and ranges; Windows: sing-box rules with the adapter, the worker with the proxy setting; Android: the Go core, UDP included for what goes around |
+| Per-app routing | yes | yes | Windows by exe name (with the proxy setting, only programs that use it); Android by package, through VpnService |
+| Iran preset: sites, address ranges, apps | yes | yes | lists/ - ranges from RIPE NCC via lists/update.py, the rest by hand; apps on Android only |
+| Configs for other devices (VLESS / VMess links, QR, several locations) | yes | yes | your own server only, installer from this version (--slots); each location pinned to the exit that uploads best, saved on the server |
+| Share this connection on Wi-Fi / hotspot (HTTP + SOCKS5 proxy for other devices) | yes | yes | private addresses only; Windows adds a Private-profile firewall rule (UAC), Android serves it from the Go core while connected |
+| Locations grouped by continent, Fastest available / Test all removed | yes | yes | continent comes from the catalogue (countries.py / countries.go) |
+| Connected country's flag dimmed behind the home screen | yes | yes | |
+| Three themes: Graphite, White, Black | yes | yes | older theme names map onto these |
 | Traffic meter, counted as bytes flow | yes | yes | |
 | What-is-using-the-connection list | yes | yes | |
 | Welcome page when nothing is set up | yes | yes | |

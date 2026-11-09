@@ -4,6 +4,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -11,6 +15,8 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import android.os.PowerManager
 import android.os.SystemClock
+import com.erelay.relay.data.SplitMode
+import java.net.Inet4Address
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -192,6 +198,24 @@ class RelayVpnService : VpnService() {
         fun hostsJSON(): String =
             live?.hostsJSON() ?: """{"live":false,"rows":[]}"""
 
+        /** Who is using the Wi-Fi share, asked of whichever tunnel is up. */
+        fun lanShareJSON(): String =
+            live?.lanShareJSON() ?: """{"on":false,"port":0,"addrs":[],"clients":0}"""
+
+        /** Starts the share on the live tunnel. Throws when there is none, or the port is taken. */
+        fun startLanShare(port: Int, password: String): String {
+            val c = live ?: throw IllegalStateException("The tunnel is not up.")
+            return c.startLANShare(port.toLong(), password)
+        }
+
+        fun stopLanShare() {
+            try {
+                live?.stopLANShare()
+            } catch (e: Exception) {
+                Log.w(TAG, "stopping the Wi-Fi share", e)
+            }
+        }
+
         /**
          * Say something on the service's behalf from somewhere that is not
          * the service - a refused permission, for instance, which the
@@ -280,8 +304,12 @@ class RelayVpnService : VpnService() {
      * spared - is a property of the tunnel and not of what is at the far end
      * of it. Two copies would agree today and disagree the first time one is
      * changed.
+     *
+     * Handed back with it, the core's half of the split tunnel, which is
+     * worked out here because it depends on what the interface was told:
+     * the caller passes it on with [applySplit] before the tunnel starts.
      */
-    private fun buildInterface(): Builder {
+    private fun buildInterface(): Pair<Builder, CoreSplit> {
         val b = Builder()
             .setSession("Relay")
             .addAddress(Relay.tunAddress(), Relay.tunPrefix().toInt())
@@ -314,13 +342,204 @@ class RelayVpnService : VpnService() {
             for (p in Routes.exceptPrivate()) b.addRoute(p.addr, p.bits)
         }
 
+        // Which apps the interface admits, and what the core does with what
+        // it is handed - Settings → Split tunnel. This app leaving itself
+        // out happens in there too, because one of the ways to split cannot
+        // have it said by name.
+        val split = splitInto(b)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) b.setMetered(false)
+        return b to split
+    }
+
+    /**
+     * What the core is told about the split tunnel. [mode] is what the core
+     * does with what reaches it, and is not always the mode the setting
+     * names: see [splitInto].
+     */
+    private class CoreSplit(
+        val mode: SplitMode,
+        val iran: Boolean,
+        /** The user's domains, addresses and ranges, one a line, as saved. */
+        val entries: String,
+        /** The listed apps' uids, comma-joined, when the core is to ask whose a connection is. */
+        val uids: String,
+    )
+
+    /**
+     * Split tunnelling, decided half here and half in the core, because each
+     * of them can do only half of it.
+     *
+     * The interface admits or leaves out an app by its name, and nothing
+     * finer. The core sees every connection and where it is going, so it can
+     * send a destination straight out - but only what the interface admitted
+     * ever reaches it. So apps are settled here, and sites and ranges are the
+     * core's to send round the tunnel:
+     *
+     *   Except these   the listed apps are left out of the interface, and
+     *                  the core sends the listed destinations straight out.
+     *
+     *   Only these     apps alone: only they are let in, and the core carries
+     *                  all of what arrives. Destinations alone: every app is
+     *                  let in, and the core carries only what goes to them.
+     *                  Both: every app is let in, and the core asks whose each
+     *                  connection is (AppNamer, as relay.Owner) and carries
+     *                  the listed apps' along with the listed destinations.
+     *
+     * Both at once needs that question answered, and Android only answers it
+     * from 10 on. Below 10 the listed apps are let in and the destinations
+     * are not acted on: an interface that admits only some apps cannot also
+     * catch a site opened by any app. The window says so where it is chosen.
+     *
+     * Android throws when one interface is given apps to let in and apps to
+     * leave out, so Only these with apps let in never leaves this app out by
+     * name. It need not: an app that is not let in is out already.
+     */
+    private fun splitInto(b: Builder): CoreSplit {
+        val prefs = getSharedPreferences("relay", MODE_PRIVATE)
+        val mode = SplitMode.of(prefs.getString("splitMode", "off"))
+        val iran = prefs.getBoolean("splitIran", true)
+        val entries = prefs.getString("splitDomains", "").orEmpty().trim()
+        val hasDest = iran || entries.isNotEmpty()
+
         // This app must not route its own traffic. Without it, the socket to
         // the exit is protected but every other thing the process does - a
         // crash report, an update check - re-enters its own tunnel.
-        b.addDisallowedApplication(packageName)
+        fun leaveSelfOut() = b.addDisallowedApplication(packageName)
+        fun told(m: SplitMode, uids: String = "") = CoreSplit(m, iran, entries, uids)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) b.setMetered(false)
-        return b
+        if (mode == SplitMode.OFF) {
+            leaveSelfOut()
+            return told(SplitMode.OFF)
+        }
+        val apps = splitApps(prefs.getString("splitApps", "").orEmpty(), iran)
+
+        if (mode == SplitMode.BYPASS) {
+            for (pkg in apps.keys) {
+                try {
+                    b.addDisallowedApplication(pkg)
+                } catch (e: PackageManager.NameNotFoundException) {
+                    // Uninstalled since it was looked up: nothing to leave out.
+                }
+            }
+            leaveSelfOut()
+            return told(if (hasDest) SplitMode.BYPASS else SplitMode.OFF)
+        }
+
+        // Only these.
+        return when {
+            // Nothing listed. A tunnel that carries nothing is a tunnel that
+            // does nothing; carrying everything is the safer way to be wrong,
+            // and the window warns before it comes to this.
+            apps.isEmpty() && !hasDest -> {
+                leaveSelfOut()
+                told(SplitMode.OFF)
+            }
+            apps.isEmpty() -> {
+                leaveSelfOut()
+                told(SplitMode.ONLY)
+            }
+            hasDest && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
+                leaveSelfOut()
+                told(SplitMode.ONLY, apps.values.distinct().joinToString(","))
+            }
+            // Apps alone, or apps and destinations on a phone that cannot say
+            // whose a connection is: the apps are let in, and whatever they
+            // send is carried.
+            else -> {
+                var admitted = 0
+                for (pkg in apps.keys) {
+                    try {
+                        b.addAllowedApplication(pkg)
+                        admitted++
+                    } catch (e: PackageManager.NameNotFoundException) {
+                        // As above.
+                    }
+                }
+                // An interface with no app let in carries every app, this one
+                // included. If every listed app went away meanwhile, that is
+                // what this is, and this app leaves itself out as usual.
+                if (admitted == 0) leaveSelfOut()
+                told(SplitMode.OFF)
+            }
+        }
+    }
+
+    /**
+     * The listed apps that are on this phone, with their uids: the user's
+     * picks, and the core's list of Iranian apps while that preset is on.
+     * Never this app - [splitInto] leaves it out, or not, itself.
+     */
+    private fun splitApps(picked: String, iran: Boolean): Map<String, Int> {
+        val listed = LinkedHashSet<String>()
+        picked.lines().mapTo(listed) { it.trim() }
+        if (iran) Relay.splitIranApps().lines().mapTo(listed) { it.trim() }
+        val found = LinkedHashMap<String, Int>()
+        for (pkg in listed) {
+            if (pkg.isEmpty() || pkg == packageName) continue
+            try {
+                found[pkg] = packageManager.getApplicationInfo(pkg, 0).uid
+            } catch (e: PackageManager.NameNotFoundException) {
+                // Not on this phone. Most of the Iranian list is not, on any
+                // one phone, and an interface told to leave out an app that is
+                // not there throws rather than shrugging.
+            }
+        }
+        return found
+    }
+
+    /**
+     * The DNS server of the network under the tunnel, for the names the split
+     * tunnel sends straight out. An Iranian site has to be looked up the way
+     * the line would look it up, or its CDN answers with a foreign address
+     * and "straight out" goes the long way round. IPv4, because that is what
+     * the core dials; empty when there is none, and the core falls back on
+     * its own.
+     *
+     * The active network first when it is not a VPN - it is the one the apps
+     * left out of the tunnel are using - and otherwise any network that
+     * reaches the internet without being one.
+     */
+    private fun directDns(): String {
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return ""
+        fun underneath(n: Network): Boolean {
+            val caps = cm.getNetworkCapabilities(n) ?: return false
+            return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+        }
+        return try {
+            val nets = ArrayList<Network>()
+            val active = cm.activeNetwork
+            if (active != null && underneath(active)) nets.add(active)
+            for (n in cm.allNetworks) if (n != active && underneath(n)) nets.add(n)
+            nets.firstNotNullOfOrNull { n ->
+                cm.getLinkProperties(n)?.dnsServers?.firstOrNull { it is Inet4Address }?.hostAddress
+            }.orEmpty()
+        } catch (e: Exception) {
+            Log.w(TAG, "finding the line's own DNS: ${e.message}")
+            ""
+        }
+    }
+
+    /**
+     * The core's half of the split, handed over after the interface is built
+     * and before the tunnel starts - the stack reads it as it comes up. False,
+     * with the failure said, when the core refuses it: a tunnel that came up
+     * routing other than it was told to would be worse than none.
+     */
+    private fun applySplit(c: Client, s: CoreSplit): Boolean {
+        val dns = if (s.mode == SplitMode.OFF) "" else directDns()
+        Log.i(TAG, "split: ${s.mode.key}, iran ${s.iran}, " +
+            "${s.entries.lines().count { it.isNotBlank() }} entries, " +
+            "${s.uids.split(',').count { it.isNotBlank() }} apps by uid, " +
+            "line DNS ${dns.ifEmpty { "unknown" }}")
+        return try {
+            c.setSplit(s.mode.key, s.iran, s.entries, s.uids, dns)
+            true
+        } catch (e: Exception) {
+            fail("the split tunnel settings were not taken: " + (e.message ?: e.toString()).take(140))
+            false
+        }
     }
 
     /**
@@ -332,6 +551,22 @@ class RelayVpnService : VpnService() {
      * stack and the DNS above are the same ones the provider path uses,
      * because the core is written not to know which is underneath.
      */
+    /**
+     * Puts the server's Shadowsocks settings on [cfg] when that is the way in,
+     * and says whether it is. The same settings RelayCore.importKey writes.
+     */
+    private fun applySs(cfg: relay.ServerConfig): Boolean {
+        val prefs = getSharedPreferences("relay", MODE_PRIVATE)
+        val secret = prefs.getString("tunnelSsPassword", "").orEmpty()
+        if (prefs.getString("tunnelTransport", "") != "ss" || secret.isEmpty()) return false
+        cfg.transport = "ss"
+        cfg.ssMethod = prefs.getString("tunnelSsMethod", "").orEmpty()
+        cfg.ssPassword = secret
+        cfg.ssPort = prefs.getInt("tunnelSsPort", 0).toLong()
+        cfg.ssExitPort = prefs.getInt("tunnelSsExitPort", 0).toLong()
+        return true
+    }
+
     /** What server + exit needs to point the server at the picked location. */
     private class ServerExit(
         val country: String, val apiPassword: String,
@@ -347,8 +582,11 @@ class RelayVpnService : VpnService() {
             })
             // Who opened each connection, for the log sheet. Handed over
             // beside the protector because both are the platform answering a
-            // question the core cannot ask for itself.
-            Relay.setNamer(AppNamer(applicationContext))
+            // question the core cannot ask for itself. The same lookup as a
+            // uid is what splitting by app asks, when it has to ask.
+            val namer = AppNamer(applicationContext)
+            Relay.setNamer(namer)
+            Relay.setOwner(namer)
 
             if (domain.isEmpty() || password.isEmpty()) {
                 fail("no server configured - set the domain and password in Settings")
@@ -366,10 +604,17 @@ class RelayVpnService : VpnService() {
             cfg.edges = edges
             cfg.pin = pin
 
+            // Shadowsocks, when the server's key offered it and it is the
+            // chosen way in: straight to the address, so there are no edges
+            // to measure. Read from the settings rather than carried in the
+            // intent, so a restart by the system reaches the server the same
+            // way the window did.
+            val viaSs = applySs(cfg)
+
             // Measured here rather than carried over from the desktop: which
             // Cloudflare addresses are filtered is a fact about this line, and
             // the phone is not always on the same line the desktop was.
-            if (edges.isBlank()) {
+            if (!viaSs && edges.isBlank()) {
                 say("finding a way in")
                 cfg.edges = try {
                     Relay.scanEdges(domain, 30000L)
@@ -394,7 +639,7 @@ class RelayVpnService : VpnService() {
                 }
             }
 
-            if (cfg.edges.isBlank()) {
+            if (!viaSs && cfg.edges.isBlank()) {
                 fail("no way in to $domain answered - check the domain, or try " +
                     "Find another way in under Settings")
                 return
@@ -446,7 +691,8 @@ class RelayVpnService : VpnService() {
 
             say("opening the tunnel to $domain")
 
-            val builder = buildInterface()
+            val (builder, split) = buildInterface()
+            if (!applySplit(c, split)) return
 
             val pfd = builder.establish()
             if (pfd == null) {
@@ -473,6 +719,7 @@ class RelayVpnService : VpnService() {
             since = System.currentTimeMillis() / 1000
             connectedText = "connected through $exitName"
             say(connectedText)
+            shareOnLan(c)
             watch(c) { redialServer(c) }
         } catch (e: Exception) {
             Log.e(TAG, "server connect failed", e)
@@ -492,8 +739,11 @@ class RelayVpnService : VpnService() {
             })
             // Who opened each connection, for the log sheet. Handed over
             // beside the protector because both are the platform answering a
-            // question the core cannot ask for itself.
-            Relay.setNamer(AppNamer(applicationContext))
+            // question the core cannot ask for itself. The same lookup as a
+            // uid is what splitting by app asks, when it has to ask.
+            val namer = AppNamer(applicationContext)
+            Relay.setNamer(namer)
+            Relay.setOwner(namer)
 
             val c = Relay.newClient(user, password)
             // Both, when both are signed in. A pool holding one provider the
@@ -508,22 +758,30 @@ class RelayVpnService : VpnService() {
             // and the same scan is what the window's country list came from -
             // so a country the page offers is a country the race can run in.
             c.scanFolder(configDir)
-            // The same narrowing the window is showing. Without it, pressing
-            // Connect from a Starred list would race the whole folder and
-            // come back through an exit that is not in the list on screen.
-            if (only.isNotBlank()) c.setOnly(only)
+            // The configs behind the pick, as the window resolved them from
+            // the row that was tapped - a country, a city, one provider's
+            // share, one server, or Starred. Narrowed to exactly those, the
+            // race takes the whole of what is left: asking the core to parse
+            // the code again here is how a city or a single server came back
+            // with nothing to race while a country connected.
+            val narrowed = only.isNotBlank()
+            if (narrowed) c.setOnly(only)
             if (c.count() == 0L) {
-                fail("no pinned configs in $configDir")
+                fail(if (narrowed) "pick-gone" else "no pinned configs in $configDir")
                 return
             }
+            // A start with no list - an old intent, or Android restarting the
+            // service on its own - still parses the code, as it always did.
+            val pool = if (narrowed) "auto" else country
 
             total = c.count().toInt()
             say("racing ${c.count()} exits")
-            val winner = race(c, country)
+            val winner = race(c, pool)
 
             say("opening the tunnel via ${winner.name}")
 
-            val builder = buildInterface()
+            val (builder, split) = buildInterface()
+            if (!applySplit(c, split)) return
 
             val pfd = builder.establish()
             if (pfd == null) {
@@ -552,7 +810,9 @@ class RelayVpnService : VpnService() {
             since = System.currentTimeMillis() / 1000
             connectedText = "connected via ${winner.name} (${winner.addr}), ${winner.tookMs} ms"
             say(connectedText)
-            watch(c) { switchExit(c, country) }
+            shareOnLan(c)
+            // A replacement comes from the same pick: the narrowed list again.
+            watch(c) { switchExit(c, pool) }
         } catch (e: Exception) {
             Log.e(TAG, "connect failed", e)
             fail(e.message ?: e.toString())
@@ -786,11 +1046,12 @@ class RelayVpnService : VpnService() {
         // fails with "the socket to the exit could not be kept out of the
         // tunnel" about a tunnel that is not there.
         //
-        // The namer goes with it: it holds a Context and has nothing to
-        // answer about once nothing is being carried.
+        // The namer goes with it, in both its roles: it holds a Context and
+        // has nothing to answer about once nothing is being carried.
         try {
             Relay.setProtector(null)
             Relay.setNamer(null)
+            Relay.setOwner(null)
         } catch (e: Exception) {
             Log.w(TAG, "letting go of the platform hooks", e)
         }
@@ -841,6 +1102,23 @@ class RelayVpnService : VpnService() {
         Log.i(TAG, text)
         notificationManager().notify(NOTIFICATION, notification(text))
         sendBroadcast(Intent(ACTION_STATUS).setPackage(packageName))
+    }
+
+    /**
+     * Share the tunnel on the Wi-Fi or hotspot, when Settings says to. It
+     * stops with the tunnel (the core closes it), so there is no stop path
+     * here; a failure is logged and the connection carries on without it.
+     */
+    private fun shareOnLan(c: Client) {
+        val p = getSharedPreferences("relay", MODE_PRIVATE)
+        if (!p.getBoolean("lanShare", false)) return
+        try {
+            val said = c.startLANShare(p.getInt("lanSharePort", 8877).toLong(),
+                p.getString("lanSharePassword", "").orEmpty())
+            Log.i(TAG, "sharing on the local network: $said")
+        } catch (e: Exception) {
+            Log.w(TAG, "sharing on the local network: ${e.message}")
+        }
     }
 
     private fun fail(text: String) {

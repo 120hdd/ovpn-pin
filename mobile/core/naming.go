@@ -51,3 +51,37 @@ func whoOpened(protocol int, source, destination string) string {
 	}
 	return n.Name(protocol, source, destination)
 }
+
+// Owner is the same platform question asked for a number instead of a name:
+// the uid behind a connection, which is what split tunnelling's "only these
+// apps" compares against. Separate from Namer because a label is for a
+// person and a uid is for a rule, and only one of the two is asked when the
+// rules do not mention apps.
+type Owner interface {
+	// Uid is the owner of the connection, or -1 when the platform will not
+	// say. Addresses are "ip:port".
+	Uid(protocol int, source, destination string) int
+}
+
+var (
+	ownerMu sync.RWMutex
+	owner   Owner
+)
+
+// SetOwner hands over the lookup. nil is a platform that cannot answer.
+func SetOwner(o Owner) {
+	ownerMu.Lock()
+	defer ownerMu.Unlock()
+	owner = o
+}
+
+// ownerOf asks, if anyone can answer.
+func ownerOf(protocol int, source, destination string) int {
+	ownerMu.RLock()
+	o := owner
+	ownerMu.RUnlock()
+	if o == nil {
+		return -1
+	}
+	return o.Uid(protocol, source, destination)
+}

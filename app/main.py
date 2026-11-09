@@ -223,6 +223,7 @@ def run_selftest():
     import accounts
     import engine
     import pin
+    import split
     import sweep
     import windscribe
     import winproxy
@@ -250,13 +251,21 @@ def run_selftest():
            # the window is a sentence about this machine, and this is where
            # questions about what a copy can see get answered.
            'tunnelClient': paths.gost_exe(),
-           'tunnelInstaller': os.path.isfile(paths.INSTALLER)}
+           'tunnelInstaller': os.path.isfile(paths.INSTALLER),
+           # What would bring up the adapter in tunnel mode.
+           'tunEngine': paths.singbox_exe(),
+           # The Iran preset split tunnelling reads; zeros mean lists/ was
+           # not bundled.
+           'splitLists': split.iran_counts()}
     try:
         saved = load_settings()
         e = engine.Engine(winproxy.SystemProxy(paths.SAVED_PROXY),
                           folder=saved.get('folder') or None,
                           port=saved.get('port'),
-                          set_system_proxy=saved.get('systemProxy', True))
+                          set_system_proxy=saved.get('systemProxy', True),
+                          route_with=saved.get('routeWith', 'proxy'),
+                          split_settings=saved.get('split'),
+                          lan_share=bool(saved.get('lanShare')))
         # Set up the way the window sets it up, or this reports a different
         # app from the one that is running: it would read one folder and no
         # provider filter, and answer "533 servers" for a copy that is
@@ -418,7 +427,10 @@ import oneinstance                                           # noqa: E402
 import engine                                                # noqa: E402
 import pin                                                   # noqa: E402
 import sweep                                                 # noqa: E402
+import tun                                                   # noqa: E402
 import tunnel                                                # noqa: E402
+import split                                                 # noqa: E402
+import export                                                # noqa: E402
 import webview                                               # noqa: E402
 import winproxy                                              # noqa: E402
 import winwindow                                             # noqa: E402
@@ -443,7 +455,10 @@ class Api:
             self._sysproxy,
             folder=self._settings_early.get('folder') or None,
             set_system_proxy=self._settings_early.get('systemProxy', True),
-            port=self._settings_early.get('port'))
+            port=self._settings_early.get('port'),
+            route_with=self._settings_early.get('routeWith', 'proxy'),
+            split_settings=split.clean(self._settings_early.get('split'))[0],
+            lan_share=bool(self._settings_early.get('lanShare')))
         self._window = None
         self._hwnd_cache = None
         self._tray = None
@@ -665,6 +680,17 @@ class Api:
                 if self._engine.providers is not None else None,
                 'providerState': self._provider_state(),
                 'systemProxy': self._engine.set_system_proxy,
+                'routeWith': self._engine.route_with,
+                # Share on Wi-Fi: whether other devices on the network may
+                # use this proxy. Details are lanShareState().
+                'lanShare': self._engine.lan_share,
+                # Whether there is an adapter to offer at all, and whether
+                # bringing it up will put a UAC prompt in front of somebody.
+                'tunReady': tun.available(),
+                'elevated': tun.is_admin(),
+                'split': split.clean(self._settings.get('split'))[0],
+                'export': self._export_ready(),
+                'splitLists': split.iran_counts(),
                 'port': self._engine.port,
                 'defaultPort': engine.DEFAULT_PORT,
                 'picked': self._settings.get('picked', 'auto'),
@@ -701,6 +727,14 @@ class Api:
         if (self._sysproxy.stashed() and not self._engine.running()
                 and not px_live_elsewhere(self._engine.port)):
             recovered = self._sysproxy.restore()
+        # The adapter's version of the same wreckage: its worker gone and the
+        # script that should have noticed gone with it. Told apart from the
+        # proxy setting, because the page says which of the two it put back.
+        recovered_tun = False
+        try:
+            recovered_tun = self._engine.tun.tidy()
+        except Exception:
+            pass
         status = dict(self._engine.status())
         if status.get('state') == 'on' and self._since:
             # So a window opened onto a connection already up counts from
@@ -709,6 +743,7 @@ class Api:
         self._retray('on' if status.get('state') == 'on' else 'off')
         out = self._describe()
         out.update({'status': status, 'recovered': recovered,
+                    'recoveredTun': recovered_tun,
                     'hasCredentials': self._has_credentials()})
         return out
 
@@ -814,15 +849,53 @@ class Api:
         next connect.
         """
         on = bool(on)
+        was = self._engine.set_system_proxy
         self._engine.set_system_proxy = on
+        if self._engine.running():
+            try:
+                if on:
+                    self._engine.reroute()
+                else:
+                    self._engine.release()
+            except Exception as e:
+                # Only the adapter can say no - a dismissed UAC prompt - and
+                # then the switch goes back to where it was rather than
+                # claiming a routing the machine does not have.
+                self._engine.set_system_proxy = was
+                return {'ok': False, 'systemProxy': was,
+                        'error': tun.explain(e) or str(e)[:200]}
         self._settings['systemProxy'] = on
         save_settings(self._settings)
-        if self._engine.running():
-            if on:
-                self._sysproxy.engage('127.0.0.1', self._engine.port)
-            else:
-                self._sysproxy.restore()
         return {'ok': True, 'systemProxy': on}
+
+    def setRouteWith(self, way):
+        """The proxy setting or the adapter, for when Windows is routed.
+
+        Applied at once to a connection that is up, like the switch above,
+        and undone if the adapter will not come up - with the old way put
+        back, so a refused prompt costs nothing but the prompt.
+        """
+        way = way if way in tun.KINDS else 'proxy'
+        if way == 'tun' and not tun.available():
+            return {'ok': False, 'routeWith': self._engine.route_with,
+                    'error': tun.explain('tun-missing')}
+        was = self._engine.route_with
+        self._engine.route_with = way
+        if (way != was and self._engine.set_system_proxy
+                and self._engine.running()):
+            try:
+                self._engine.reroute()
+            except Exception as e:
+                self._engine.route_with = was
+                try:
+                    self._engine.reroute()
+                except Exception:
+                    pass
+                return {'ok': False, 'routeWith': was,
+                        'error': tun.explain(e) or str(e)[:200]}
+        self._settings['routeWith'] = way
+        save_settings(self._settings)
+        return {'ok': True, 'routeWith': way}
 
     def setPort(self, port):
         """Where the proxy listens. 8877 unless something else has it.
@@ -858,6 +931,228 @@ class Api:
             # rebuilt from the answer rather than left to drift.
             self._emit('Connected', self._engine.status())
         return {'ok': True, **result}
+
+    # -- Share on Wi-Fi ------------------------------------------------------
+
+    def _lan_rule_for(self, port):
+        """Make sure the firewall lets the local subnet reach `port`.
+        (ok, firewall, error). Asks nothing when the rule is already there,
+        and nothing when the network is Public - the rule is scoped to
+        Private networks, so adding it there would cost a UAC prompt and do
+        nothing; the caller reports the network instead."""
+        info = engine.probe_network(port, fresh=True)
+        state = engine.firewall_verdict(info)
+        if state in ('ok', 'public-network'):
+            return True, state, None
+        ok, why = engine.change_firewall('add', port)
+        if not ok:
+            return False, state, why
+        info = engine.probe_network(port, fresh=True)
+        return True, engine.firewall_verdict(info) if info else 'ok', None
+
+    def setLanShare(self, on):
+        """Offer the connection to other devices on the same Wi-Fi.
+
+        A phone sets its Wi-Fi HTTP proxy to this PC's address and this
+        port, and its traffic leaves by whatever this app is connected
+        through. Nothing about the account goes anywhere: the phone talks to
+        a proxy, and the proxy is the one holding the credentials.
+
+        Turning it on opens a firewall rule first (one UAC prompt, skipped if
+        the rule is already there), then moves a live connection onto a
+        worker that listens beyond the loopback - the same exit, as with a
+        port change. If the prompt is refused nothing has changed and the
+        answer says so. Turning it off moves the worker back first and then
+        removes the rule; a refused prompt there leaves the rule behind
+        (harmless with nothing listening, and `firewallLeft` says so) rather
+        than leaving sharing on.
+
+        `applied` is 'now' when a running connection was restarted onto the
+        new setting and 'next' when nothing was up and the next connect will
+        listen the way it was asked.
+        """
+        on = bool(on)
+        was = self._engine.lan_share
+        if self._busy:
+            return {'ok': False, 'lanShare': was,
+                    'error': 'Not while it is connecting. Try once it settles.'}
+        port = self._engine.port
+        out = {}
+        if on:
+            ok, state, why = self._lan_rule_for(port)
+            if not ok:
+                return {'ok': False, 'lanShare': was, 'firewall': state,
+                        'error': why}
+            out['firewall'] = state
+            if state == 'public-network':
+                out['warning'] = ('This network is set to Public in Windows, '
+                                  'which blocks other devices from reaching '
+                                  'this PC. Set the Wi-Fi to Private in '
+                                  'Windows settings, then try the phone '
+                                  'again.')
+        try:
+            result = self._engine.set_lan_share(on)
+        except Exception as e:
+            # A move that fell over mid-flight leaves nothing running, and
+            # the page has to hear that rather than a switch that "worked".
+            self._retray('off')
+            self._emit('Failed', {'kind': 'moved-and-died', 'detail': str(e)})
+            return {'ok': False, 'lanShare': self._engine.lan_share,
+                    'error': f'The connection did not come back up: {e}'}
+        self._settings['lanShare'] = on
+        save_settings(self._settings)
+        if result.get('moved'):
+            self._emit('Connected', self._engine.status())
+        if not on and was:
+            info = engine.probe_network(port, fresh=True)
+            if info is None or info.get('found'):
+                ok, why = engine.change_firewall('remove', port)
+                if not ok:
+                    out['firewallLeft'] = True
+                    out['warning'] = ('Sharing is off, but the firewall rule '
+                                      f'"{engine.firewall_rule_name(port)}" '
+                                      f'could not be removed: {why}')
+        return {'ok': True, 'lanShare': on, 'applied': result['applied'],
+                **out}
+
+    def fixLanShareFirewall(self):
+        """Add the firewall rule again while sharing is on - after a port
+        change, say, which leaves the rule on the old port. One UAC prompt.
+        Returns {ok, firewall, error?}."""
+        if not self._engine.lan_share:
+            return {'ok': False, 'firewall': 'unknown',
+                    'error': 'Share on Wi-Fi is off.'}
+        ok, state, why = self._lan_rule_for(self._engine.port)
+        out = {'ok': ok, 'firewall': state}
+        if why:
+            out['error'] = why
+        return out
+
+    def lanShareState(self):
+        """What the sharing panel shows: the address to type into the phone,
+        whether Windows will let it in, and who has been using it.
+
+        `addrs` are this PC's private IPv4 addresses on real adapters, the
+        Wi-Fi first - not the loopback, not what an adapter gives itself
+        with no network, and not the virtual ones (the TUN adapter, Hyper-V,
+        WSL, VM hosts, other VPNs) that a phone can never reach.
+
+        `firewall` is 'ok', 'missing' (no rule for the current port),
+        'public-network' (Windows treats the Wi-Fi as Public and will block
+        it whatever the rules say) or 'unknown'. `listening` is whether the
+        running worker is really bound beyond the loopback, which differs
+        from `on` between flipping the switch and the next connect.
+        `clients` counts distinct other devices seen in the last five
+        minutes. Reading it starts PowerShell (cached for a few seconds), so
+        poll it slowly.
+        """
+        port = self._engine.port
+        info = engine.probe_network(port)
+        if info:
+            adapters = info.get('adapters')
+            if isinstance(adapters, dict):
+                adapters = [adapters]
+            lan = engine.usable_lan_adapters(adapters)
+        else:
+            lan = engine.socket_addresses()
+        return {'on': self._engine.lan_share,
+                'port': port,
+                'addrs': [a for a, _, _ in lan],
+                'adapters': [{'ip': a, 'name': n, 'network': c}
+                             for a, n, c in lan],
+                'firewall': engine.firewall_verdict(info),
+                'listening': self._engine.lan_listening(),
+                'clients': len(self._engine.lan_clients())}
+
+    def setSplit(self, payload):
+        """Which connections go around the exit. See split.py.
+
+        Cleaned first, and what could not be a rule is handed back as typed
+        rather than dropped. Applied at once to a connection that is up: the
+        worker reads its file again by itself, and the adapter - which takes
+        its rules only when it starts - is brought up again, which may ask
+        for administrator approval. A refusal puts the old rules back.
+        """
+        if not isinstance(payload, dict):
+            payload = {}
+        cleaned, rejected = split.clean(payload)
+        was = self._engine.split
+        self._engine.split = cleaned
+        applied = 'next'
+        running = self._engine.running()
+        try:
+            adapter = (self._engine.set_system_proxy
+                       and self._engine.route_with == 'tun')
+            if running and adapter and self._engine.tun.engaged_for(
+                    self._engine.port):
+                if split.rules(was) != split.rules(cleaned):
+                    self._engine.reroute()
+                applied = 'now'
+            else:
+                self._engine.hand_split()
+                applied = 'now' if running else 'next'
+        except Exception as e:
+            self._engine.split = was
+            try:
+                self._engine.reroute() if running else self._engine.hand_split()
+            except Exception:
+                pass
+            return {'ok': False, 'split': split.clean(was)[0],
+                    'rejected': rejected,
+                    'error': tun.explain(e) or str(e)[:200]}
+        self._settings['split'] = cleaned
+        save_settings(self._settings)
+        return {'ok': True, 'split': cleaned, 'rejected': rejected,
+                'applied': applied}
+
+    def pickApps(self):
+        """Programs for the split list, chosen in Windows' own file picker.
+        Only the exe names come back - a rule matches a program by name, so
+        it still matches after the program updates itself to a new folder.
+        """
+        try:
+            picked = self._window.create_file_dialog(
+                webview.OPEN_DIALOG, allow_multiple=True,
+                file_types=('Programs (*.exe)', 'All files (*.*)'))
+        except Exception as e:
+            return {'apps': [], 'error': f'Could not open the file picker: {e}'}
+        names = []
+        for path in picked or ():
+            try:
+                name = split.normalize_app(path)
+            except split.Invalid:
+                continue
+            if name not in names:
+                names.append(name)
+        return {'apps': names}
+
+    def runningApps(self):
+        """The programs running now, by exe name, for picking from a list
+        instead of hunting for them on disk. Windows' own and this app's are
+        left out: nobody means to route svchost.exe.
+        """
+        import subprocess
+        try:
+            out = subprocess.run(
+                ['tasklist', '/fo', 'csv', '/nh'], capture_output=True,
+                text=True, timeout=10, creationflags=0x08000000).stdout
+        except Exception as e:
+            return {'apps': [], 'error': str(e)[:200]}
+        skip = {'system', 'system idle process', 'registry', 'smss.exe',
+                'csrss.exe', 'wininit.exe', 'services.exe', 'lsass.exe',
+                'svchost.exe', 'winlogon.exe', 'fontdrvhost.exe', 'dwm.exe',
+                'conhost.exe', 'sihost.exe', 'taskhostw.exe', 'ctfmon.exe',
+                'runtimebroker.exe', 'dllhost.exe', 'tasklist.exe',
+                'searchindexer.exe', 'spoolsv.exe', 'memory compression',
+                'secure system', 'lsaiso.exe', 'wmiprvse.exe', 'audiodg.exe',
+                os.path.basename(sys.executable).lower(), 'sing-box.exe',
+                'gost.exe'}
+        names = set()
+        for line in out.splitlines():
+            name = line.split('","', 1)[0].strip('"').lower()
+            if name and name.endswith('.exe') and name not in skip:
+                names.add(name)
+        return {'apps': sorted(names)}
 
     def chooseFolder(self):
         """A real Windows folder picker, not a text box to paste a path into."""
@@ -2112,14 +2407,34 @@ class Api:
             raise RuntimeError('no-client')
         if not st.get('tunnelDomain'):
             raise RuntimeError('not-set-up')
+        ss = self._tunnel_ss()
         want = (exe, st.get('tunnelDomain'), st.get('tunnelPassword', ''),
-                st.get('tunnelApiPassword', ''))
+                st.get('tunnelApiPassword', ''),
+                json.dumps(ss, sort_keys=True) if ss else '',
+                st.get('tunnelPin', ''))
         if not self._tunnel or self._tunnel_key != want:
+            if self._tunnel and self._tunnel_key and self._tunnel_key[4] != want[4]:
+                # The way in changed under a running client. Its config is
+                # the old one, and start() only writes a new one when nothing
+                # is listening - so it has to go before the new one can come.
+                try:
+                    self._tunnel.stop()
+                except Exception:
+                    pass
             self._tunnel = tunnel.Tunnel(
                 exe=exe, workdir=paths.TUNNEL_STATE, domain=want[1],
-                password=want[2], api_password=want[3])
+                password=want[2], api_password=want[3], ss=ss,
+                expected_pin=want[5])
             self._tunnel_key = want
         return self._tunnel
+
+    def _tunnel_ss(self):
+        """The Shadowsocks settings, when that is the chosen way in."""
+        st = self._settings
+        ss = st.get('tunnelSs')
+        if st.get('tunnelTransport') == 'ss' and isinstance(ss, dict):
+            return ss
+        return None
 
     def tunnelPlan(self):
         """What the settings pane draws. The passwords go back as whether
@@ -2141,7 +2456,96 @@ class Api:
             'edges': client.edges() if client else [],
             'isAddress': tunnel.is_address(st.get('tunnelDomain', '')),
             'pin': client.pin() if client else '',
+            # The way in: through Cloudflare (or the address) over a
+            # WebSocket, or straight to the address over Shadowsocks. The
+            # second is only offered once a key has said the server has it.
+            'transport': 'ss' if self._tunnel_ss() else 'ws',
+            'hasSs': isinstance(st.get('tunnelSs'), dict),
+            'ssPort': (st.get('tunnelSs') or {}).get('port'),
         }
+
+    def importKey(self, text):
+        """Set the whole tunnel up from the key the installer printed.
+
+        Everything is replaced - server, both passwords, pin, Shadowsocks -
+        because a key is one server's complete description, and mixing half
+        of it with what was there before would be a server that exists
+        nowhere. Shadowsocks becomes the way in when the key offers it: it is
+        straight to the address, the quicker of the two when the address is
+        reachable.
+        """
+        try:
+            key = tunnel.parse_key(text)
+        except ValueError as e:
+            return {'ok': False, 'error': str(e)}
+        refused = self._tunnel_busy()
+        if refused:
+            return refused
+        self._stop_tunnel_client()
+        st = self._settings
+        st['tunnelDomain'] = key['host']
+        st['tunnelPassword'] = key['password']
+        st['tunnelApiPassword'] = key['api_password']
+        st['tunnelPin'] = key['pin']
+        if key['ss']:
+            st['tunnelSs'] = key['ss']
+            st['tunnelTransport'] = 'ss'
+        else:
+            st.pop('tunnelSs', None)
+            st['tunnelTransport'] = 'ws'
+        if key['export']:
+            st['tunnelExport'] = key['export']
+        else:
+            st.pop('tunnelExport', None)
+        # Links made for another server, or for this one set up again with
+        # a new id, are links to nothing.
+        st.pop('exportLast', None)
+        save_settings(st)
+        self._tunnel = None
+        # Forgotten on purpose even when the host is unchanged: a server set
+        # up again has a new certificate, and the key's pin is the authority.
+        try:
+            self._tunnel_client().forget_cert()
+        except RuntimeError:
+            pass
+        return {'ok': True, **self.tunnelPlan()}
+
+    def setTunnelTransport(self, transport):
+        """WebSocket or Shadowsocks, for a server whose key offered both."""
+        if transport not in ('ws', 'ss'):
+            return {'ok': False, 'error': 'unknown way in'}
+        if transport == 'ss' and not isinstance(self._settings.get('tunnelSs'), dict):
+            return {'ok': False, 'error': 'this server has no Shadowsocks '
+                                          'settings - paste its key first'}
+        if transport == ('ss' if self._tunnel_ss() else 'ws'):
+            return {'ok': True, **self.tunnelPlan()}
+        refused = self._tunnel_busy()
+        if refused:
+            return refused
+        self._stop_tunnel_client()
+        self._settings['tunnelTransport'] = transport
+        save_settings(self._settings)
+        return {'ok': True, **self.tunnelPlan()}
+
+    def _tunnel_busy(self):
+        """A refusal when the tunnel is carrying the connection right now.
+
+        Changing the way in rewrites and restarts the client underneath it,
+        which would drop the connection without the window knowing why."""
+        if self._engine.running() and self._settings.get('mode') in ('single', 'multi'):
+            return {'ok': False, 'error': 'Disconnect first - the tunnel is '
+                                          'carrying the connection right now.'}
+        return None
+
+    def _stop_tunnel_client(self):
+        """Stop the client, whichever window started it, so the next start
+        writes a configuration for the new way in rather than reusing one
+        left listening with the old."""
+        try:
+            self._tunnel_client().stop()
+        except Exception:
+            pass
+        self._tunnel = None
 
     def _ensure_tunnel_passwords(self):
         """The two passwords, made here when there are none yet. The install
@@ -2188,7 +2592,7 @@ class Api:
                            f"--password '{pw}' --api-password '{api}'",
                 'status': "systemctl --no-pager --lines=0 status gost sing-box nginx"
                           " | grep -E '^. |Active:'; ss -lnt | grep -E "
-                          "':443 |127.0.0.1:(1000[0-3]|18080) '",
+                          "':443 |:838[89] |127.0.0.1:(1000[0-3]|18080) '",
                 'uninstall': "systemctl disable --now gost sing-box;"
                              " rm -f /etc/systemd/system/gost.service"
                              " /etc/systemd/system/sing-box.service"
@@ -2210,6 +2614,11 @@ class Api:
                     self._tunnel_client().forget_cert()
                 except RuntimeError:
                     pass
+                # And what a key said about the old one - its Shadowsocks,
+                # its exported locations - is not true of the new one.
+                for name in ('tunnelSs', 'tunnelExport', 'exportLast'):
+                    self._settings.pop(name, None)
+                self._settings['tunnelTransport'] = 'ws'
             self._settings['tunnelDomain'] = domain.strip()
         if password:
             self._settings['tunnelPassword'] = password.strip()
@@ -2252,6 +2661,8 @@ class Api:
         """
         try:
             client = self._tunnel_client()
+            if client.ss:
+                return self._test_ss(client)
             by_address = tunnel.is_address(client.domain)
             if by_address:
                 # Taken the first time, then required: a server showing
@@ -2312,6 +2723,39 @@ class Api:
             return {'ok': False, 'error': str(e)}
         except Exception as e:
             return {'ok': False, 'error': str(e)[:200]}
+
+    def _test_ss(self, client):
+        """Test, for a server reached straight over Shadowsocks.
+
+        Simpler than the WebSocket's, because there is less in the way: no
+        edges to go looking for and no certificate on the way in. What is
+        left to tell apart is a stale client - restarted once - and a server
+        whose port does not carry. The exit the server is set to is asked
+        through its API, which is the one place a certificate is still
+        involved; not getting an answer there is said, not fatal.
+        """
+        client.start()
+        restarted = False
+        try:
+            seen = client.probe()
+        except Exception:
+            restarted = True
+            try:
+                client.restart()
+                seen = client.probe()
+            except Exception as e:
+                return {'ok': False, 'restarted': True,
+                        'running': client.listening(),
+                        'error': f'{client.domain}:{client.ss["port"]} did not '
+                                 f'carry anything over Shadowsocks: '
+                                 f'{str(e)[:140]}'}
+        try:
+            exit_ = client.current_exit()
+        except Exception:
+            exit_ = ''
+        return {'ok': True, 'exit': exit_, 'seen': seen,
+                'restarted': restarted, 'repaired': [], 'edges': [],
+                'running': client.listening()}
 
     def rescanEdges(self):
         """Look for a way in now, whatever state the tunnel is in.
@@ -2469,37 +2913,213 @@ class Api:
                 # to carry an upload end to end, and the first that does is
                 # kept - the location stays the one picked. A single server
                 # was picked by hand and is used as it is.
-                tries = 1 if only else 6
-                best, last = None, None
-                for server in ordered[:tries]:
-                    ip, _host = engine.px.read_config(server.path)
-                    # The chosen exit's own provider, asked after it is
-                    # chosen. This used to be the Surfshark credential
-                    # whatever the exit, so a Windscribe country here was
-                    # refused by its own exit - and the server answered 503
-                    # for every connection after.
-                    user, password = self._engine.credentials_for(server)
-                    client.set_exit(ip, user, password, name=server.file)
-                    last = server.file
-                    if tries == 1:
-                        best = (server, ip, user, password, 0)
-                        break
-                    progress({'phase': 'starting', 'country': server.country,
-                              'city': f'testing upload via {server.file.split("_")[0]}'})
-                    rate = client.upload_rate('multi')
-                    if best is None or rate > best[4]:
-                        best = (server, ip, user, password, rate)
-                    if rate >= 64 << 10:
-                        break
-                server, ip, user, password, rate = best
-                if server.file != last:
-                    # The fastest was not the last one tried: put it back.
-                    client.set_exit(ip, user, password, name=server.file)
+                server, ip, user, password, rate = self._best_exit(
+                    client, ordered, 1 if only else 6,
+                    lambda s: progress({
+                        'phase': 'starting', 'country': s.country,
+                        'city': f'testing upload via {s.file.split("_")[0]}'}))
                 label = server.country
 
         return self._engine.connect_tunnel(
             client.address('multi' if mode == 'multi' else 'single'),
             label, progress)
+
+    def _best_exit(self, client, ordered, tries, testing=None):
+        """The server's exit-chain on whichever of `ordered` carries an
+        upload best, tried in order: (server, ip, user, password, rate).
+
+        From a server in Iran, upload is throttled per foreign exit IP: most
+        in a city carry next to nothing up while downloading at megabytes.
+        So each is set in turn and asked to carry an upload end to end, and
+        the first that does is kept - the location stays the one picked. A
+        single server (tries 1) was picked by hand and is used as it is.
+        """
+        best, last = None, None
+        for server in ordered[:tries]:
+            ip, _host = engine.px.read_config(server.path)
+            # The chosen exit's own provider, asked after it is chosen. This
+            # used to be the Surfshark credential whatever the exit, so a
+            # Windscribe country here was refused by its own exit - and the
+            # server answered 503 for every connection after.
+            user, password = self._engine.credentials_for(server)
+            client.set_exit(ip, user, password, name=server.file)
+            last = server.file
+            if tries == 1:
+                best = (server, ip, user, password, 0)
+                break
+            if testing:
+                testing(server)
+            rate = client.upload_rate('multi')
+            if best is None or rate > best[4]:
+                best = (server, ip, user, password, rate)
+            if rate >= 64 << 10:
+                break
+        if best is None:
+            raise RuntimeError('no-servers')
+        server, ip, user, password, rate = best
+        if server.file != last:
+            # The fastest was not the last one tried: put it back.
+            client.set_exit(ip, user, password, name=server.file)
+        return best
+
+    # -- configs for other devices (export.py) ------------------------------
+
+    def _export_ready(self):
+        st = self._settings
+        x = st.get('tunnelExport')
+        if not st.get('tunnelDomain'):
+            return {'ready': False, 'slots': 0,
+                    'why': 'Set up your own server first - configs for other '
+                           'devices go through it.'}
+        if not isinstance(x, dict) or not x.get('id'):
+            return {'ready': False, 'slots': 0,
+                    'why': 'Your server needs the installer from this version: '
+                           'run it again and paste the new key it prints.'}
+        if not paths.gost_exe():
+            return {'ready': False, 'slots': 0,
+                    'why': 'gost.exe is missing, so the upload of each location '
+                           'cannot be measured.'}
+        return {'ready': True, 'slots': int(x.get('slots') or 0), 'why': ''}
+
+    def exportState(self):
+        ready = self._export_ready()
+        last = self._settings.get('exportLast')
+        return {**ready, 'host': self._settings.get('tunnelDomain', ''),
+                'running': bool(getattr(self, '_exporting', False)),
+                'last': last if isinstance(last, dict) else None}
+
+    def cancelExport(self):
+        stop = getattr(self, '_export_stop', None)
+        if stop:
+            stop.set()
+        return {'ok': True}
+
+    def buildExport(self, picks):
+        """Point a slot at each picked location, then make the links.
+
+        Each location gets the exit that carries an upload best from the
+        server, found the way server + exit finds one - which moves the
+        server's own exit-chain about, so it is read first and put back
+        after. Then the server is asked to write it all to its file, so the
+        slots outlive a restart. A location that fails is said on its row
+        and the rest go on; the server refusing is the end of it.
+        """
+        ready = self._export_ready()
+        if not ready['ready']:
+            return {'ok': False, 'error': ready['why']}
+        if getattr(self, '_exporting', False):
+            return {'ok': False, 'error': 'Already making configs.'}
+        if self._busy:
+            return {'ok': False, 'error': 'Wait for the connection to finish.'}
+        # None is fine: the server's own slot is always made, and somebody
+        # may want only that.
+        picks = [p for p in (picks or []) if isinstance(p, dict)]
+        if len(picks) > ready['slots']:
+            return {'ok': False, 'error': f'Your server keeps {ready["slots"]} '
+                                          'locations at most.'}
+        self._exporting = True
+        self._export_stop = threading.Event()
+        stop = self._export_stop
+
+        def emit(i, label, phase, detail=''):
+            self._emit('ExportProgress', {'i': i, 'total': len(picks),
+                                          'label': label, 'phase': phase,
+                                          'detail': detail})
+
+        def work():
+            rows = []
+            try:
+                client = self._tunnel_client()
+                client.start()
+                saved = None
+                try:
+                    saved = client.chain('exit-chain')
+                except RuntimeError:
+                    pass
+                try:
+                    for i, pick in enumerate(picks, 1):
+                        label = str(pick.get('label') or pick.get('country')
+                                    or f'Location {i}')[:60]
+                        name = f'Relay · {label}'
+                        if stop.is_set():
+                            rows.append({'k': i, 'name': name,
+                                         'error': 'cancelled'})
+                            continue
+                        emit(i, label, 'testing')
+                        country = pick.get('country')
+                        try:
+                            ordered = self._engine.candidates(
+                                None if country in (None, '', 'auto') else country,
+                                provider=pick.get('provider') or None,
+                                only=pick.get('only') or None,
+                                city=pick.get('city') or None)
+                            if not ordered:
+                                raise RuntimeError('no exits for this location')
+                            server, ip, user, password, rate = self._best_exit(
+                                client, ordered, 1 if pick.get('only') else 6,
+                                lambda s, i=i, label=label: emit(
+                                    i, label, 'testing',
+                                    f'testing upload via {s.file.split("_")[0]}'))
+                            client.set_slot(i, ip, user, password,
+                                            name=server.file)
+                        except Exception as e:
+                            text = str(e)
+                            if 'refused the API' in text or 'no exported' in text:
+                                raise
+                            if text == 'no-servers':
+                                text = 'no exits for this location'
+                            rows.append({'k': i, 'name': name,
+                                         'error': text[:160]})
+                            emit(i, label, 'failed', text[:160])
+                            continue
+                        kb = int(rate / 1024)
+                        # Bytes a second, as measured; the page words it.
+                        rows.append({'k': i, 'name': name,
+                                     'exit': f'{server.country} · '
+                                             f'{server.file.split("_")[0]} ({ip})',
+                                     'upload': int(rate)})
+                        emit(i, label, 'pinned',
+                             f'{kb} KB/s up' if kb else 'pinned')
+                finally:
+                    if saved:
+                        try:
+                            client.put_chain('exit-chain', saved)
+                        except RuntimeError:
+                            pass
+                emit(len(picks), '', 'saving', 'saving on the server')
+                client.persist()
+
+                st = self._settings
+                x = st['tunnelExport']
+                edges = client.edges() or []
+                made = export.links(
+                    st['tunnelDomain'], x['id'],
+                    [{'k': 0, 'name': 'Relay · server'}]
+                    + [{'k': r['k'], 'name': r['name']} for r in rows
+                       if not r.get('error')],
+                    edge=edges[0] if edges else None, ss=st.get('tunnelSs'))
+                by_k = {r['k']: r for r in rows}
+                for row in made:
+                    extra = by_k.get(row['k']) or {}
+                    row.update({k: v for k, v in extra.items()
+                                if k in ('exit', 'upload')})
+                out = made + [r for r in rows if r.get('error')]
+                out.sort(key=lambda r: r['k'])
+                subscription = {'vless': export.subscription(made, 'vless'),
+                                'vmess': export.subscription(made, 'vmess')}
+                st['exportLast'] = {'at': int(time.time()), 'links': out,
+                                    'subscription': subscription}
+                save_settings(st)
+                self._emit('ExportDone', {'ok': True, 'links': out,
+                                          'subscription': subscription})
+            except Exception as e:
+                self._emit('ExportDone', {'ok': False, 'links': rows,
+                                          'error': str(e)[:200]})
+            finally:
+                self._exporting = False
+
+        threading.Thread(target=work, daemon=True).start()
+        return {'ok': True}
 
     def _confirm(self):
         """Ask Cloudflare, through the proxy, what address it sees.
@@ -2673,8 +3293,8 @@ def install_safety(api):
             # Same rule as disconnect: only ours to put back if the machine
             # is pointed at our port. Another copy of this app, on another
             # port, is somebody's live connection and not our business.
-            if api._sysproxy.engaged_for(api._engine.port):
-                api._sysproxy.restore()
+            # Whichever way it was pointed - the proxy setting or the adapter.
+            api._engine.release()
         except Exception:
             pass
         # A pinning run is an ordinary child of this process rather than

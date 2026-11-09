@@ -62,15 +62,92 @@ class PinChanged(RuntimeError):
     """A server by address showing a certificate other than the one kept."""
 
 
+KEY_PREFIX = 'relay://'
+SS_METHODS = ('chacha20-ietf-poly1305', 'aes-256-gcm', 'aes-128-gcm')
+
+
+def parse_key(text):
+    """What the installer's key says, checked, as a dict - or ValueError.
+
+    The key is relay:// and then base64url of a JSON object: the server, its
+    certificate's pin when it is reached by address, the two passwords and,
+    when the server offers it, Shadowsocks. Checked field by field rather
+    than trusted, because it arrives pasted out of a chat message, and a
+    value that is not what it claims would otherwise turn up much later as a
+    gost config that will not parse or a password that is a number.
+    """
+    raw = (text or '').strip()
+    if raw.lower().startswith(KEY_PREFIX):
+        raw = raw[len(KEY_PREFIX):]
+    # Chat apps wrap long lines; a key is one token, so whitespace is noise.
+    raw = ''.join(raw.split())
+    if not raw:
+        raise ValueError('that is empty')
+    try:
+        body = json.loads(base64.urlsafe_b64decode(raw + '=' * (-len(raw) % 4)))
+    except (ValueError, TypeError):
+        raise ValueError('that is not a Relay key - it should start with relay://')
+    if not isinstance(body, dict) or body.get('v') != 1:
+        raise ValueError('that key is from a newer Relay than this one')
+
+    def text_field(name, required=True):
+        value = body.get(name, '')
+        if not isinstance(value, str) or (required and not value.strip()):
+            raise ValueError(f'the key has no {name}')
+        return value.strip()
+
+    out = {'host': text_field('host'), 'pin': text_field('pin', False).lower(),
+           'password': text_field('pw'), 'api_password': text_field('apw'),
+           'ss': None, 'export': None}
+    host = out['host']
+    if not (is_address(host) or
+            all(part and len(part) < 64 and part.replace('-', '').isalnum()
+                for part in host.split('.'))):
+        raise ValueError('the server in that key is not an address or a name')
+    if out['pin'] and (len(out['pin']) != 64 or
+                       any(c not in '0123456789abcdef' for c in out['pin'])):
+        raise ValueError('the certificate pin in that key is malformed')
+    ss = body.get('ss')
+    if ss is not None:
+        ok = (isinstance(ss, dict) and ss.get('method') in SS_METHODS
+              and isinstance(ss.get('password'), str) and ss['password']
+              and all(isinstance(ss.get(p), int) and 0 < ss[p] < 65536
+                      for p in ('port', 'exitPort')))
+        if not ok:
+            raise ValueError("the key's Shadowsocks settings are malformed")
+        out['ss'] = {'method': ss['method'], 'password': ss['password'],
+                     'port': ss['port'], 'exitPort': ss['exitPort']}
+    # The locations the server keeps for other devices (export.py): an id
+    # the users' UUIDs are derived from, and how many there are.
+    x = body.get('x')
+    if x is not None:
+        xid = x.get('id') if isinstance(x, dict) else None
+        n = x.get('n') if isinstance(x, dict) else None
+        ok = (isinstance(xid, str) and 0 < len(xid) <= 64
+              and all(c.isascii() and (c.isalnum() or c in '-_') for c in xid)
+              and isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= 32)
+        if not ok:
+            raise ValueError("the key's exported locations are malformed")
+        out['export'] = {'id': xid, 'slots': n}
+    return out
+
+
 class Tunnel:
     """The gost client process, and the server's API behind it."""
 
-    def __init__(self, exe, workdir, domain, password, api_password):
+    def __init__(self, exe, workdir, domain, password, api_password,
+                 ss=None, expected_pin=''):
         self.exe = exe
         self.dir = workdir
         self.domain = domain
         self.password = password
         self.api_password = api_password
+        # The server's Shadowsocks settings when that is the way in, else None
+        # and the WebSocket through Cloudflare (or the address) is.
+        self.ss = ss
+        # The pin a key came with. Without one the first certificate seen is
+        # taken on trust, SSH-style; with one, even the first must match.
+        self.expected_pin = (expected_pin or '').lower()
         self.child = None
 
     # -- the child ---------------------------------------------------------
@@ -88,6 +165,15 @@ class Tunnel:
         is, and the second case is already asking somebody to wait.
         """
         os.makedirs(self.dir, exist_ok=True)
+        if self.ss:
+            # Straight to the address over Shadowsocks: no edges to measure
+            # and no certificate in the way in. The API still has one, which
+            # is fetched when the API is first asked for something.
+            text = config_text(self.domain, self.password, ss=self.ss)
+            with open(self.config_path, 'w', encoding='utf-8') as f:
+                f.write(text)
+            mirror(text)
+            return self.config_path
         if edges is None:
             edges = edges_for(self.dir, self.domain, quiet=True)
         ca = self.ensure_cert() if is_address(self.domain) else None
@@ -121,9 +207,21 @@ class Tunnel:
         return hashlib.sha256(der).hexdigest()
 
     def ensure_cert(self, timeout=15):
-        """The kept certificate's path, fetching it on first contact."""
+        """The kept certificate's path, fetching it on first contact.
+
+        With a pin from a key, the first contact is checked too: the key was
+        made on the server, so it knows which certificate is the real one,
+        and taking whatever answers first would waste that."""
         if not os.path.exists(self.cert_path):
             pem = ssl.get_server_certificate((self.domain, 443), timeout=timeout)
+            if self.expected_pin:
+                got = hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest()
+                if got != self.expected_pin:
+                    raise PinChanged(
+                        f'{self.domain} is showing a certificate that is not '
+                        f'the one in its key (sha256 {got[:16]}…, key says '
+                        f'{self.expected_pin[:16]}…). Something between here '
+                        'and the server is answering in its place.')
             os.makedirs(self.dir, exist_ok=True)
             with open(self.cert_path, 'w', encoding='ascii') as f:
                 f.write(pem)
@@ -346,6 +444,48 @@ class Tunnel:
         except (KeyError, IndexError):
             return ''
 
+    def set_slot(self, k, ip, user, password, name='current'):
+        """Point one exported location - loc-<k>, which links handed to
+        other devices are routed to - at a provider exit. The same node
+        set_exit writes, under another chain's name."""
+        if not 1 <= int(k) <= 32:
+            raise RuntimeError(f'slot {k} is not one the server has')
+        try:
+            self._put_exit(f'loc-{int(k)}', ip, user, password, name)
+        except RuntimeError as e:
+            if '404' in str(e):
+                raise RuntimeError('the server has no exported locations - run '
+                                   'the installer from this version again')
+            raise
+        return True
+
+    def chain(self, name):
+        """One of the server's chains as it is now, for putting back later."""
+        return (self._api(f'config/chains/{name}') or {}).get('data')
+
+    def put_chain(self, name, data):
+        self._api(f'config/chains/{name}', method='PUT', payload=data)
+
+    def persist(self):
+        """Write the server's running configuration to the file gost starts
+        from. Without it, everything set through the API - the exported
+        locations above all - goes back to the installer's placeholder the
+        next time the server restarts."""
+        self._api('config?format=yaml&path=/etc/gost/config.yaml',
+                  method='POST')
+
+    def _put_exit(self, chain, ip, user, password, name):
+        self._api(f'config/chains/{chain}', method='PUT', payload={
+            'name': chain,
+            'hops': [{'name': 'exit', 'nodes': [{
+                'name': name,
+                'addr': f'{ip}:443',
+                'connector': {'type': 'http',
+                              'auth': {'username': user, 'password': password}},
+                'dialer': {'type': 'tls', 'tls': {'secure': False}},
+            }]}],
+        })
+
     def set_exit(self, ip, user, password, name='current'):
         """Point multi-IP mode at a different node, live.
 
@@ -358,14 +498,5 @@ class Tunnel:
         installed - the caller is the one that has to decide whether a choice
         is worth persisting.
         """
-        self._api('config/chains/exit-chain', method='PUT', payload={
-            'name': 'exit-chain',
-            'hops': [{'name': 'exit', 'nodes': [{
-                'name': name,
-                'addr': f'{ip}:443',
-                'connector': {'type': 'http',
-                              'auth': {'username': user, 'password': password}},
-                'dialer': {'type': 'tls', 'tls': {'secure': False}},
-            }]}],
-        })
+        self._put_exit('exit-chain', ip, user, password, name)
         return True

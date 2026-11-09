@@ -2,9 +2,31 @@
 # Relay tunnel - server installer.
 #
 #   ./install-server.sh <ip-or-domain> [--password P] [--api-password A]
+#                       [--ss-port N] [--no-ss] [--slots N]
 #
 # One run sets up everything; the apps write this line themselves, with the
 # passwords they already hold, so nothing has to be copied back into them.
+#
+# It ends by printing a key - relay://... - that carries the server, its
+# passwords and its Shadowsocks settings. Pasted into either app it sets the
+# whole tunnel up, which is how a server set up by somebody else, or by hand,
+# reaches a phone without anybody typing a password into one.
+#
+# Shadowsocks is the second way in, beside the WebSocket that goes through
+# Cloudflare: straight to this server's address, on two ports. The first
+# (8388 unless --ss-port says otherwise) exits here; the one after it exits at
+# whichever provider location the app has chosen, the same exit-chain the
+# multi-IP WebSocket path uses. Straight to the address is the quicker of the
+# two ways in when the address is reachable, and the only one that counts as
+# domestic traffic when this server is inside Iran.
+#
+# It also keeps locations for other devices - an iPhone, a friend's laptop:
+# anything with a V2Ray client and no Relay (--slots, 8 unless told). Each is
+# a user on sing-box, reached by VLESS on /vl or VMess on /vm through the same
+# nginx, and routed to its own gost chain, loc-<k>, which the app points at a
+# provider location and saves. Slot 0 exits here. The users' UUIDs are derived
+# from one id kept in /etc/relay/export.id, which the key carries, so the app
+# can make any slot's link itself.
 #
 # An IP address is the ordinary case: no domain, no DNS, no CA. The server
 # gets a self-signed certificate for that address and the apps pin it the
@@ -23,15 +45,29 @@ set -euo pipefail
 DOMAIN=""
 NEWPW=""
 NEWAPW=""
+SSPORT=8388
+WITH_SS=1
+SLOTS=8
 while [ $# -gt 0 ]; do
   case "$1" in
     --password)     NEWPW="${2:-}"; shift 2 ;;
     --api-password) NEWAPW="${2:-}"; shift 2 ;;
+    --ss-port)      SSPORT="${2:-}"; shift 2 ;;
+    --no-ss)        WITH_SS=0; shift ;;
+    --slots)        SLOTS="${2:-}"; shift 2 ;;
     -*) echo "unknown option: $1" >&2; exit 1 ;;
     *)  DOMAIN="$1"; shift ;;
   esac
 done
-[ -n "$DOMAIN" ] || { echo "usage: $0 <ip-or-domain> [--password P] [--api-password A]" >&2; exit 1; }
+[ -n "$DOMAIN" ] || { echo "usage: $0 <ip-or-domain> [--password P] [--api-password A] [--ss-port N] [--no-ss] [--slots N]" >&2; exit 1; }
+[[ "$SLOTS" =~ ^[0-9]+$ ]] && [ "$SLOTS" -le 32 ] \
+  || { echo "--slots wants a number from 0 to 32" >&2; exit 1; }
+[[ "$SSPORT" =~ ^[0-9]+$ ]] && [ "$SSPORT" -ge 1 ] && [ "$SSPORT" -le 65534 ] \
+  || { echo "--ss-port wants a number from 1 to 65534" >&2; exit 1; }
+# The exit port is always the one after, so a key never has to say both and
+# a person reading a firewall rule can see they belong together.
+SSXPORT=$((SSPORT + 1))
+SSMETHOD=chacha20-ietf-poly1305
 
 # An address rather than a name: no certificate authority will vouch for it
 # without a name, so the certificate is this server's own.
@@ -80,7 +116,7 @@ fi
 sing-box version | head -1
 
 say "secrets"
-mkdir -p /etc/gost /etc/sing-box
+mkdir -p /etc/gost /etc/sing-box /etc/relay
 newpw() { head -c 18 /dev/urandom | base64 | tr -d '/+=' | head -c 20; }
 # The app's own passwords when it sent them, so it already knows them.
 if [ -n "$NEWPW" ];  then printf '%s' "$NEWPW"  > /etc/gost/tunnel.pw; fi
@@ -90,10 +126,24 @@ if [ -n "$NEWAPW" ]; then printf '%s' "$NEWAPW" > /etc/gost/api.pw; fi
 # Kept beside the passwords and generated once, so a phone that already holds
 # a config keeps working when this is run again.
 [ -s /etc/gost/vless.uuid ] || sing-box generate uuid > /etc/gost/vless.uuid
-chmod 600 /etc/gost/*.pw /etc/gost/vless.uuid
+# Shadowsocks has one key for everybody who connects, so it is its own and not
+# the tunnel password: a key handed to a phone should not also be the
+# password of the WebSocket paths.
+[ -s /etc/gost/ss.pw ] || newpw > /etc/gost/ss.pw
+# The id the exported locations' UUIDs are derived from. Kept, like the
+# rest, so links already handed out keep working when this runs again.
+[ -s /etc/relay/export.id ] || newpw > /etc/relay/export.id
+chmod 600 /etc/gost/*.pw /etc/gost/vless.uuid /etc/relay/export.id
 PW=$(cat /etc/gost/tunnel.pw)
+XID=$(cat /etc/relay/export.id)
+if [ "$SLOTS" -gt 0 ] && ! command -v python3 >/dev/null 2>&1; then
+  # The UUIDs are uuid5s, which is one line of Python and no line of bash.
+  echo "  python3 is missing, so no locations for other devices this time"
+  SLOTS=0
+fi
 APW=$(cat /etc/gost/api.pw)
 UUID=$(cat /etc/gost/vless.uuid)
+SSPW=$(cat /etc/gost/ss.pw)
 
 # The exit node's account is the app's to send (see the top). Until it does,
 # multi-IP mode points at a placeholder that refuses, which is the honest
@@ -172,6 +222,9 @@ NGX
   ws_block ex  10001     # multi-IP mode   - exits at the chosen Surfshark exit
   ws_block gwb 10002     # bulk, no multiplexing
   ws_block vl  10003     # the phone's door: VLESS over the same WebSocket
+  if [ "$SLOTS" -gt 0 ]; then
+    ws_block vm 10004    # other devices: VMess, beside the VLESS above
+  fi
   cat <<NGX
     location /api/ {
         proxy_pass http://127.0.0.1:18080/api/;
@@ -185,6 +238,53 @@ ln -sf "$SITE" /etc/nginx/sites-enabled/
 nginx -t >/dev/null && { systemctl enable --now nginx >/dev/null 2>&1 || true; systemctl reload nginx; }
 
 say "gost"
+# Not behind nginx: Shadowsocks is its own encryption on a bare TCP port, and
+# going straight to the address is the point of it. One key for both ports.
+SS_SERVICES=""
+if [ "$WITH_SS" = 1 ]; then
+  SS_SERVICES=$(cat <<YAML
+
+  - name: ss-single
+    addr: ":${SSPORT}"
+    handler: {type: ss, auth: {username: ${SSMETHOD}, password: ${SSPW}}}
+    listener: {type: tcp}
+
+  - name: ss-multi
+    addr: ":${SSXPORT}"
+    handler: {type: ss, chain: exit-chain, auth: {username: ${SSMETHOD}, password: ${SSPW}}}
+    listener: {type: tcp}
+YAML
+)
+fi
+# One gost service and chain per exported location: sing-box hands each
+# slot's user to its service, and the app points the chain at a provider
+# exit and saves the file. Until it does, each refuses, like exit-chain.
+LOC_SERVICES=""
+LOC_CHAINS=""
+for k in $(seq 1 "$SLOTS"); do
+  LOC_SERVICES="${LOC_SERVICES}
+  - name: loc-${k}
+    addr: \"127.0.0.1:$((10100 + k))\"
+    handler: {type: http, chain: loc-${k}, auth: {username: relay, password: ${PW}}}
+    listener: {type: tcp}
+"
+  LOC_CHAINS="${LOC_CHAINS}
+  - name: loc-${k}
+    hops:
+      - name: exit
+        nodes:
+          - name: current
+            addr: 146.70.194.221:443
+            connector:
+              type: http
+              auth:
+                username: \"${SSU}\"
+                password: \"${SSP}\"
+            dialer:
+              type: tls
+              tls: {secure: false}
+"
+done
 cat > "$CFG" <<YAML
 api:
   addr: "127.0.0.1:18080"
@@ -209,6 +309,8 @@ services:
     addr: "127.0.0.1:10002"
     handler: {type: http, auth: {username: relay, password: ${PW}}}
     listener: {type: ws, metadata: {path: /gwb}}
+${SS_SERVICES}
+${LOC_SERVICES}
 
 chains:
   - name: exit-chain
@@ -225,6 +327,7 @@ chains:
             dialer:
               type: tls
               tls: {secure: false}
+${LOC_CHAINS}
 
 log:
   level: info
@@ -235,6 +338,44 @@ say "sing-box"
 # No TLS here and none wanted: nginx has already terminated it, and behind
 # that Cloudflare terminated the one the phone actually made. This end only
 # has to be the far side of the WebSocket that arrives on /vl.
+if [ "$SLOTS" -gt 0 ]; then
+  # Written by Python: one user per slot on each door, each routed to its
+  # own gost chain, and that is more JSON than a heredoc should be trusted
+  # with.
+  UUID="$UUID" XID="$XID" N="$SLOTS" PW="$PW" python3 - > "$SBCFG" <<'PY'
+import json, os, uuid
+e = os.environ
+n = int(e['N'])
+
+def users():
+    return [{'name': f'slot-{k}',
+             'uuid': str(uuid.uuid5(uuid.NAMESPACE_URL,
+                                    f"relay-export:{e['XID']}:{k}"))}
+            for k in range(n + 1)]
+
+print(json.dumps({
+    'log': {'level': 'warn', 'timestamp': True},
+    'inbounds': [
+        {'type': 'vless', 'tag': 'phone', 'listen': '127.0.0.1',
+         'listen_port': 10003,
+         'users': [{'name': 'relay', 'uuid': e['UUID']}] + users(),
+         'transport': {'type': 'ws', 'path': '/vl'}},
+        {'type': 'vmess', 'tag': 'others', 'listen': '127.0.0.1',
+         'listen_port': 10004,
+         'users': [dict(u, alterId=0) for u in users()],
+         'transport': {'type': 'ws', 'path': '/vm'}},
+    ],
+    'outbounds': [{'type': 'direct', 'tag': 'out'}] + [
+        {'type': 'http', 'tag': f'loc-{k}', 'server': '127.0.0.1',
+         'server_port': 10100 + k, 'username': 'relay', 'password': e['PW']}
+        for k in range(1, n + 1)],
+    'route': {
+        'rules': [{'auth_user': [f'slot-{k}'], 'outbound': f'loc-{k}'}
+                  for k in range(1, n + 1)],
+        'final': 'out'},
+}, indent=2))
+PY
+else
 cat > "$SBCFG" <<JSON
 {
   "log": { "level": "warn", "timestamp": true },
@@ -251,6 +392,7 @@ cat > "$SBCFG" <<JSON
   "outbounds": [ { "type": "direct", "tag": "out" } ]
 }
 JSON
+fi
 chmod 600 "$SBCFG"
 sing-box check -c "$SBCFG"
 
@@ -284,10 +426,54 @@ for unit in gost sing-box; do
 done
 sleep 2
 
+if [ "$WITH_SS" = 1 ] && command -v ufw >/dev/null 2>&1 \
+    && ufw status 2>/dev/null | grep -q '^Status: active'; then
+  # Only when ufw is already guarding the box: switching a firewall on is not
+  # this script's decision, but leaving its own ports shut behind one is.
+  say "firewall"
+  ufw allow "${SSPORT}/tcp" >/dev/null
+  ufw allow "${SSXPORT}/tcp" >/dev/null
+  echo "  opened ${SSPORT}/tcp and ${SSXPORT}/tcp"
+fi
+
+# The key: everything an app needs, in one line to paste. base64url of a JSON
+# object so it survives a chat message, a QR code and a terminal that wraps.
+# Kept on the server, so it can be shown again without running this again:
+#   cat /etc/relay/key
+mkdir -p /etc/relay
+SSJSON=""
+if [ "$WITH_SS" = 1 ]; then
+  SSJSON=",\"ss\":{\"method\":\"${SSMETHOD}\",\"password\":\"${SSPW}\",\"port\":${SSPORT},\"exitPort\":${SSXPORT}}"
+fi
+if command -v python3 >/dev/null 2>&1; then
+  KEY=$(HOST="$DOMAIN" PIN="$PIN" PW="$PW" APW="$APW" SS="$WITH_SS" \
+        SSM="$SSMETHOD" SSP="$SSPW" SSPORT="$SSPORT" SSX="$SSXPORT" \
+        XID="$XID" SLOTS="$SLOTS" python3 - <<'PY'
+import base64, json, os
+e = os.environ
+key = {'v': 1, 'host': e['HOST'], 'pin': e['PIN'], 'pw': e['PW'], 'apw': e['APW']}
+if e['SS'] == '1':
+    key['ss'] = {'method': e['SSM'], 'password': e['SSP'],
+                 'port': int(e['SSPORT']), 'exitPort': int(e['SSX'])}
+if int(e['SLOTS']) > 0:
+    key['x'] = {'id': e['XID'], 'n': int(e['SLOTS'])}
+raw = json.dumps(key, separators=(',', ':')).encode()
+print('relay://' + base64.urlsafe_b64encode(raw).decode().rstrip('='))
+PY
+)
+else
+  # Every value here is an address, hex, a number or a generated password,
+  # none of which needs escaping in JSON.
+  RAW="{\"v\":1,\"host\":\"${DOMAIN}\",\"pin\":\"${PIN}\",\"pw\":\"${PW}\",\"apw\":\"${APW}\"${SSJSON}}"
+  KEY="relay://$(printf '%s' "$RAW" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+fi
+printf '%s\n' "$KEY" > /etc/relay/key
+chmod 600 /etc/relay/key
+
 say "result"
 for unit in gost sing-box; do printf '  %-9s %s
 ' "$unit" "$(systemctl is-active "$unit")"; done
-ss -lnt | grep -E '127.0.0.1:(1000[0-3]|18080)' | awk '{print "  listening " $4}'
+ss -lnt | grep -E "127.0.0.1:(1000[0-4]|101[0-3][0-9]|18080)|:(${SSPORT}|${SSXPORT}) " | awk '{print "  listening " $4}'
 cat <<SUMMARY
 
   Done. The app that gave you this command already has what it needs:
@@ -306,7 +492,29 @@ cat <<SUMMARY
     single-IP  wss://${DOMAIN}/gw     (exits here)
     multi-IP   wss://${DOMAIN}/ex     (exits at the location the app picks)
     control    https://${DOMAIN}/api/config/chains/exit-chain
+SUMMARY
+if [ "$WITH_SS" = 1 ]; then
+  cat <<SUMMARY
+    shadowsocks ${DOMAIN}:${SSPORT}  (exits here)
+                ${DOMAIN}:${SSXPORT}  (exits at the location the app picks)
+                ${SSMETHOD}
+SUMMARY
+fi
+if [ "$SLOTS" -gt 0 ]; then
+  cat <<SUMMARY
+    other devices  ${SLOTS} locations, VLESS on /vl and VMess on /vm
+                   (the app picks them: Settings, Share with other devices -
+                   running this again resets them, so share again after)
+SUMMARY
+fi
+cat <<SUMMARY
 
   For phones - ovpn-mobile.py --tunnel wants:  server ${DOMAIN}  path /vl  uuid ${UUID}
+
+  The key for either app - Settings, Your own tunnel, Paste a key.
+  It holds the passwords above: treat it like one. Shown again by
+  cat /etc/relay/key
+
+${KEY}
 
 SUMMARY

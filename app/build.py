@@ -542,6 +542,8 @@ def main():
         # The page, its stylesheet, its script and the vendored search.
         '--add-data', f'{os.path.join(HERE, "ui")}{sep}ui',
         '--add-data', f'{os.path.join(HERE, "assets")}{sep}assets',
+        # Split tunnelling's Iran preset, read by split.py from the bundle.
+        '--add-data', f'{os.path.join(ROOT, "lists")}{sep}lists',
         # The proxy lives in core/ in the repo and at the top of the bundle
         # once frozen; paths.py knows the difference.
         '--add-data', f'{proxy_source}{sep}.',
@@ -673,6 +675,22 @@ def main():
         print('tunnel: MISSING - the app will connect through the provider, '
               'but "Your own tunnel" will say it has no client to run. Put '
               'gost.exe and install-server.sh in tunnel/ and build again.')
+
+    # What brings up the network adapter when Windows is routed by tunnel
+    # rather than by the proxy setting. Beside the exe for the same reason as
+    # gost. sing-box is GPL, so its licence travels with it, named so it is
+    # not mistaken for this app's.
+    adapter = os.path.join(ROOT, 'tunnel', 'sing-box.exe')
+    if os.path.isfile(adapter):
+        shutil.copy2(adapter, os.path.join(out, 'sing-box.exe'))
+        licence = os.path.join(ROOT, 'tunnel', 'sing-box-LICENSE.txt')
+        if os.path.isfile(licence):
+            shutil.copy2(licence, os.path.join(out, 'sing-box-LICENSE.txt'))
+        print('tun: sing-box copied')
+    else:
+        print('tun: MISSING - the proxy setting works, but "Tunnel (TUN)" '
+              'will be greyed out. Put sing-box.exe in tunnel/ and build '
+              'again.')
 
     # Who each address is rented from. Already paid for - one HTTP request per
     # hundred addresses, with a deliberate wait between them - and without it

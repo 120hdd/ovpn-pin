@@ -306,20 +306,21 @@ type cityRow struct {
 }
 
 type countryRow struct {
-	Code     string         `json:"code"`
-	Name     string         `json:"name"`
-	Alias    []string       `json:"alias"`
-	Cities   int            `json:"cities"`
-	CityList []cityRow      `json:"cityList"`
-	Count    int            `json:"count"`
-	By       map[string]int `json:"by"`
-	Tested   int            `json:"tested"`
-	OK       int            `json:"ok"`
-	Ping     *int           `json:"ping"`
-	ByOK     map[string]int `json:"byOk"`
-	ByTested map[string]int `json:"byTested"`
-	ByPing   map[string]int `json:"byPing"`
-	Best     *float64       `json:"best"`
+	Code      string         `json:"code"`
+	Name      string         `json:"name"`
+	Continent string         `json:"continent"` // the group the list shows it under
+	Alias     []string       `json:"alias"`
+	Cities    int            `json:"cities"`
+	CityList  []cityRow      `json:"cityList"`
+	Count     int            `json:"count"`
+	By        map[string]int `json:"by"`
+	Tested    int            `json:"tested"`
+	OK        int            `json:"ok"`
+	Ping      *int           `json:"ping"`
+	ByOK      map[string]int `json:"byOk"`
+	ByTested  map[string]int `json:"byTested"`
+	ByPing    map[string]int `json:"byPing"`
+	Best      *float64       `json:"best"`
 }
 
 // blocked is the one thing about a list of places to connect through that is
@@ -382,11 +383,12 @@ func (c *Catalogue) CountriesJSON() string {
 		if c2 == nil {
 			c2 = &countryRow{
 				Code: s.Country, Name: CountryName(s.Country),
-				Alias:    Aliases(s.Country),
-				By:       map[string]int{},
-				ByOK:     map[string]int{},
-				ByTested: map[string]int{},
-				ByPing:   map[string]int{},
+				Continent: ContinentOf(s.Country),
+				Alias:     Aliases(s.Country),
+				By:        map[string]int{},
+				ByOK:      map[string]int{},
+				ByTested:  map[string]int{},
+				ByPing:    map[string]int{},
 			}
 			countries[s.Country] = c2
 			order = append(order, s.Country)

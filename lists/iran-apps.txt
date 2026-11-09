@@ -1,0 +1,39 @@
+# Android package names of Iranian apps, for the Iran preset on Android:
+# with it on, these apps are left out of the VPN altogether (Except these)
+# or are the apps carried (Only these). Left out entirely rather than
+# routed address by address, because some of them - banks most of all -
+# refuse to run while they can see a VPN, and an app left out of one does
+# not see it.
+#
+# Written by hand. A name here that is not installed costs nothing; a name
+# that belongs to something else would, so nothing goes in on a guess. An
+# app missing from here is still covered where it matters most: whatever
+# it talks to inside Iran matches iran-ipv4.txt.
+
+# App stores
+com.farsitel.bazaar
+ir.mservices.market
+
+# Shops, rides and food
+com.digikala
+ir.divar
+cab.snapp.passenger
+com.zoodfood.android
+com.sheypoor.mobile
+
+# Messengers
+ir.eitaa.messenger
+app.rbmain.a
+ir.nasim
+mobi.mmdt.ottplus
+
+# Video
+com.aparat
+
+# Maps
+ir.balad
+org.rajman.neshan.traffic.tehran
+
+# Operators
+com.myirancell
+ir.mci.ecareapp
