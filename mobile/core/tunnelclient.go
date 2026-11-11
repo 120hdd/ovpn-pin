@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,7 +34,8 @@ import (
 // the server were installed against that version and the framing has to match
 // it exactly:
 //
-//	TCP     to a Cloudflare edge address on 443
+//	TCP     to a Cloudflare edge address on 443 (or the server's own port,
+//	        when its installer was given --port: Cloudflare proxies 8443 too)
 //	TLS     with ServerName set to the domain. The name IS announced here,
 //	        and that is not a lapse - Cloudflare has to see it to know which
 //	        site the connection is for. It is the opposite decision from
@@ -81,6 +83,10 @@ type TunnelServer struct {
 	Password string   // the CONNECT credential, sent as relay:<this>
 	Edges    []string // Cloudflare addresses to dial, quickest first
 
+	// Port is where the server (or its Cloudflare edge) takes TLS. 0 means
+	// 443, so a server built without it is the one every install used to be.
+	Port int
+
 	// Pin is the SHA-256 of the certificate a server reached by IP address
 	// must serve, in hex. Such a server has no name for a CA to vouch for,
 	// so its installer makes its own certificate and the app trusts that
@@ -95,6 +101,14 @@ type TunnelServer struct {
 	mu   sync.Mutex
 	sess *smux.Session
 	mode TunnelMode
+}
+
+// tlsPort is the port to dial: the server's own, or 443 when none is set.
+func tlsPort(p int) int {
+	if p <= 0 {
+		return 443
+	}
+	return p
 }
 
 // NewTunnelServer prepares a client. Nothing is dialled until Open.
@@ -135,7 +149,7 @@ func (t *TunnelServer) dialEdges(ctx context.Context, timeout time.Duration) (ne
 
 func (t *TunnelServer) dialOne(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
 	raw, err := (&net.Dialer{Timeout: timeout}).DialContext(
-		ctx, "tcp", net.JoinHostPort(addr, "443"))
+		ctx, "tcp", net.JoinHostPort(addr, strconv.Itoa(tlsPort(t.Port))))
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +166,14 @@ func (t *TunnelServer) dialOne(ctx context.Context, addr string, timeout time.Du
 		TLSClientConfig:  t.tlsConfig(),
 	}
 
-	u := url.URL{Scheme: "wss", Host: t.Domain, Path: t.mode.path()}
+	// The URL's host is only what TLS and the Host header are made from -
+	// the connection is already open - but a non-default port belongs in the
+	// Host header, where the server's nginx and Cloudflare expect to see it.
+	host := t.Domain
+	if p := tlsPort(t.Port); p != 443 {
+		host = net.JoinHostPort(t.Domain, strconv.Itoa(p))
+	}
+	u := url.URL{Scheme: "wss", Host: host, Path: t.mode.path()}
 	ws, resp, err := dialer.DialContext(ctx, u.String(), nil)
 	if err != nil {
 		raw.Close()

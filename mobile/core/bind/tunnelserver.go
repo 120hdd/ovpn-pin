@@ -28,7 +28,10 @@ import (
 // passwords the wrong way round exactly once and then behaves strangely
 // forever.
 type ServerConfig struct {
-	Domain   string
+	Domain string
+	// Port is where the server takes TLS; 0 means 443. Only the installer's
+	// --port makes it anything else, and the key then says so.
+	Port     int
 	Password string // the CONNECT credential
 	Mode     string // "single", "multi" or "bulk"
 
@@ -75,12 +78,12 @@ func (c *ServerConfig) edges() []string {
 //
 // Blocking, and about five seconds - fifty-six addresses at twenty-eight at a
 // time, and the blocked ones are what it waits for.
-func ScanEdges(domain string, timeoutMs int) (string, error) {
+func ScanEdges(domain string, port, timeoutMs int) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(),
 		time.Duration(timeoutMs)*time.Millisecond)
 	defer cancel()
 
-	live, said, err := core.EdgesFor(ctx, domain, 2500*time.Millisecond)
+	live, said, err := core.EdgesFor(ctx, domain, port, 2500*time.Millisecond)
 	if err != nil {
 		// The tally comes back with the error rather than instead of it:
 		// "no edges" has four causes and only one of them is the server.
@@ -123,13 +126,14 @@ func (c *ServerConfig) server() core.ServerWay {
 	}
 	srv := core.NewTunnelServer(c.Domain, c.Password, c.edges(), core.TunnelMode(c.Mode))
 	srv.Pin = c.Pin
+	srv.Port = c.Port
 	return srv
 }
 
 // ParseKey reads the key the server's installer printed (relay://...) and
 // hands back what it says as JSON, checked: host, pin, password,
-// apiPassword and, when the server offers it, ss {method, password, port,
-// exitPort}. What the settings screen calls when a key is pasted.
+// apiPassword, port (the server's TLS port, 443 when the key has none) and,
+// when the server offers it, ss {method, password, port, exitPort}. What the settings screen calls when a key is pasted.
 func ParseKey(text string) (string, error) {
 	k, err := core.ParseRelayKey(text)
 	if err != nil {
@@ -161,7 +165,7 @@ func SetServerExit(cfg *ServerConfig, apiPassword, exitIP, user, password, name 
 	if cfg == nil || cfg.Domain == "" {
 		return errors.New("no server configured")
 	}
-	return core.SetExit(cfg.Domain, apiPassword, cfg.Pin, exitIP, user, password, name,
+	return core.SetExit(cfg.Domain, cfg.Port, apiPassword, cfg.Pin, exitIP, user, password, name,
 		time.Duration(timeoutMs)*time.Millisecond)
 }
 

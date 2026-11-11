@@ -1071,6 +1071,12 @@ class RelayCore(private val app: Application) {
     private fun edgeList(): List<String> =
         prefs.getString("tunnelEdges", "").orEmpty().lines().map { it.trim() }.filter { it.isNotEmpty() }
 
+    /**
+     * Where the server takes TLS. 443 unless its key said otherwise, and 443
+     * for an install that predates the setting - the pref is simply missing.
+     */
+    private fun tunnelPort(): Long = prefs.getInt("tunnelPort", 443).toLong()
+
     private fun hasSs() = !prefs.getString("tunnelSsPassword", "").isNullOrEmpty()
 
     private fun viaSs() = hasSs() && prefs.getString("tunnelTransport", "") == "ss"
@@ -1111,7 +1117,8 @@ class RelayCore(private val app: Application) {
         // Links made for another server - or for this one before it was
         // installed again, with new ids - no longer open anything.
         val stale = key.optString("host") != prefs.getString("tunnelDomain", "") ||
-            exportId != prefs.getString("tunnelExportId", "")
+            exportId != prefs.getString("tunnelExportId", "") ||
+            key.optInt("port", 443) != prefs.getInt("tunnelPort", 443)
         prefs.edit().apply {
             if (shared != null) {
                 putString("tunnelExportId", exportId)
@@ -1126,6 +1133,9 @@ class RelayCore(private val app: Application) {
             // The key's pin is the server's own word for its certificate, so
             // even the first connection is checked against it.
             putString("tunnelPin", key.optString("pin"))
+            // Always written, so a key with no port (443) cannot inherit the
+            // port of whichever server was pasted before it.
+            putInt("tunnelPort", key.optInt("port", 443))
             remove("tunnelEdges")
             if (ss != null) {
                 putString("tunnelSsMethod", ss.optString("method"))
@@ -1183,7 +1193,7 @@ class RelayCore(private val app: Application) {
             // were the old one's - and so were its shared locations, and
             // the links made for them.
             if (domain.trim() != was) {
-                remove("tunnelEdges"); remove("tunnelPin")
+                remove("tunnelEdges"); remove("tunnelPin"); remove("tunnelPort")
                 remove("tunnelSsMethod"); remove("tunnelSsPassword")
                 remove("tunnelSsPort"); remove("tunnelSsExitPort")
                 putString("tunnelTransport", "ws")
@@ -1431,7 +1441,7 @@ class RelayCore(private val app: Application) {
     suspend fun rescanEdges(): Said = withContext(io) {
         val domain = prefs.getString("tunnelDomain", "").orEmpty()
         if (domain.isEmpty()) return@withContext Said.no("No server domain saved yet.")
-        val found = JSONObject(Relay.scanEdgesJSON(domain, 40000L))
+        val found = JSONObject(Relay.scanEdgesJSON(domain, tunnelPort(), 40000L))
         val edges = found.optJSONArray("edges").strings()
         if (edges.isNotEmpty()) {
             prefs.edit().putString("tunnelEdges", edges.joinToString("\n")).apply()
@@ -1460,6 +1470,7 @@ class RelayCore(private val app: Application) {
         cfg.mode = mode
         cfg.edges = prefs.getString("tunnelEdges", "").orEmpty()
         cfg.pin = prefs.getString("tunnelPin", "").orEmpty()
+        cfg.port = tunnelPort()
         // Straight to the address: there is no other way in to go looking
         // for, so a failure is the answer rather than a reason to scan.
         if (applySs(cfg)) {
@@ -1473,7 +1484,7 @@ class RelayCore(private val app: Application) {
         try {
             ask(cfg)
         } catch (first: Exception) {
-            val scan = JSONObject(Relay.scanEdgesJSON(domain, 40000L))
+            val scan = JSONObject(Relay.scanEdgesJSON(domain, tunnelPort(), 40000L))
             val found = scan.optJSONArray("edges").strings()
             if (found.isEmpty()) {
                 return@withContext Said.no("No way in: " +
@@ -1712,10 +1723,11 @@ class RelayCore(private val app: Application) {
         cfg.mode = "multi"
         cfg.edges = prefs.getString("tunnelEdges", "").orEmpty()
         cfg.pin = prefs.getString("tunnelPin", "").orEmpty()
+        cfg.port = tunnelPort()
         val viaSs = applySs(cfg)
         if (!viaSs && cfg.edges.isBlank() && picks.isNotEmpty()) {
             cfg.edges = try {
-                Relay.scanEdges(domain, 30000L)
+                Relay.scanEdges(domain, tunnelPort(), 30000L)
             } catch (e: Exception) {
                 ""
             }
@@ -1799,7 +1811,7 @@ class RelayCore(private val app: Application) {
         val asked = JSONArray().put(JSONObject().put("k", 0).put("name", SERVER_SLOT))
         for (s in pinned) asked.put(JSONObject().put("k", s.k).put("name", slotName(s.name)))
         val made = try {
-            JSONArray(Relay.exportLinksJSON(domain, edgeList().firstOrNull().orEmpty(), id,
+            JSONArray(Relay.exportLinksJSON(domain, tunnelPort(), edgeList().firstOrNull().orEmpty(), id,
                 asked.toString(), ssJson()))
         } catch (e: Exception) {
             return Said.no(e.message ?: "The links could not be made.")

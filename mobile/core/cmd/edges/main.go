@@ -21,6 +21,7 @@ import (
 func main() {
 	timeout := flag.Duration("timeout", 2500*time.Millisecond, "per-address budget")
 	width := flag.Int("width", 28, "how many to ask at once")
+	port := flag.Int("port", 443, "the TLS port the server listens on")
 	all := flag.Bool("all", false, "print every address, not just the live ones")
 	flag.Parse()
 
@@ -35,7 +36,7 @@ func main() {
 
 	if *all {
 		for _, ip := range core.EdgeCandidates() {
-			v, took := core.EdgeProbe(ctx, domain, ip, *timeout)
+			v, took := core.EdgeProbe(ctx, domain, ip, *port, *timeout)
 			fmt.Printf("  %-16s %-8s %6.2fs\n", ip, v, took.Seconds())
 		}
 		return
@@ -44,9 +45,9 @@ func main() {
 	// EdgesFor picks its own width; the flag is here for a line where
 	// twenty-eight handshakes at once is itself the thing being measured.
 	if *width != 28 {
-		core.EdgeScan(ctx, domain, *timeout, *width)
+		core.EdgeScan(ctx, domain, *port, *timeout, *width)
 	}
-	live, said, err := core.EdgesFor(ctx, domain, *timeout)
+	live, said, err := core.EdgesFor(ctx, domain, *port, *timeout)
 	fmt.Printf("  asked %d addresses in %.1fs\n  %s\n\n",
 		len(core.EdgeCandidates()), time.Since(started).Seconds(), said)
 

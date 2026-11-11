@@ -42,6 +42,14 @@ def test_reads_a_wrapped_padded_key():
     wrapped = text[:20] + '\n   ' + text[20:]
     k = tunnel.parse_key(wrapped)
     assert k['host'] == 'relay.example.com' and k['ss'] is None
+    # No port in the key is every key made before there could be one.
+    assert k['port'] == 443
+
+
+def test_reads_a_port():
+    k = tunnel.parse_key(key({'v': 1, 'host': '203.0.113.7', 'pin': PIN,
+                              'pw': 'p', 'apw': 'a', 'port': 8443}))
+    assert k['port'] == 8443
 
 
 def test_refuses_what_the_phone_refuses():
@@ -60,6 +68,15 @@ def test_refuses_what_the_phone_refuses():
                          'ss': {**SS, 'port': 0}}),
         'no ss secret': key({'v': 1, 'host': 'h', 'pw': 'p', 'apw': 'a',
                              'ss': {**SS, 'password': ''}}),
+        'port 0': key({'v': 1, 'host': 'h', 'pw': 'p', 'apw': 'a', 'port': 0}),
+        'port too big': key({'v': 1, 'host': 'h', 'pw': 'p', 'apw': 'a',
+                             'port': 65536}),
+        'port as text': key({'v': 1, 'host': 'h', 'pw': 'p', 'apw': 'a',
+                             'port': '8443'}),
+        'port as bool': key({'v': 1, 'host': 'h', 'pw': 'p', 'apw': 'a',
+                             'port': True}),
+        'port fraction': key({'v': 1, 'host': 'h', 'pw': 'p', 'apw': 'a',
+                              'port': 8443.5}),
     }
     for name, text in bad.items():
         try:
@@ -97,6 +114,25 @@ def test_ss_config_dials_the_address():
 def test_ws_config_is_unchanged():
     text = tunnel.config_text('relay.example.com', 'pw', ['1.2.3.4'])
     assert 'type: ss' not in text and 'mwss' in text
+    assert 'addr: 1.2.3.4:443' in text
+
+
+def test_ws_config_dials_the_keys_port():
+    # A server whose 443 belongs to something else: every WebSocket node -
+    # by address or through an edge - dials the port the key named, and the
+    # local side does not move.
+    for edges in (None, ['1.2.3.4']):
+        text = tunnel.config_text('203.0.113.7', 'pw', edges, port=8443)
+        assert ':443' not in text, text
+        assert text.count(':8443\n') == len(tunnel.PORTS), text
+        for p in tunnel.PORTS.values():
+            assert f'"127.0.0.1:{p}"' in text
+
+
+def test_client_uses_the_port_for_the_api_and_the_certificate():
+    t = tunnel.Tunnel('gost.exe', '.', '203.0.113.7', 'pw', 'apw', port=8443)
+    assert t.origin == '203.0.113.7:8443'
+    assert tunnel.Tunnel('gost.exe', '.', 'h.example', 'pw', 'apw').origin == 'h.example'
 
 
 if __name__ == '__main__':

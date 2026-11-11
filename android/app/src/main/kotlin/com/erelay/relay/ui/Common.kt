@@ -55,6 +55,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.graphicsLayer
@@ -91,6 +92,7 @@ import com.erelay.relay.ui.theme.Shape
 import com.erelay.relay.ui.theme.Space
 import com.erelay.relay.ui.theme.Tone
 import com.erelay.relay.ui.theme.Type
+import com.erelay.relay.ui.theme.script
 
 /** A click with no ripple: the desktop's controls light up on their own. */
 /** The look-and-feel settings, for controls deep in the tree that answer to them. */
@@ -116,6 +118,8 @@ fun Modifier.press(
     source: MutableInteractionSource? = null,
     /** How far a [sink] gives: a key's worth by default, less for a wide field. */
     sinkTo: Float = 0.965f,
+    /** A button's press (DESIGN-NIGHT 4): it moves down 1dp under the finger. */
+    nudge: Boolean = false,
     onClick: () -> Unit,
 ): Modifier = composed {
     val source = source ?: remember { MutableInteractionSource() }
@@ -128,10 +132,13 @@ fun Modifier.press(
         tween(if (pressed) 40 else 280), label = "lit")
     val scale by animateFloatAsState(if (pressed && enabled && sink) sinkTo else 1f,
         spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow), label = "sink")
+    val dy by animateFloatAsState(if (pressed && enabled && nudge) 1f else 0f,
+        tween(if (pressed) 60 else 160), label = "nudge")
     this
         .graphicsLayer {
             scaleX = scale
             scaleY = scale
+            translationY = dy * 1.dp.toPx()
         }
         .drawWithContent {
             drawContent()
@@ -146,10 +153,17 @@ fun Modifier.press(
         }
 }
 
-/** The page behind everything: the theme's bg, flat. Nothing glows. */
+/**
+ * The page behind everything (DESIGN-NIGHT 1): the theme's bg, a soft
+ * spotlight cone falling from the top, and a fine film grain. The content
+ * gets a layer of its own, so the page under it is drawn once and not
+ * repainted when something on it changes.
+ */
 @Composable
 fun Backdrop(content: @Composable () -> Unit) {
-    Box(Modifier.fillMaxSize().background(Tone.bg)) { content() }
+    Box(Modifier.fillMaxSize().nightPage()) {
+        Box(Modifier.fillMaxSize().graphicsLayer()) { content() }
+    }
 }
 
 /**
@@ -240,13 +254,12 @@ fun IconButton(
     Box(
         Modifier
             .size(size)
-            .press(enabled, RoundedCornerShape(12.dp), sink = true, feel = feel, onClick = onClick)
-            .clip(RoundedCornerShape(12.dp))
-            .then(if (ringed) Modifier.border(1.dp, Tone.strokeStrong, RoundedCornerShape(12.dp))
-                  else Modifier),
+            .press(enabled, CircleShape, sink = true, feel = feel, onClick = onClick)
+            .clip(CircleShape)
+            .then(if (ringed) Modifier.border(1.dp, Tone.stroke, CircleShape) else Modifier),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, label, Modifier.size(18.dp),
+        Icon(icon, label, Modifier.size(if (size < 40.dp) 18.dp else 20.dp),
             tint = if (enabled) tint else tint.copy(alpha = 0.4f))
     }
 }
@@ -278,8 +291,8 @@ fun Section(
 }
 
 /**
- * A joined list: one surface, an outer radius of 16, 1px separators between
- * rows ([Sep]) and nothing else between them.
+ * A joined list: one Slate card (radius 28, 1dp Edge, no shadow), hairlines
+ * between rows ([Sep]) and nothing else between them.
  */
 @Composable
 fun Group(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
@@ -294,14 +307,14 @@ fun Group(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> 
 @Composable
 fun Block(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Group(modifier) {
-        Column(Modifier.fillMaxWidth().padding(Space.x4), content = content)
+        Column(Modifier.fillMaxWidth().padding(Space.x5), content = content)
     }
 }
 
-/** The 1px separator between two rows of a [Group]. */
+/** The hairline between two rows of a [Group], inset from the card's edges. */
 @Composable
 fun Sep() {
-    Box(Modifier.fillMaxWidth().height(1.dp).background(Tone.stroke))
+    Box(Modifier.fillMaxWidth().padding(horizontal = Space.x5).height(1.dp).background(Tone.hairline))
 }
 
 @Composable
@@ -327,10 +340,11 @@ fun SettingRow(
     androidx.compose.material3.ListItem(
         modifier = modifier
             .heightIn(min = 56.dp)
-            .then(if (onClick != null) Modifier.clickable(enabled = enabled, onClick = onClick) else Modifier),
+            .then(if (onClick != null) Modifier.press(enabled, onClick = onClick) else Modifier)
+            .padding(horizontal = Space.x1),
         colors = rowColors(),
-        leadingContent = leading ?: icon?.let { i -> { Icon(i, null, Modifier.size(20.dp), tint = Tone.text2) } },
-        headlineContent = { Text(title, style = Type.strong) },
+        leadingContent = leading ?: icon?.let { i -> { IconWell(i, size = 36.dp) } },
+        headlineContent = { Text(title, style = Type.strong.script(title)) },
         supportingContent = desc?.let { d -> { Text(d, style = Type.caption) } },
         trailingContent = trailing,
     )
@@ -355,26 +369,37 @@ fun SwitchRow(
                 if (buzz) haptics.performHapticFeedback(
                     if (it) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff)
                 onChange(it)
-            },
+            }
+            .padding(horizontal = Space.x1),
         colors = rowColors(),
-        headlineContent = { Text(title, style = Type.strong) },
+        headlineContent = { Text(title, style = Type.strong.script(title)) },
         supportingContent = desc?.let { d -> { Text(d, style = Type.caption) } },
         trailingContent = {
             androidx.compose.material3.Switch(
                 checked = checked, onCheckedChange = null, enabled = enabled,
-                colors = androidx.compose.material3.SwitchDefaults.colors(
-                    checkedTrackColor = Tone.text, checkedThumbColor = Tone.bg, checkedBorderColor = Color.Transparent,
-                    uncheckedTrackColor = Tone.surface2, uncheckedThumbColor = Tone.text2,
-                    uncheckedBorderColor = Tone.strokeStrong,
-                    disabledCheckedTrackColor = Tone.text.copy(alpha = 0.4f),
-                    disabledUncheckedTrackColor = Tone.surface2.copy(alpha = 0.6f),
-                ),
+                colors = switchColors(),
             )
         },
     )
 }
 
-/** The quiet button: a dark control with a hairline border. */
+/** A switch: Pulse when on (the state "on" is the accent), Raised Slate with an Edge when off. */
+@Composable
+fun switchColors() = androidx.compose.material3.SwitchDefaults.colors(
+    checkedTrackColor = Tone.pulse, checkedThumbColor = Tone.ink, checkedBorderColor = Color.Transparent,
+    checkedIconColor = Tone.pulse,
+    uncheckedTrackColor = Tone.surface2, uncheckedThumbColor = Tone.text3,
+    uncheckedBorderColor = Tone.stroke,
+    disabledCheckedTrackColor = Tone.pulse.copy(alpha = 0.35f), disabledCheckedThumbColor = Tone.ink.copy(alpha = 0.6f),
+    disabledUncheckedTrackColor = Tone.surface2.copy(alpha = 0.6f),
+    disabledUncheckedThumbColor = Tone.text3.copy(alpha = 0.4f), disabledUncheckedBorderColor = Tone.hairline,
+)
+
+/**
+ * A pill button (DESIGN-NIGHT 4). [strong] is the one primary of a view:
+ * Mist White fill, Void type. Otherwise a ghost pill with a 1dp Edge. A press
+ * moves it down 1dp; nothing on a button glows.
+ */
 @Composable
 fun Btn(
     text: String,
@@ -385,25 +410,27 @@ fun Btn(
     danger: Boolean = false,
     icon: ImageVector? = null,
 ) {
-    // The emphasised button is the page's own text colour, inverted: nothing
-    // here is coloured for being clickable.
-    val bg = when {
-        strong -> Tone.text
-        else -> Tone.surface2
-    }
+    // The primary is the page's own text colour, inverted: nothing here is
+    // coloured for being clickable, and the accent is never a button's fill.
+    val bg = if (strong) Tone.text else Color.Transparent
     val fg = when {
-        strong -> Tone.bg
+        strong -> Tone.ink
         danger -> Tone.fail
         else -> Tone.text
     }
+    val pill = RoundedCornerShape(Shape.pill)
     Row(
         modifier
             .heightIn(min = 44.dp)
-            .press(enabled, RoundedCornerShape(Shape.control), sink = true, onClick = onClick)
-            .clip(RoundedCornerShape(Shape.control))
-            .background(if (enabled) bg else bg.copy(alpha = 0.45f))
-            .border(1.dp, if (strong) Color.Transparent else Tone.strokeStrong, RoundedCornerShape(Shape.control))
-            .padding(horizontal = Space.x4, vertical = Space.x3),
+            .press(enabled, pill, nudge = true, onClick = onClick)
+            .clip(pill)
+            .background(if (enabled) bg else bg.copy(alpha = bg.alpha * 0.45f))
+            .border(1.dp, when {
+                strong -> Color.Transparent
+                danger -> Tone.fail.copy(alpha = 0.4f)
+                else -> Tone.strokeStrong
+            }, pill)
+            .padding(horizontal = Space.x5, vertical = Space.x3),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
@@ -413,7 +440,7 @@ fun Btn(
         }
         // Two lines, broken between words, before it gets smaller: one line
         // with a large font setting cut "Windscribe" off at "Windsc".
-        androidx.compose.foundation.text.BasicText(text, style = Type.strong.copy(
+        androidx.compose.foundation.text.BasicText(text, style = Type.button.copy(
             color = if (enabled) fg else fg.copy(alpha = 0.5f), textAlign = TextAlign.Center),
             maxLines = 2, modifier = Modifier.weight(1f, fill = false),
             autoSize = FitText(14.sp, floor = 10.dp))
@@ -421,7 +448,7 @@ fun Btn(
 }
 
 /**
- * The desktop's segment: options in a dark track, a pill sliding under the chosen one.
+ * The desktop's segment: options in a pill track, a Raised Slate pill sliding under the chosen one.
  *
  * Every label is set in one size, the largest that fits them all - on one
  * line if it can, and then on two, broken between words, never inside one.
@@ -438,9 +465,9 @@ fun <T> Segment(options: List<T>, chosen: T, label: (T) -> String, onPick: (T) -
         modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(Shape.control))
+            .clip(RoundedCornerShape(Shape.pill))
             .background(Tone.bg)
-            .border(1.dp, Tone.stroke, RoundedCornerShape(Shape.control))
+            .border(1.dp, Tone.stroke, RoundedCornerShape(Shape.pill))
             .padding(Space.x1),
     ) {
         val inset = 5.dp
@@ -456,16 +483,19 @@ fun <T> Segment(options: List<T>, chosen: T, label: (T) -> String, onPick: (T) -
                 .heightIn(min = 42.dp)
                 .drawBehind {
                     val w = size.width / options.size
-                    drawRoundRect(Tone.surface2, topLeft = androidx.compose.ui.geometry.Offset(w * at, 0f),
-                        size = androidx.compose.ui.geometry.Size(w, size.height),
-                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(8.dp.toPx()))
+                    val r = androidx.compose.ui.geometry.CornerRadius(size.height / 2)
+                    val tl = androidx.compose.ui.geometry.Offset(w * at, 0f)
+                    val sz = androidx.compose.ui.geometry.Size(w, size.height)
+                    drawRoundRect(Tone.surface2, topLeft = tl, size = sz, cornerRadius = r)
+                    drawRoundRect(Tone.stroke, topLeft = tl, size = sz, cornerRadius = r,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
                 },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             for ((i, o) in options.withIndex()) {
                 Box(
                     Modifier.weight(1f).heightIn(min = 42.dp)
-                        .press(enabled, RoundedCornerShape(8.dp), feel = HapticFeedbackType.SegmentTick) {
+                        .press(enabled, RoundedCornerShape(Shape.pill), feel = HapticFeedbackType.SegmentTick) {
                             if (o != chosen) onPick(o)
                         }
                         .padding(horizontal = inset, vertical = Space.x1),
@@ -545,22 +575,28 @@ fun Field(
     keyboard: KeyboardType = KeyboardType.Text,
 ) {
     var shown by remember { mutableStateOf(false) }
+    val focus = remember { MutableInteractionSource() }
+    val focused by focus.collectIsFocusedAsState()
+    // The focus ring is Pulse (DESIGN-NIGHT 2); at rest a field is an Edge on the page's own ink.
+    val ring by androidx.compose.animation.animateColorAsState(if (focused) Tone.focus else Tone.strokeStrong,
+        tween(if (rememberReducedMotion()) 0 else 160), label = "ring")
+    val shape = RoundedCornerShape(Shape.tip)
     Row(
         modifier
             .fillMaxWidth()
-            .heightIn(min = 46.dp)
-            .clip(RoundedCornerShape(Shape.control))
+            .heightIn(min = 48.dp)
+            .clip(shape)
             .background(Tone.bg)
-            .border(1.dp, Tone.strokeStrong, RoundedCornerShape(Shape.control))
+            .border(1.dp, ring, shape)
             .padding(start = Space.x4, end = Space.x2),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val style = (if (mono) TextStyle(fontFamily = Mono) else Type.body).copy(color = Tone.text)
+        val style = if (mono) TextStyle(fontFamily = Mono, color = Tone.text) else Type.body.copy(color = Tone.text).script(value)
         Box(Modifier.weight(1f).padding(vertical = Space.x3)) {
             if (value.isEmpty()) Text(placeholder, style = style.copy(color = Tone.text3))
             BasicTextField(
                 value = value, onValueChange = onChange, singleLine = true, textStyle = style,
-                cursorBrush = SolidColor(Tone.text),
+                cursorBrush = SolidColor(Tone.pulse), interactionSource = focus,
                 visualTransformation = if (secret && !shown) PasswordVisualTransformation()
                     else VisualTransformation.None,
                 keyboardOptions = KeyboardOptions(keyboardType =
@@ -585,9 +621,10 @@ fun SaidLine(text: String, bad: Boolean = false, modifier: Modifier = Modifier) 
         modifier = modifier.padding(top = Space.x2))
 }
 
+/** A hairline across the full width. */
 @Composable
 fun Divider() {
-    Box(Modifier.fillMaxWidth().height(1.dp).background(Tone.stroke))
+    Box(Modifier.fillMaxWidth().height(1.dp).background(Tone.hairline))
 }
 
 /**
@@ -625,15 +662,12 @@ fun InfoTip(
                     enter = fadeIn(tween(Shape.ENTER_MS, easing = Shape.ease)) +
                         androidx.compose.animation.scaleIn(tween(Shape.ENTER_MS, easing = Shape.ease),
                             initialScale = 0.94f)) {
+                    // A tooltip: Ink Glass, radius 14, the Edge brighter along the top.
                     Box(
                         Modifier
                             .widthIn(max = widest)
-                            .shadow(12.dp, RoundedCornerShape(Shape.control),
-                                ambientColor = Color.Black.copy(alpha = if (Tone.light) 0.12f else 0.32f),
-                                spotColor = Color.Black.copy(alpha = if (Tone.light) 0.12f else 0.32f))
-                            .clip(RoundedCornerShape(Shape.control))
-                            .background(Tone.surface2)
-                            .border(1.dp, Tone.strokeStrong, RoundedCornerShape(Shape.control))
+                            .floatShadow(RoundedCornerShape(Shape.tip))
+                            .glass(RoundedCornerShape(Shape.tip))
                             .tap { open = false }
                             .padding(horizontal = Space.x4, vertical = Space.x3),
                     ) {
@@ -689,11 +723,11 @@ fun Chevron() = Icon(Glyph.chevRight, null, Modifier.size(16.dp), tint = Tone.te
 fun NavRow(title: String, desc: String?, onClick: () -> Unit, icon: ImageVector? = null) =
     SettingRow(title, desc = desc, icon = icon, onClick = onClick) { Chevron() }
 
-/** Checkbox colours: text-coloured when ticked, never the state colour. */
+/** Checkbox colours: Pulse when ticked - "on" is the accent - with Void ink. */
 @Composable
 fun checkColors() = androidx.compose.material3.CheckboxDefaults.colors(
-    checkedColor = Tone.text, checkmarkColor = Tone.bg, uncheckedColor = Tone.strokeStrong,
-    disabledCheckedColor = Tone.text.copy(alpha = 0.4f), disabledUncheckedColor = Tone.stroke,
+    checkedColor = Tone.pulse, checkmarkColor = Tone.ink, uncheckedColor = Tone.strokeStrong,
+    disabledCheckedColor = Tone.pulse.copy(alpha = 0.35f), disabledUncheckedColor = Tone.stroke,
 )
 
 /** A row whose whole width ticks a checkbox at its leading edge. */
@@ -711,7 +745,8 @@ fun CheckRow(
         modifier = modifier
             .heightIn(min = 56.dp)
             .toggleable(value = checked, enabled = enabled, role = androidx.compose.ui.semantics.Role.Checkbox,
-                onValueChange = onChange),
+                onValueChange = onChange)
+            .padding(horizontal = Space.x1),
         colors = rowColors(),
         leadingContent = {
             androidx.compose.material3.Checkbox(checked, null, enabled = enabled, colors = checkColors())

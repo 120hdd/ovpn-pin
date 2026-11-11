@@ -30,6 +30,9 @@ import com.erelay.relay.data.HostRow
 import com.erelay.relay.ui.theme.Space
 import com.erelay.relay.ui.theme.Tone
 import com.erelay.relay.ui.theme.Type
+import com.erelay.relay.ui.theme.Data
+import com.erelay.relay.ui.theme.script
+import androidx.compose.foundation.lazy.itemsIndexed
 import kotlinx.coroutines.delay
 
 private enum class By(val label: String) { DESTINATION("Destination"), PROGRAM("Program") }
@@ -80,9 +83,12 @@ fun LogSheet(open: Boolean, live: Boolean, hosts: suspend () -> List<HostRow>, o
         Text("${groups.size} ${if (by == By.DESTINATION) "destinations" else "apps"} · ${bytes(total)}",
             style = Type.mono, modifier = Modifier.padding(horizontal = Space.x4, vertical = Space.x2))
         LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
-            items(groups, key = { it.name }) { g ->
-                BucketRow(g, (g.up + g.down).toFloat() / total)
-                Sep()
+            // One Slate card down the list, cut across its rows.
+            itemsIndexed(groups, key = { _, g -> g.name }) { i, g ->
+                Column(Modifier.padding(horizontal = Space.x4).slateSeg(segOf(i, groups.size))) {
+                    if (i > 0) Sep()
+                    BucketRow(g, (g.up + g.down).toFloat() / total)
+                }
             }
             if (rows.size >= 400) item {
                 Text("Only the busiest 400 are kept.", style = Type.caption, modifier = Modifier.padding(Space.x4))
@@ -93,11 +99,12 @@ fun LogSheet(open: Boolean, live: Boolean, hosts: suspend () -> List<HostRow>, o
 
 @Composable
 private fun BucketRow(g: Bucket, share: Float) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = Space.x4, vertical = Space.x3)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = Space.x5, vertical = Space.x4)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(Space.x2).clip(CircleShape).background(if (g.live > 0) Tone.ok else Tone.text3.copy(alpha = 0.4f)))
+            // Still open now: a still dot in Good. The pulsing live dot is the home screen's alone.
+            Box(Modifier.size(Space.x2).clip(CircleShape).background(if (g.live > 0) Tone.good else Tone.text3.copy(alpha = 0.4f)))
             Spacer(Modifier.width(Space.x3))
-            Text(g.name, style = Type.strong, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            Text(g.name, style = Type.strong.script(g.name), maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f))
             Spacer(Modifier.width(Space.x2))
             Text(bytes(g.up + g.down), style = Type.mono.copy(color = Tone.text), maxLines = 1, softWrap = false)
@@ -109,7 +116,7 @@ private fun BucketRow(g: Bucket, share: Float) {
             Text("↓ ${bytes(g.down)}  ↑ ${bytes(g.up)}", style = Type.mono, maxLines = 1, softWrap = false)
         }
         Box(Modifier.padding(start = Space.x5, top = Space.x2).fillMaxWidth().height(3.dp).clip(CircleShape).background(Tone.surface2)) {
-            Box(Modifier.fillMaxWidth(share.coerceIn(0.01f, 1f)).height(3.dp).background(Tone.text2))
+            Box(Modifier.fillMaxWidth(share.coerceIn(0.01f, 1f)).height(3.dp).clip(CircleShape).background(Data.periwinkle))
         }
     }
 }

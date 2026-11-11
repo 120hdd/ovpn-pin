@@ -15,11 +15,33 @@ const $ = (id) => document.getElementById(id);
 /* Reduced motion, read through gsap.matchMedia() so it follows the setting
    live. Everything that would otherwise tween asks CALM first. */
 let CALM = false;
+const liveLoop = { tw: null };   // the live dot's halo loop (syncLive)
 if (window.gsap) {
   gsap.matchMedia().add('(prefers-reduced-motion: reduce)', () => {
     CALM = true;
-    return () => { CALM = false; };
+    syncLive();   // the one perpetual loop stops
+    return () => { CALM = false; syncLive(); };
   });
+}
+
+/* The live dot beside the status word: there while the route is up, its halo
+   ring breathing out once every 1.4 s. The only loop in the app that never
+   ends on its own, so it is started and stopped with the connection and not
+   run at all under reduced motion. */
+function syncLive() {
+  const halo = document.querySelector('#liveDot .live__halo');
+  if (!halo || !window.gsap) return;
+  const on = document.documentElement.dataset.conn === 'on';
+  if (on && !CALM) {
+    if (!liveLoop.tw) {
+      liveLoop.tw = gsap.fromTo(halo, { scale: 1, autoAlpha: 0.6 },
+        { scale: 2.4, autoAlpha: 0, duration: 1.4, ease: 'power1.out', repeat: -1 });
+    }
+  } else if (liveLoop.tw) {
+    liveLoop.tw.kill();
+    liveLoop.tw = null;
+    gsap.set(halo, { clearProps: 'transform,opacity,visibility' });
+  }
 }
 
 const state = {
@@ -46,6 +68,7 @@ const state = {
   favourites: [],       // picker codes kept at the top of the list
   sortBy: 'ping',       // ping | name | load
   openCities: new Set(),  // countries showing their cities
+  openContinents: new Set(),  // continents opened in the picker this time
   openExits: null,      // which row has its individual exits showing
   exits: {},            // and those exits, once fetched, by that row's code
   sources: null,        // which pools there are, and which one is in use
@@ -96,21 +119,46 @@ function icon(href, className, title) {
   return svg;
 }
 
-/* The hologram globe (globe.js) behind the home screen. It draws itself with
-   WebGL2, or as a still with the 2D API when the GPU is blocked; either way
-   there is nothing to fall back to here. */
+/* The world (atlas.js) behind the home screen. Without WebGL it hides its
+   canvas and the home screen is type on the page alone. */
 function initConnectionCore() {
-  const canvas = $('globeCanvas');
-  if (!canvas || !window.Globe) return;
-  window.Globe.init(canvas, { calm: () => CALM });
+  const canvas = $('atlasCanvas');
+  if (!canvas || !window.Atlas) return;
+  window.Atlas.init(canvas, { calm: () => CALM });
 }
 
 /* ------------------------------------------------------------- rendering */
 
+/* Characters that settle into place left to right while the rest still
+   shuffle: the connect moment's one piece of theatre, on the status word,
+   the country and the address. Spaces and punctuation hold still so the
+   shape of the line is there from the first frame. Not on Persian, whose
+   letters join and would come apart, and not under reduced motion. */
+const SCRAMBLE_ABC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+function scramble(el, text, pool = SCRAMBLE_ABC, duration = 0.7) {
+  if (el.__scramble) el.__scramble.kill();
+  el.__scramble = null;
+  if (!window.gsap || CALM || /[؀-ۿ]/.test(text)) { el.textContent = text; return; }
+  const p = { v: 0 };
+  el.__scramble = gsap.to(p, {
+    v: 1, duration, ease: 'power2.out',
+    onUpdate() {
+      const settled = Math.floor(p.v * text.length);
+      let out = text.slice(0, settled);
+      for (let i = settled; i < text.length; i += 1) {
+        out += /[\s.:\-·]/.test(text[i]) ? text[i] : pool[(Math.random() * pool.length) | 0];
+      }
+      el.textContent = out;
+    },
+    onComplete() { el.textContent = text; el.__scramble = null; },
+  });
+}
+
 function setIp(el, value, fresh) {
-  if (el.textContent === value) return;
+  if (el.textContent === value && !el.__scramble) return;
   el.textContent = value;
   fitText(el);
+  if (fresh && /^[0-9a-f.:]+$/i.test(value)) scramble(el, value, '0123456789', 0.6);
   if (fresh) {
     el.classList.remove('fresh');
     void el.offsetWidth;
@@ -197,6 +245,7 @@ function render() {
   const act = $('act');
   const visualState = state.mode === 'fail' ? 'fail' : state.mode;
   document.documentElement.dataset.conn = visualState;
+  syncLive();
   act.dataset.mode = state.mode === 'fail' ? 'off' : state.mode;
   // Owned here rather than switched off once in boot(). Adding an account is
   // a repaint and not a restart, so a button disabled at boot stayed disabled
@@ -243,13 +292,17 @@ function render() {
     code = c ? c.code : null;
     label = nameOf(state.picked);
   }
-  $('pickLabel').textContent = label;
+  // Arriving somewhere is announced; everything else just shows the name.
+  const arrived = state.mode === 'on' && state.live && label !== shownLabel;
+  shownLabel = label;
+  if (arrived) scramble($('pickLabel'), label, SCRAMBLE_ABC, 0.8);
+  else if (!$('pickLabel').__scramble) $('pickLabel').textContent = label;
   $('pick').dataset.any = (any && !(state.mode === 'on' && state.live)) ? '1' : '0';
   $('pickFlag').style.backgroundImage = code ? flagUrl(code) : '';
 
   const flagCode = state.mode === 'on' && state.live ? state.live.code : null;
   setBackdrop(flagCode);
-  if (window.Globe) window.Globe.sync(flagCode);
+  if (window.Atlas) window.Atlas.sync(flagCode, code);
   if (shownConn !== null && shownConn !== visualState) stateMoment(shownConn, visualState);
   shownConn = visualState;
 }
@@ -295,11 +348,11 @@ function setBackdrop(code) {
 /* The one orchestrated moment, one timeline. The status word arrives from
    just below in the new colour (the colour itself is the `--state` transition
    in CSS); the backdrop fade-in and the sparkline fade are started in the same
-   render by their own owners (setBackdrop and the .flux rule), and the globe
-   by Globe.sync (the grid tints to the state over 600 ms, and when the route is
-   up it turns to the exit country and drops a marker). Reduced motion: nothing
-   tweens, it all just swaps. */
+   render by their own owners (setBackdrop and the .flux rule), and the map
+   by Atlas.sync (the camera's journey and the fills). Reduced motion:
+   nothing tweens, it all just swaps. */
 const moment = { tl: null };
+let shownLabel = null;
 
 function stateMoment() {
   if (moment.tl) { moment.tl.kill(); moment.tl = null; }
@@ -307,6 +360,8 @@ function stateMoment() {
   moment.tl = gsap.timeline({ defaults: { ease: 'expo.out' } });
   moment.tl.fromTo('#status', { y: 8, opacity: 0 },
                    { y: 0, opacity: 1, duration: 0.25, clearProps: 'transform,opacity' }, 0);
+  const word = $('status');
+  moment.tl.add(() => scramble(word, word.textContent, SCRAMBLE_ABC, 0.55), 0);
 }
 
 /* --------------------------------------------------------------- picker */
@@ -320,9 +375,14 @@ function openPicker() {
   $('searchMain').classList.remove('is-typed');
   $('pickAny').hidden = !state.picked || state.picked === 'auto';
   state.cursor = 0;
+  // Every open of the sheet starts with the continents shut: a continent,
+  // then a country, then a server - three short choices instead of one long
+  // scroll.
+  state.openContinents.clear();
   drawList('');
   $('picker').showModal();
   slideSort();
+  enterRows($('list').querySelectorAll('.grp'));
   setTimeout(() => $('search').focus(), 30);
   // What a stutter actually is: one frame that took far longer than the rest.
   // Timing this function measured the part that was never slow, and timing to
@@ -360,6 +420,13 @@ function openPicker() {
 const CONTINENTS = ['Europe', 'Middle East', 'Asia', 'North America',
   'South America', 'Africa', 'Oceania', 'Antarctica', 'Elsewhere'];
 const continentOf = (c) => (CONTINENTS.includes(c.continent) ? c.continent : 'Elsewhere');
+// Each drawer's mark in the sprite (#i-ct-…), the same drawings as Android's.
+const CONTINENT_MARK = {
+  Europe: 'europe', 'Middle East': 'middle-east', Asia: 'asia',
+  'North America': 'north-america', 'South America': 'south-america',
+  Africa: 'africa', Oceania: 'oceania', Antarctica: 'antarctica',
+  Elsewhere: 'elsewhere', Starred: 'starred',
+};
 
 /* What the list on screen was built from. Nothing about it changes between
    one open and the next unless the query or the chosen country has, so it is
@@ -369,6 +436,7 @@ function listKey(q) {
   return `${q}|${state.picked}|${state.countries.length}`
     + `|${(state.providers || []).join(',')}`
     + `|${[...state.openCities].sort().join(',')}`
+    + `|${[...state.openContinents].sort().join(',')}`
     + `|${state.sortBy}|${(state.favourites || []).join(',')}`;
 }
 
@@ -433,17 +501,41 @@ function drawList(query) {
     const sec = document.createElement('section');
     sec.className = 'grp';
     sec.dataset.group = name;
-    const head = document.createElement('p');
+    // A continent is a drawer, shut until it is asked for. Starred places are
+    // the short list on purpose and stay open, and so does everything while a
+    // search is typed - a result inside a shut drawer is a result not found.
+    const fixed = !!q || name === 'Starred';
+    const open = fixed || state.openContinents.has(name);
+    const head = document.createElement(fixed ? 'p' : 'button');
     head.className = 'gh';
+    if (!fixed) {
+      head.type = 'button';
+      head.dataset.continent = name;
+      head.setAttribute('aria-expanded', String(open));
+    }
+    // The continent's own mark in a well, then its name and how many.
+    const well = document.createElement('span');
+    well.className = 'gh__well';
+    well.setAttribute('aria-hidden', 'true');
+    well.append(icon(`#i-ct-${CONTINENT_MARK[name] || 'elsewhere'}`, 'ico'));
     const hn = document.createElement('span');
     hn.className = 'gh__name';
     hn.textContent = name;
     const hc = document.createElement('span');
     hc.className = 'gh__n';
     hc.textContent = String(items.length);
-    head.append(hn, hc);
-    sec.append(head);
+    head.append(well, hn, hc);
+    if (!fixed) {
+      const chev = icon('#i-chev-down', 'ico gh__chev');
+      chev.setAttribute('aria-hidden', 'true');
+      head.append(chev);
+    }
+    const body = document.createElement('div');
+    body.className = 'grp__in';
+    sec.append(head, body);
+    sec.dataset.open = String(open);
     list.append(sec);
+    if (!open) continue;
 
     let ordered = items;
     let untimedAt = -1;
@@ -455,7 +547,7 @@ function drawList(query) {
       ordered = yes.concat(no);
     }
     ordered.forEach((c, i) => jobs.push({
-      sec, c, split: i === untimedAt ? ordered.length - untimedAt : 0,
+      sec: body, c, split: i === untimedAt ? ordered.length - untimedAt : 0,
     }));
   }
 
@@ -650,7 +742,55 @@ function toggleCities(code) {
   markCursor();
 }
 
-function rows() { return Array.from($('list').querySelectorAll('.row')); }
+/* Open or shut a continent. The list is drawn again with its countries in
+   (or out), and the drawer's body grows from nothing to its height - or
+   folds away first and is then left out. */
+/* Rows arriving: up from 8px and in, 30 ms apart, the first twelve only -
+   past those nobody is watching them land. */
+function enterRows(nodes) {
+  if (CALM || !window.gsap) return;
+  const first = Array.from(nodes).slice(0, 12);
+  if (!first.length) return;
+  gsap.fromTo(first, { y: 8, autoAlpha: 0 },
+    { y: 0, autoAlpha: 1, duration: 0.32, ease: 'power2.out', stagger: 0.03,
+      clearProps: 'transform,opacity,visibility' });
+}
+
+function toggleContinent(name) {
+  const opening = !state.openContinents.has(name);
+  const q = $('search').value.trim();
+  const sel = `.grp[data-group="${CSS.escape(name)}"] > .grp__in`;
+  const calm = CALM || !window.gsap;
+  const redraw = () => {
+    // One drawer open at a time: the open one is the sheet's single lit item.
+    if (opening) { state.openContinents.clear(); state.openContinents.add(name); }
+    else state.openContinents.delete(name);
+    $('list').dataset.key = '';
+    drawList(q);
+    const body = $('list').querySelector(sel);
+    if (opening && body) {
+      const head = body.previousElementSibling;
+      if (head) head.scrollIntoView({ block: 'nearest' });
+    }
+    if (opening && body && !calm) {
+      gsap.fromTo(body, { height: 0, opacity: 0 },
+                  { height: 'auto', opacity: 1, duration: 0.3, ease: 'expo.out', clearProps: 'height,opacity' });
+      enterRows(body.querySelectorAll('.row'));
+    }
+    // the cursor stays on the drawer just opened or shut, not back at the top
+    const at = rows().findIndex((r) => r.dataset.continent === name);
+    if (at >= 0) state.cursor = at;
+    markCursor();
+  };
+  const body = $('list').querySelector(sel);
+  if (!opening && body && body.childNodes.length && !calm) {
+    gsap.to(body, { height: 0, opacity: 0, duration: 0.18, ease: 'power2.in', onComplete: redraw });
+  } else redraw();
+}
+
+/* What the arrow keys walk: the drawers' headings as well as the rows, so a
+   continent can be opened from the keyboard too. */
+function rows() { return Array.from($('list').querySelectorAll('.row, .gh[data-continent]')); }
 
 function markCursor() {
   const all = rows();
@@ -729,6 +869,7 @@ window.onConnected = (status) => {
   setIp($('exitIp'), confirmed || (e.unconfirmed ? 'unconfirmed' : 'checking…'),
         !!confirmed);
   $('exitPlace').textContent = measured ? place : `${place} (checking)`;
+  $('exitFlag').style.backgroundImage = (measured || claimed) ? flagUrl(canonCode(measured || claimed)) : '';
   // How long it has been up, ticking beside the place - the desktop's
   // version of the Android notification's timer.
   state.since = status.since || Date.now() / 1000;
@@ -777,6 +918,7 @@ window.onFailed = (err) => {
   state.mode = 'fail';
   setIp($('exitIp'), '—', false);
   $('exitPlace').textContent = 'not connected';
+  $('exitFlag').style.backgroundImage = '';
   setStatus('Not connected', 'fail', 'Could not connect', '');
   // The detail arrives as "tun-failed: <what sing-box said>"; only the part
   // after the kind is worth reading.
@@ -845,6 +987,7 @@ window.onDisconnected = (info) => {
   state.mode = 'off';
   setIp($('exitIp'), '—', false);
   $('exitPlace').textContent = 'not connected';
+  $('exitFlag').style.backgroundImage = '';
   setStatus('Disconnected', 'off', '', '');
   setHint(info && info.minutes
     ? `Windows is back to normal. Routed for ${info.minutes} minute${info.minutes === 1 ? '' : 's'}.`
@@ -937,6 +1080,9 @@ window.onRealIp = (info) => {
   setIp($('realIp'), (info && info.ip) || 'unknown', true);
   $('realPlace').textContent = (info && info.country)
     ? nameOf(info.country) : 'could not check';
+  $('realFlag').style.backgroundImage = info && info.country ? flagUrl(canonCode(info.country)) : '';
+  // Where you are is where the map starts: your own country from above.
+  if (info && info.country && window.Atlas) window.Atlas.home(info.country);
 };
 
 /* ----------------------------------------------------------------- flux */
@@ -3102,9 +3248,9 @@ async function bootSteps() {
 /* Whether anything can see the front of the app right now.
 
    The sheets are full-screen opaque dialogs, and `document.hidden` does not
-   go true for one - so with Settings open the WebGL globe went on drawing
+   go true for one - so with Settings open the WebGL map went on drawing
    at full rate behind it, and the blurred card it sits on went on being
-   recomposited with it. globe.js reads this flag and stops.
+   recomposited with it. atlas.js reads this flag and stops.
 
    Watched rather than set beside each showModal(): there are six dialogs in
    here, and the seventh would have been the one nobody remembered. */
@@ -3118,7 +3264,7 @@ for (const sheet of document.querySelectorAll('dialog.sheet')) {
 
 $('act').addEventListener('click', onAct);
 
-/* The globe as a button. A press does what the Connect button does; held for
+/* The map as a button. A press does what the Connect button does; held for
    600 ms it reconnects - disconnect, then connect to the same pick - which
    is the one thing a stuck connection usually needs, without two presses
    and a wait between them. */
@@ -3133,7 +3279,7 @@ async function reconnect() {
   let timer = 0;
   let held = false;
   const lift = () => { clearTimeout(timer); orb.classList.remove('is-pressed'); };
-  const onSphere = (e) => !window.Globe || window.Globe.hit(e.clientX, e.clientY);
+  const onSphere = (e) => !window.Atlas || window.Atlas.hit(e.clientX, e.clientY);
   orb.addEventListener('pointermove', (e) => {
     orb.classList.toggle('is-over', state.hasCredentials && onSphere(e));
   });
@@ -3208,6 +3354,8 @@ $('list').addEventListener('click', (e) => {
     toggleCities(open.dataset.expand);
     return;
   }
+  const drawer = e.target.closest('[data-continent]');
+  if (drawer) { toggleContinent(drawer.dataset.continent); return; }
   // An exit row picks that one exit; the row that opens them is not a pick
   // at all and is handled where the opening is.
   const exit = e.target.closest('.exit');
@@ -3224,7 +3372,8 @@ $('picker').addEventListener('keydown', (e) => {
   } else if (e.key === 'Enter') {
     e.preventDefault();
     const r = rows()[state.cursor];
-    if (r) choose(r.dataset.code);
+    if (r && r.dataset.continent) toggleContinent(r.dataset.continent);
+    else if (r) choose(r.dataset.code);
   }
 });
 
@@ -3280,9 +3429,9 @@ $('prefsClose').addEventListener('click', () => shut($('prefs')));
    - the options follow 30 ms apart, top first - the eye lands on the first
      choice, which is the default one;
    - the chevron turns over with a slight overshoot, the one playful note;
-   - choosing pops the check in on the new row, lets the old one go, slides
+   - choosing slides the one glow under the new row, slides
      the field's word out upward and the new one in from below, and only
-     then folds the list back - about 160 ms, enough to see what was taken.
+     then folds the list back - about 300 ms, enough to see what was taken.
    Closing is the opening run backwards, a little faster: leaving should
    cost less than arriving. Under reduced motion every one of these is a
    plain switch. */
@@ -3303,6 +3452,16 @@ const wayMenu = (() => {
     calm = true;
     return () => { calm = false; };
   });
+
+  /* The one glow under the chosen row. It is placed, not faded, when the
+     list opens, and slides when the choice changes. */
+  const glow = list.querySelector('.dd__glow');
+  function glide(opt, instant) {
+    if (!glow || !opt) return;
+    gsap.set(glow, { height: opt.offsetHeight, autoAlpha: 1 });
+    if (instant || calm) gsap.set(glow, { y: opt.offsetTop });
+    else gsap.to(glow, { y: opt.offsetTop, duration: 0.45, ease: 'power3.out', overwrite: 'auto' });
+  }
 
   let open = false;
   let run = null;        // the opening timeline, reversed to close
@@ -3339,6 +3498,7 @@ const wayMenu = (() => {
     }
     const here = list.querySelector('.dd__opt[aria-selected="true"]:not([hidden])')
       || shown()[0];
+    glide(list.querySelector('.dd__opt[aria-selected="true"]:not([hidden])'), true);
     if (here) here.focus({ preventScroll: true });
     document.addEventListener('pointerdown', outside, true);
   }
@@ -3403,10 +3563,11 @@ const wayMenu = (() => {
               clearProps: 'all' });
         }
       }
+      glide(opt);
       swap(nameOf(way));
       chooseWay(way);
     }
-    gsap.delayedCall(calm ? 0 : 0.16, () => hide(true));
+    gsap.delayedCall(calm ? 0 : 0.3, () => hide(true));
   }
 
   function step(by) {
@@ -7976,10 +8137,16 @@ function providersWithoutServers(info) {
    that saved one of the older names opens in Graphite, or White if it was a
    light one. */
 const THEMES = [
-  ['graphite', 'Graphite', '#121316', '#1a1b1f'],
+  ['graphite', 'Graphite', '#0a0a0c', '#101013'],
   ['white', 'White', '#f6f6f7', '#ffffff'],
-  ['black', 'Black', '#000000', '#0d0d0f'],
+  ['black', 'Black', '#060607', '#101013'],
 ];
+
+/* Moves the theme list's one glow to the chosen row; set once the list is
+   built (below). */
+// (var, not let: boot() may paint a theme before this line has run)
+var themeGlider = null;
+function glideTheme(instant) { if (themeGlider) themeGlider(instant); }
 
 function applyTheme(key) {
   const k = String(key || '').toLowerCase();
@@ -7992,7 +8159,8 @@ function applyTheme(key) {
   for (const b of document.querySelectorAll('.theme')) {
     b.setAttribute('aria-checked', String(b.dataset.theme === theme));
   }
-  // The globe watches data-theme itself (it paints ink on White, light on the dark themes).
+  glideTheme(false);
+  // The map watches data-theme itself (ink lines and a pale planet on White).
 }
 
 (function () {
@@ -8018,6 +8186,51 @@ function applyTheme(key) {
     });
     box.appendChild(b);
   }
+  // The chosen row sits on one glow that slides between the three. Placed
+  // without motion whenever the list itself appears (the Look screen is
+  // display:none until it is opened, and nothing can be measured until then).
+  const glow = document.createElement('i');
+  glow.className = 'themes__glow';
+  glow.setAttribute('aria-hidden', 'true');
+  box.prepend(glow);
+  themeGlider = (instant) => {
+    const b = box.querySelector('.theme[aria-checked="true"]');
+    if (!b || !b.offsetHeight || !window.gsap) return;
+    gsap.set(glow, { height: b.offsetHeight, autoAlpha: 1 });
+    if (instant || CALM) gsap.set(glow, { y: b.offsetTop });
+    else gsap.to(glow, { y: b.offsetTop, duration: 0.45, ease: 'power3.out', overwrite: 'auto' });
+  };
+  if (window.ResizeObserver) new ResizeObserver(() => glideTheme(true)).observe(box);
+})();
+
+/* Segmented controls. Each has one sliding piece, and it goes where the
+   pressed option is - whoever pressed it, a click, the tray or a reply from
+   Python - so it is moved here, from the attribute, and not beside each of
+   the dozen places that set one. The CSS places it from --seg-i; this tweens
+   that number. */
+(function () {
+  const place = (seg, instant) => {
+    const opts = [...seg.querySelectorAll(':scope > .seg__opt')].filter((b) => !b.hidden);
+    const at = opts.findIndex((b) => b.getAttribute('aria-pressed') === 'true');
+    if (at < 0) return;
+    const now = parseFloat(seg.style.getPropertyValue('--seg-i'));
+    if (now === at) return;
+    if (instant || CALM || !window.gsap || Number.isNaN(now)) {
+      if (window.gsap) gsap.killTweensOf(seg);
+      seg.style.setProperty('--seg-i', String(at));
+    } else {
+      gsap.to(seg, { '--seg-i': at, duration: 0.45, ease: 'power3.out', overwrite: 'auto' });
+    }
+  };
+  for (const seg of document.querySelectorAll('.seg')) place(seg, true);
+  new MutationObserver((records) => {
+    const segs = new Set();
+    for (const r of records) {
+      const seg = r.target.closest && r.target.closest('.seg');
+      if (seg) segs.add(seg);
+    }
+    for (const seg of segs) place(seg, false);
+  }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['aria-pressed'] });
 })();
 
 

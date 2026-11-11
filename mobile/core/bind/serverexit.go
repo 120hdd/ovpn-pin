@@ -95,7 +95,7 @@ func (c *Client) BestServerExit(cfg *ServerConfig, apiPassword, code, ssUser, ss
 			continue
 		}
 		tries--
-		if err := core.SetExit(cfg.Domain, apiPassword, cfg.Pin, s.Addr, user, pass, s.File, 15*time.Second); err != nil {
+		if err := core.SetExit(cfg.Domain, cfg.Port, apiPassword, cfg.Pin, s.Addr, user, pass, s.File, 15*time.Second); err != nil {
 			return nil, err // the server itself refused: no other exit will fare better
 		}
 		multi := *cfg
@@ -121,7 +121,7 @@ func (c *Client) BestServerExit(cfg *ServerConfig, apiPassword, code, ssUser, ss
 		return nil, last
 	}
 	// The best was not the last one set: put it back.
-	if err := core.SetExit(cfg.Domain, apiPassword, cfg.Pin, best.s.Addr, best.user, best.pass,
+	if err := core.SetExit(cfg.Domain, cfg.Port, apiPassword, cfg.Pin, best.s.Addr, best.user, best.pass,
 		best.s.File, 15*time.Second); err != nil {
 		return nil, err
 	}

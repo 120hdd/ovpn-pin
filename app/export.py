@@ -30,7 +30,7 @@ def slot_uuid(export_id, k):
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f'relay-export:{export_id}:{k}'))
 
 
-def _vless(uid, addr, host, by_ip, name):
+def _vless(uid, addr, host, by_ip, name, port=443):
     q = {'encryption': 'none', 'security': 'tls', 'type': 'ws',
          'path': VLESS_PATH}
     if by_ip:
@@ -42,12 +42,12 @@ def _vless(uid, addr, host, by_ip, name):
         q['host'] = host
     q['fp'] = 'chrome'
     query = urllib.parse.urlencode(sorted(q.items()))
-    return (f'vless://{uid}@{addr}:443?{query}#'
+    return (f'vless://{uid}@{addr}:{int(port)}?{query}#'
             + urllib.parse.quote(name, safe=''))
 
 
-def _vmess(uid, addr, host, by_ip, name):
-    m = {'v': '2', 'ps': name, 'add': addr, 'port': '443', 'id': uid,
+def _vmess(uid, addr, host, by_ip, name, port=443):
+    m = {'v': '2', 'ps': name, 'add': addr, 'port': str(int(port)), 'id': uid,
          'aid': '0', 'scy': 'auto', 'net': 'ws', 'type': 'none',
          'path': VMESS_PATH, 'tls': 'tls', 'fp': 'chrome'}
     if by_ip:
@@ -66,14 +66,15 @@ def _ss(host, ss, name):
     return f'ss://{user}@{host}:{ss["port"]}#' + urllib.parse.quote(name, safe='')
 
 
-def links(host, export_id, slots, edge=None, ss=None):
+def links(host, export_id, slots, edge=None, ss=None, port=443):
     """Every slot's links: [{k, name, vless, vmess, ss?}].
 
     host  the server as the key has it; edge a Cloudflare address measured
     to carry its name from here, used as the address for a server by name so
     the device does not have to look the name up on a line that lies about
     it. ss is the key's Shadowsocks, for the server's own slot only - its
-    other port follows whatever this app last connected to.
+    other port follows whatever this app last connected to. port is where
+    the server's TLS answers, from the key - 443 unless it said otherwise.
     """
     if not host or not export_id:
         raise ValueError("this server's key has no exported locations - run "
@@ -88,8 +89,8 @@ def links(host, export_id, slots, edge=None, ss=None):
             raise ValueError(f'slot {k} is out of range')
         uid = slot_uuid(export_id, k)
         row = {'k': k, 'name': name,
-               'vless': _vless(uid, addr, host, by_ip, name),
-               'vmess': _vmess(uid, addr, host, by_ip, name)}
+               'vless': _vless(uid, addr, host, by_ip, name, port),
+               'vmess': _vmess(uid, addr, host, by_ip, name, port)}
         if k == 0 and ss:
             row['ss'] = _ss(host, ss, name)
         out.append(row)

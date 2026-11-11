@@ -69,6 +69,8 @@ import com.erelay.relay.data.SplitPlan
 import com.erelay.relay.ui.theme.Space
 import com.erelay.relay.ui.theme.Tone
 import com.erelay.relay.ui.theme.Type
+import com.erelay.relay.ui.theme.script
+import androidx.compose.foundation.lazy.itemsIndexed
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -305,12 +307,16 @@ fun SplitAppsSheet(open: Boolean, core: RelayCore, onClose: () -> Unit) {
                 style = Type.body, modifier = Modifier.fillMaxWidth().padding(Space.x6))
             else -> LazyColumn(Modifier.fillMaxWidth().weight(1f),
                 contentPadding = PaddingValues(vertical = Space.x2)) {
-                items(order, key = { it.pkg }, contentType = { "app" }) { a ->
+                // One Slate card down the list, cut across its rows.
+                itemsIndexed(order, key = { _, a -> a.pkg }, contentType = { _, _ -> "app" }) { i, a ->
                     val ticked = a.pkg in split.apps
                     val covered = preset && a.iranian
-                    AppRow(a, on = ticked || covered, covered = covered) {
-                        haptics.toggle(!ticked)
-                        core.setSplitApp(a.pkg, !ticked)
+                    Column(Modifier.padding(horizontal = Space.x4).slateSeg(segOf(i, order.size))) {
+                        if (i > 0) Sep()
+                        AppRow(a, on = ticked || covered, covered = covered) {
+                            haptics.toggle(!ticked)
+                            core.setSplitApp(a.pkg, !ticked)
+                        }
                     }
                 }
                 item { Spacer(Modifier.height(Space.x6)) }
@@ -343,14 +349,15 @@ private fun AppRow(a: InstalledApp, on: Boolean, covered: Boolean, onToggle: () 
                     on -> "On the list"
                     else -> "Not on the list"
                 }
-            },
+            }
+            .padding(horizontal = Space.x1),
         colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = Color.Transparent),
         leadingContent = { AppIcon(a.pkg, a.label, 40.dp, Modifier.alpha(if (covered) 0.6f else 1f)) },
         headlineContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // Two lines before it is cut: a long name with a large font
                 // still reads, and the mark beside it keeps its place.
-                Text(a.label, style = Type.strong.copy(color = if (covered) Tone.text2 else Tone.text),
+                Text(a.label, style = Type.strong.copy(color = if (covered) Tone.text2 else Tone.text).script(a.label),
                     maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 if (a.iranian) IrMark()
             }
@@ -364,11 +371,10 @@ private fun AppRow(a: InstalledApp, on: Boolean, covered: Boolean, onToggle: () 
     )
 }
 
-/** IR, as plain text beside the name: the core knows it as an Iranian app. */
+/** IR, as an outlined badge beside the name: the core knows it as an Iranian app. */
 @Composable
 private fun IrMark() {
-    Text("IR", style = Type.caption.copy(color = Tone.text2, fontWeight = FontWeight.W600), maxLines = 1,
-        softWrap = false, modifier = Modifier.padding(start = Space.x2))
+    CountBadge("IR", Modifier.padding(start = Space.x2))
 }
 
 /**
@@ -416,7 +422,7 @@ private fun AppIcon(pkg: String, label: String, size: Dp, modifier: Modifier = M
         } else {
             Box(Modifier.fillMaxSize().clip(RoundedCornerShape(size * 0.3f)).background(Tone.surface2),
                 contentAlignment = Alignment.Center) {
-                Text(label.take(1).uppercase(), style = Type.strong.copy(color = Tone.text2))
+                Text(label.take(1).uppercase(), style = Type.strong.copy(color = Tone.text2).script(label))
             }
         }
     }

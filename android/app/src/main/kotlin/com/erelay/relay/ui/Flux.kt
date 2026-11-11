@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.erelay.relay.data.Traffic
 import com.erelay.relay.ui.theme.Tone
+import com.erelay.relay.ui.theme.Data
 import com.erelay.relay.ui.theme.Type
 import kotlin.math.abs
 import kotlin.math.exp
@@ -120,8 +121,8 @@ fun Flux(traffic: Traffic, modifier: Modifier = Modifier) {
         ) {
             val f = frame
             val mid = size.height * 0.62f
-            band(wave.down, wave.scaleDown, f, top = 0f, base = mid, up = true, color = Tone.ok)
-            band(wave.up, wave.scaleUp, f, top = mid, base = size.height, up = false, color = Tone.text2)
+            band(wave.down, wave.scaleDown, f, top = 0f, base = mid, up = true, color = Data.periwinkle)
+            band(wave.up, wave.scaleUp, f, top = mid, base = size.height, up = false, color = Data.orchid)
             // The left quarter fades out: old readings leave rather than drop off an edge.
             drawRect(
                 Brush.horizontalGradient(0f to Color.Transparent, 0.24f to Color.Black,
@@ -132,7 +133,7 @@ fun Flux(traffic: Traffic, modifier: Modifier = Modifier) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Glyph.arrowDown, "Downloaded", Modifier.size(12.dp), tint = Tone.ok)
+                Icon(Glyph.arrowDown, "Downloaded", Modifier.size(12.dp), tint = Data.periwinkle)
                 Spacer(Modifier.width(4.dp))
                 Text(bytes(traffic.down), style = Type.mono.copy(color = Tone.text,
                     fontWeight = FontWeight.Medium))
@@ -145,7 +146,7 @@ fun Flux(traffic: Traffic, modifier: Modifier = Modifier) {
                 Text(bytes(traffic.up), style = Type.mono.copy(color = Tone.text,
                     fontWeight = FontWeight.Medium))
                 Spacer(Modifier.width(4.dp))
-                Icon(Glyph.arrowDown, "Uploaded", Modifier.size(12.dp).rotate(180f), tint = Tone.text2)
+                Icon(Glyph.arrowDown, "Uploaded", Modifier.size(12.dp).rotate(180f), tint = Data.orchid)
             }
         }
     }
@@ -212,8 +213,9 @@ private fun DrawScope.band(
 }
 
 /**
- * The last minute of throughput as two thin lines: download in the text
- * colour, upload in text-2, 1.5dp each, the newest reading at the right.
+ * The last minute of throughput as two thin lines over faint fills (data
+ * colours, DESIGN-NIGHT 2): download in Periwinkle, upload in Orchid, 1.5dp
+ * each over a 16% fill, the newest reading at the right.
  * Beside it the current rates in mono tabular figures. One reading a second
  * for sixty seconds; both lines share a scale that climbs fast and settles
  * slowly, with a floor, so a quiet line stays flat rather than magnified.
@@ -249,9 +251,9 @@ fun Sparkline(traffic: Traffic, shown: Boolean, reduced: Boolean, modifier: Modi
         label = "sparkAlpha")
     if (fade <= 0f) return
 
-    val ink = Tone.text
-    val ink2 = Tone.text2
-    val grid = Tone.stroke
+    val ink = Data.periwinkle
+    val ink2 = Data.orchid
+    val grid = Tone.hairline
     Row(modifier.fillMaxWidth().graphicsLayer { alpha = fade },
         verticalAlignment = Alignment.CenterVertically) {
         Canvas(Modifier.weight(1f).height(36.dp)) {
@@ -268,6 +270,13 @@ fun Sparkline(traffic: Traffic, shown: Boolean, reduced: Boolean, modifier: Modi
                     val y = (h - pad) - min(1f, v[i] / scale) * (h - pad * 2)
                     if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
                 }
+                val area = Path().apply {
+                    addPath(path)
+                    lineTo(w, h - pad / 2)
+                    lineTo(w * (SPARK_N - n) / (SPARK_N - 1).toFloat(), h - pad / 2)
+                    close()
+                }
+                drawPath(area, Brush.verticalGradient(listOf(color.copy(alpha = 0.16f), color.copy(alpha = 0f))))
                 drawPath(path, color, style = Stroke(1.5.dp.toPx(),
                     cap = androidx.compose.ui.graphics.StrokeCap.Round,
                     join = androidx.compose.ui.graphics.StrokeJoin.Round))
@@ -280,13 +289,13 @@ fun Sparkline(traffic: Traffic, shown: Boolean, reduced: Boolean, modifier: Modi
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Glyph.arrowDown, "Download", Modifier.size(12.dp), tint = ink)
                 Spacer(Modifier.width(4.dp))
-                Text(rate(traffic.downRate), style = Type.mono.copy(color = ink), maxLines = 1,
+                Text(rate(traffic.downRate), style = Type.mono.copy(color = Tone.text), maxLines = 1,
                     modifier = Modifier.widthIn(min = 64.dp), textAlign = androidx.compose.ui.text.style.TextAlign.End)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Glyph.arrowDown, "Upload", Modifier.size(12.dp).rotate(180f), tint = ink2)
                 Spacer(Modifier.width(4.dp))
-                Text(rate(traffic.upRate), style = Type.mono.copy(color = ink2), maxLines = 1,
+                Text(rate(traffic.upRate), style = Type.mono.copy(color = Tone.text2), maxLines = 1,
                     modifier = Modifier.widthIn(min = 64.dp), textAlign = androidx.compose.ui.text.style.TextAlign.End)
             }
         }

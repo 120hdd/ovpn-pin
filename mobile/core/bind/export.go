@@ -41,7 +41,7 @@ func (c *Client) ExportSlot(cfg *ServerConfig, apiPassword string, k int, code, 
 	if best.Provider == "windscribe" {
 		user, pass = wsUser, wsPassword
 	}
-	if err := core.SetSlot(cfg.Domain, apiPassword, cfg.Pin, k, best.Addr, user, pass, best.File,
+	if err := core.SetSlot(cfg.Domain, cfg.Port, apiPassword, cfg.Pin, k, best.Addr, user, pass, best.File,
 		15*time.Second); err != nil {
 		return nil, err
 	}
@@ -53,7 +53,7 @@ func SaveServerChain(cfg *ServerConfig, apiPassword, chain string, timeoutMs int
 	if cfg == nil || cfg.Domain == "" {
 		return "", errors.New("no server configured")
 	}
-	return core.ChainJSON(cfg.Domain, apiPassword, cfg.Pin, chain, time.Duration(timeoutMs)*time.Millisecond)
+	return core.ChainJSON(cfg.Domain, cfg.Port, apiPassword, cfg.Pin, chain, time.Duration(timeoutMs)*time.Millisecond)
 }
 
 // RestoreServerChain puts back what SaveServerChain read.
@@ -61,7 +61,7 @@ func RestoreServerChain(cfg *ServerConfig, apiPassword, chain, saved string, tim
 	if cfg == nil || cfg.Domain == "" {
 		return errors.New("no server configured")
 	}
-	return core.PutChainJSON(cfg.Domain, apiPassword, cfg.Pin, chain, saved, time.Duration(timeoutMs)*time.Millisecond)
+	return core.PutChainJSON(cfg.Domain, cfg.Port, apiPassword, cfg.Pin, chain, saved, time.Duration(timeoutMs)*time.Millisecond)
 }
 
 // PersistServer writes what was set through the API to the server's own
@@ -70,12 +70,13 @@ func PersistServer(cfg *ServerConfig, apiPassword string, timeoutMs int) error {
 	if cfg == nil || cfg.Domain == "" {
 		return errors.New("no server configured")
 	}
-	return core.PersistServer(cfg.Domain, apiPassword, cfg.Pin, time.Duration(timeoutMs)*time.Millisecond)
+	return core.PersistServer(cfg.Domain, cfg.Port, apiPassword, cfg.Pin, time.Duration(timeoutMs)*time.Millisecond)
 }
 
 // ExportLinksJSON makes the links for each slot.
 //
 //	host      the server, as the key has it
+//	port      its TLS port, 0 for 443
 //	edge      a measured Cloudflare address for a server by name, or ""
 //	exportID  the key's export id
 //	slots     JSON: [{"k":0,"name":"Relay · server"}, {"k":1,"name":"Relay · Germany"}]
@@ -83,12 +84,12 @@ func PersistServer(cfg *ServerConfig, apiPassword string, timeoutMs int) error {
 //	          gets a Shadowsocks link too when it is given
 //
 // Returns JSON: [{"k","name","vless","vmess","ss"?}].
-func ExportLinksJSON(host, edge, exportID, slots, ss string) (string, error) {
+func ExportLinksJSON(host string, port int, edge, exportID, slots, ss string) (string, error) {
 	var list []core.ExportSlot
 	if err := json.Unmarshal([]byte(slots), &list); err != nil {
 		return "", errors.New("the slots are not a list: " + err.Error())
 	}
-	srv := core.ExportServer{Host: host, Edge: edge, ID: exportID}
+	srv := core.ExportServer{Host: host, Port: port, Edge: edge, ID: exportID}
 	if ss != "" {
 		var s core.RelayKeySS
 		if err := json.Unmarshal([]byte(ss), &s); err == nil && s.Password != "" && s.Port > 0 {

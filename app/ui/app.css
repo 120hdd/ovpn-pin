@@ -1,25 +1,35 @@
 /* ============================================================================
-   Relay — "Instrument". Tokens first: three themes, one accent that is the
-   connection state, 4-pt spacing, 8/4/0 radii, a six-step type scale.
-   Spec: .claude/DESIGN.md
+   Relay — "Night room". Tokens first: three themes, an accent that is the
+   connection state, 4-pt spacing, 28/24/14/12/999 radii, Geist + Estedad.
+   Spec: .claude/DESIGN-NIGHT.md
    ========================================================================= */
 
 :root {
   /* Graphite, the default. */
-  --bg: #121316;
-  --surface: #1A1B1F;
-  --surface-2: #24252A;
-  --stroke: rgba(255, 255, 255, 0.08);
-  --stroke-strong: rgba(255, 255, 255, 0.16);
-  --text: #ECEDEF;
-  --text-2: #A3A6AE;
-  --text-3: #6E717A;
-  --off: #8A8D96;
-  --work: #E8B24A;
-  --ok: #3FCF8E;
-  --fail: #F0646E;
-  --on-state: #121316;
-  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.32);
+  --void: #060607;
+  --bg: #0A0A0C;            /* Night */
+  --surface: #101013;       /* Slate Card */
+  --surface-2: #17171B;     /* Raised Slate */
+  --stroke: rgba(255, 255, 255, 0.07);          /* Hairline */
+  --stroke-strong: rgba(255, 255, 255, 0.10);   /* Edge */
+  --text: #F4F4F6;          /* Mist White */
+  --text-2: #A3A3AB;        /* Fog */
+  --text-3: #8A8A94;        /* Dust */
+  --off: #8A8A94;
+  --work: #FFC857;          /* Warning: Connecting */
+  --ok: #6BE38B;            /* Good: success marks, always icon + label */
+  --good: #6BE38B;
+  --serious: #FF9A62;
+  --fail: #FF6B7A;          /* Critical */
+  --pulse: #1ED760;
+  --halo: rgba(30, 215, 96, 0.45);
+  --pulse-fill: rgba(30, 215, 96, 0.24);
+  --periwinkle: #8AA6FF;
+  --aqua: #62E6F2;
+  --orchid: #CF9BFF;
+  --on-state: #060607;
+  --glass-solid: #151518;
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.45);
   --vignette: rgba(0, 0, 0, 0.6);
   --scrim: rgba(0, 0, 0, 0.55);
   --wash: 255 255 255;
@@ -32,7 +42,7 @@
   /* Type */
   --font-ui: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
   --font-display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono Relay", "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --font-mono: "Geist Mono Relay", "Cascadia Mono", Consolas, ui-monospace, monospace;
 
   /* Motion: decel for arrivals, point-to-point for moves. */
   --decel: cubic-bezier(0, 0, 0, 1);
@@ -42,9 +52,13 @@
   --t-panel: 250ms;
   --t-large: 333ms;
 
-  /* Radii: 8 for things that float, 4 for controls, 0 where rows meet rows. */
-  --r-card: 8px;
-  --r-ctl: 4px;
+  /* Radii: 28 cards, 24 sheets and panels, 14 tooltips/menus, 12 wells,
+     999 pills. */
+  --r-card: 28px;
+  --r-sheet: 24px;
+  --r-pop: 14px;
+  --r-ctl: 12px;
+  --r-pill: 999px;
 
   /* Names the older rules below still use, pointed at the tokens. */
   --text-muted: var(--text-2);
@@ -55,7 +69,7 @@
   --divider: var(--stroke);
   --border: var(--stroke-strong);
   --fail-bg: color-mix(in srgb, var(--fail), transparent 88%);
-  --focus: var(--text);
+  --focus: var(--pulse);
   --alarm: var(--fail);
   --disc: var(--text);
   --jade-2: var(--ok);
@@ -64,24 +78,34 @@
   --fade: 83ms linear;
   --ease: cubic-bezier(0, 0, 0, 1);
   --shade: 1;
-  --deep: 18 19 22;
+  --deep: 10 10 12;
 }
 
 :root[data-theme='white'] {
+  --void: #ECECEF;
   --bg: #F6F6F7;
   --surface: #FFFFFF;
   --surface-2: #ECECEF;
-  --stroke: rgba(0, 0, 0, 0.09);
-  --stroke-strong: rgba(0, 0, 0, 0.16);
+  --stroke: rgba(0, 0, 0, 0.07);
+  --stroke-strong: rgba(0, 0, 0, 0.12);
   --text: #16171A;
   --text-2: #555862;
-  --text-3: #8A8D96;
+  --text-3: #7A7D86;
   --off: #6E717A;
   --work: #B7791F;
-  --ok: #1F9D63;
+  --ok: #1F8A4C;
+  --good: #139A48;
+  --serious: #C2602A;
   --fail: #D1434F;
+  --pulse: #139A48;
+  --halo: rgba(19, 154, 72, 0);
+  --pulse-fill: rgba(19, 154, 72, 0.14);
+  --periwinkle: #4F6FD9;
+  --aqua: #1798A6;
+  --orchid: #9A5FD6;
   --on-state: #FFFFFF;
-  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.12);
+  --glass-solid: #FFFFFF;
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.12);
   --vignette: rgba(0, 0, 0, 0.16);
   --scrim: rgba(0, 0, 0, 0.32);
   --wash: 0 0 0;
@@ -90,14 +114,12 @@
   color-scheme: light;
 }
 
+/* Black: the same Night palette on the Void page - the surfaces stay Slate
+   Card and Raised Slate, only the page underneath them goes down a step. */
 :root[data-theme='black'] {
-  --bg: #000000;
-  --surface: #0D0D0F;
-  --surface-2: #18181B;
-  --stroke: rgba(255, 255, 255, 0.09);
-  --stroke-strong: rgba(255, 255, 255, 0.18);
-  --text: #F2F2F3;
-  --on-state: #000000;
+  --bg: #060607;            /* Void */
+  --deep: 6 6 7;
+  --on-state: #060607;
 }
 
 /* The state, and what it is called in each. Not the hero's own attribute: the
@@ -105,7 +127,7 @@
 
 :root[data-conn='busy'] { --state: var(--work); }
 
-:root[data-conn='on'] { --state: var(--ok); }
+:root[data-conn='on'] { --state: var(--pulse); }
 
 :root[data-conn='fail'] { --state: var(--fail); }
 
@@ -163,7 +185,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .icon {
   width: 28px; height: 28px;
   display: grid; place-items: center;
-  border-radius: var(--r-ctl);
+  border-radius: var(--r-pill);
   color: var(--text-muted);
   transition: background var(--fade), color var(--fade), transform var(--enter);
 }
@@ -214,7 +236,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 .btn {
   width: 100%; height: 36px;
-  border-radius: var(--r-ctl);
+  border-radius: var(--r-pill);
   display: flex; align-items: center; justify-content: center; gap: 8px;
   font-size: 14px; font-weight: 600;
   transition: background var(--fade), color var(--fade),
@@ -337,7 +359,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .sheet__list::-webkit-scrollbar, .sheet__body::-webkit-scrollbar { width: 10px; }
 
 .sheet__list::-webkit-scrollbar-thumb, .sheet__body::-webkit-scrollbar-thumb {
-  background: var(--control-active); border-radius: 4px; border: 3px solid var(--bg);
+  background: var(--control-active); border-radius: var(--r-pill); border: 3px solid var(--bg);
 }
 
 @keyframes grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
@@ -406,7 +428,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   gap: 0 10px;
   padding: 8px 10px;
   text-align: left;
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   background: transparent;
   box-shadow: inset 0 0 0 1px transparent;
   transition: background var(--fade), box-shadow var(--fade);
@@ -467,7 +489,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 .meter {
   height: 3px; margin-top: 10px;
-  border-radius: 4px; overflow: hidden;
+  border-radius: var(--r-pill); overflow: hidden;
   background: var(--control);
 }
 
@@ -514,7 +536,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 .toggle {
   width: 40px; height: 22px; flex: none;
-  border-radius: 8px;
+  border-radius: var(--r-pill);
   background: var(--control);
   box-shadow: inset 0 0 0 1px var(--border);
   padding: 3px;
@@ -546,9 +568,17 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
    ====================================================================== */
 
 @font-face {
-  font-family: 'IBM Plex Mono Relay';
-  src: url('fonts/IBMPlexMono-400.woff2') format('woff2');
-  font-weight: 400;
+  font-family: 'Geist Mono Relay';
+  src: url('fonts/GeistMono-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist Relay';
+  src: url('fonts/Geist-Variable.woff2') format('woff2');
+  font-weight: 100 900;
   font-style: normal;
   font-display: swap;
 }
@@ -635,7 +665,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 }
 
 .icon {
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   border: 1px solid transparent;
 }
 
@@ -716,7 +746,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   position: relative;
   display: flex;
   padding: 2px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   background: rgb(var(--wash) / 0.045);
 }
 
@@ -724,7 +754,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   position: relative;
   z-index: 1;
   padding: 4px 10px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -744,7 +774,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   top: 2px;
   bottom: 2px;
   left: 2px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   background: var(--control-active);
   box-shadow: none;
   transition: transform 260ms var(--ease), width 260ms var(--ease);
@@ -912,7 +942,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 }
 
 .btn {
-  border-radius: 8px;
+  border-radius: var(--r-pill);
   font-size: 12px;
   font-weight: 600;
 }
@@ -1003,7 +1033,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .empty {
   margin: 8px;
   border: 1px dashed rgb(var(--wash) / 0.1);
-  border-radius: 8px;
+  border-radius: var(--r-card);
   text-align: center;
 }
 
@@ -1045,7 +1075,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 :root {
   --jade-2: var(--ok);         /* the lighter jade, for the far light */
   --jade-deep: #0B6B52;      /* what jade looks like at a distance */
-  --ink: #06281D;            /* text on jade */
+  --ink: #04210F;            /* text on Pulse */
   --swing: 500ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -1073,11 +1103,11 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .ico {
   width: 16px; height: 16px;
   flex: none;
-  stroke-width: 1.7;
+  stroke-width: 1.75;
   vector-effect: non-scaling-stroke;
 }
 
-.ico--sm { width: 13px; height: 13px; stroke-width: 2; }
+.ico--sm { width: 13px; height: 13px; stroke-width: 1.75; }
 
 .sheet__body { padding: 2px 16px 20px; }
 
@@ -1086,7 +1116,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .pane {
   position: relative;
   padding: 15px 15px 16px;
-  border-radius: 8px;
+  border-radius: var(--r-card);
   background: rgb(var(--wash) / 0.022);
   box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.055);
 }
@@ -1145,7 +1175,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   width: 27px; height: 27px;
   display: grid; place-items: center;
   flex: none;
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   color: var(--text-off);
   background: rgb(var(--wash) / 0.04);
   box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
@@ -1203,7 +1233,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .pill {
   margin-left: auto;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   font-size: 12px; line-height: 15px; letter-spacing: 0.03em;
   white-space: nowrap;
   color: var(--text-off);
@@ -1224,7 +1254,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .path {
   margin-top: 11px;
   padding: 9px 11px;
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   font-size: 12px; line-height: 15px;
   color: var(--text-muted);
   background: rgb(0 0 0 / calc(0.22 * var(--shade)));
@@ -1277,7 +1307,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .step {
   margin-top: 10px;
   padding: 11px 12px 12px;
-  border-radius: 8px;
+  border-radius: var(--r-card);
   background: rgb(0 0 0 / calc(0.2 * var(--shade)));
   box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.042);
 }
@@ -1330,7 +1360,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   display: flex; align-items: flex-start; gap: 8px;
   margin-top: 12px;
   padding: 9px 10px 10px;
-  border-radius: 4px;
+  border-radius: var(--r-pop);
   background: rgb(var(--wash) / 0.028);
   box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
   font-size: 12px; line-height: 16px;
@@ -1400,7 +1430,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   color: var(--text);
   background: rgb(0 0 0 / calc(0.24 * var(--shade)));
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
   user-select: text;
   -webkit-user-select: text;
@@ -1423,7 +1453,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   display: grid; place-items: center;
   color: var(--text-off);
   background: rgb(var(--wash) / 0.05);
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   transition: color var(--fade), background var(--fade);
 }
 
@@ -1443,7 +1473,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   gap: 0 10px;
   padding: 8px 11px;
   text-align: left;
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   background: transparent;
   transition: background 200ms var(--ease);
 }
@@ -1461,7 +1491,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   left: 0; top: 50%;
   width: 2px; height: 0;
   transform: translateY(-50%);
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   background: var(--ok);
   transition: height 260ms var(--ease);
 }
@@ -1519,7 +1549,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 .folds { display: flex; flex-direction: column; gap: 2px; margin-top: 14px; }
 
-.fold { border-radius: 4px; }
+.fold { border-radius: var(--r-ctl); }
 
 .fold[data-open] {
   background: rgb(0 0 0 / calc(0.22 * var(--shade)));
@@ -1541,7 +1571,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   padding: 9px 11px;
   text-align: left;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   background: transparent;
   cursor: pointer;
   transition: background var(--fade);
@@ -1647,7 +1677,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .chip {
   display: flex; align-items: baseline; gap: 7px;
   padding: 5px 10px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   font-size: 12px; line-height: 15px;
   color: var(--text-muted);
   background: rgb(var(--wash) / 0.04);
@@ -1715,7 +1745,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   color: var(--text);
   background: transparent;
   border: 1px solid var(--stroke-strong);
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   transition: background var(--t-fade) linear, border-color var(--t-fade) linear;
 }
 
@@ -1790,7 +1820,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .stepper__key {
   flex: 1;
   display: grid; place-items: center;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   color: var(--text-off);
   transition: color var(--fade), background var(--fade);
 }
@@ -1799,7 +1829,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 .stepper__key:active { background: rgb(var(--wash) / 0.12); }
 
-.stepper__key .ico { width: 11px; height: 11px; stroke-width: 2.4; }
+.stepper__key .ico { width: 11px; height: 11px; stroke-width: 1.75; }
 
 /* One chevron, used twice. */
 
@@ -1809,7 +1839,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 .meter {
   height: 3px; margin-top: 11px;
-  border-radius: 4px; overflow: hidden;
+  border-radius: var(--r-pill); overflow: hidden;
   background: rgb(var(--wash) / 0.06);
 }
 
@@ -1849,7 +1879,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   background: rgb(var(--wash) / 0.13);
   background-clip: padding-box;
   border: 3px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
 }
 
 .tally::-webkit-scrollbar-thumb:hover {
@@ -1873,7 +1903,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 .tally__sites { flex: none; display: flex; gap: 3px; }
 
-.tally__sites .ico { width: 11px; height: 11px; stroke-width: 2.6; }
+.tally__sites .ico { width: 11px; height: 11px; stroke-width: 1.75; }
 
 .tally__sites .is-served { color: var(--ok); }
 
@@ -1888,7 +1918,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .pane .btn--quiet {
   height: 32px;
   padding: 0 12px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   font-size: 12px;
   gap: 7px;
   background: rgb(var(--wash) / 0.05);
@@ -2002,7 +2032,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   position: relative;
   display: grid; grid-template-columns: 1fr 1fr; gap: 2px;
   padding: 2px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   background: rgb(0 0 0 / calc(0.28 * var(--shade)));
   box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
 }
@@ -2011,7 +2041,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   position: absolute;
   top: 2px; bottom: 2px; left: 2px;
   width: calc(50% - 3px);
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   background: rgb(var(--wash) / 0.085);
   box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.1);
   transition: transform 280ms var(--ease);
@@ -2049,7 +2079,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .seg__opt {
   position: relative;
   padding: 7px 4px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   font-size: 12px; line-height: 16px;
   white-space: nowrap;
   color: var(--text-off);
@@ -2107,7 +2137,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .split {
   margin-top: 12px;
   padding: 0 12px;
-  border-radius: 8px;
+  border-radius: var(--r-card);
   background: rgb(0 0 0 / calc(0.2 * var(--shade)));
   box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.042);
   transition: opacity 220ms var(--ease);
@@ -2191,7 +2221,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   transition: color 160ms var(--ease), background 160ms var(--ease);
 }
 
-.chip__x .ico { width: 11px; height: 11px; stroke-width: 2.2; }
+.chip__x .ico { width: 11px; height: 11px; stroke-width: 1.75; }
 
 .chip__x:hover, .chip__x:focus-visible { color: var(--text); background: rgb(var(--wash) / 0.1); }
 
@@ -2229,7 +2259,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   left: 0; right: 0;
   z-index: 45;
   padding: 4px;
-  border-radius: 8px;
+  border-radius: var(--r-pop);
   border: 1px solid var(--border);
   background: var(--surface);
   box-shadow: var(--shadow-pop);
@@ -2240,7 +2270,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   display: flex; align-items: center; gap: 7px;
   height: 32px;
   padding: 0 10px;
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   background: rgb(0 0 0 / calc(0.24 * var(--shade)));
   box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
   transition: box-shadow 200ms var(--ease);
@@ -2281,7 +2311,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   background: rgb(var(--wash) / 0.13);
   background-clip: padding-box;
   border: 3px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
 }
 
 .runpop__list::-webkit-scrollbar-thumb:hover {
@@ -2293,7 +2323,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   width: 100%;
   display: flex; align-items: center; gap: 10px;
   padding: 7px 9px;
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   text-align: left;
   font-family: var(--font-mono);
   font-size: 12px; line-height: 15px;
@@ -2376,7 +2406,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .sharepop__full {
   margin: 6px 4px 2px;
   padding: 7px 9px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   font-size: 12px; line-height: 15px;
   color: var(--work);
   background: color-mix(in srgb, var(--work) 7%, transparent);
@@ -2417,7 +2447,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   flex: none;
   width: 27px; height: 27px;
   display: grid; place-items: center;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   color: var(--text-off);
   transition: color 160ms var(--ease), background 160ms var(--ease),
               box-shadow 160ms var(--ease);
@@ -2440,7 +2470,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   list-style: none;
   margin-top: 12px;
   padding: 2px 12px;
-  border-radius: 8px;
+  border-radius: var(--r-card);
   background: rgb(0 0 0 / calc(0.2 * var(--shade)));
   box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.042);
 }
@@ -2459,7 +2489,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   box-shadow: inset 0 0 0 1.5px rgb(var(--wash) / 0.16);
 }
 
-.run__mark .ico { display: none; width: 10px; height: 10px; stroke-width: 3; }
+.run__mark .ico { display: none; width: 10px; height: 10px; stroke-width: 1.75; }
 
 .run[data-phase='testing'] .run__mark { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--work) 20%, transparent); }
 
@@ -2547,7 +2577,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   min-width: 0;
   display: flex; flex-direction: column; gap: 10px;
   padding: 12px;
-  border-radius: 8px;
+  border-radius: var(--r-card);
   background: rgb(0 0 0 / calc(0.2 * var(--shade)));
   box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
 }
@@ -2580,7 +2610,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .qr__code {
   align-self: center;
   max-width: 100%;
-  border-radius: 4px;
+  border-radius: var(--r-pop);
   background: #fff;
   line-height: 0;
   overflow: hidden;
@@ -2638,7 +2668,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   width: 100%;
   min-height: 36px;
   padding: 6px 10px 6px 12px;
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   background: rgb(0 0 0 / calc(0.28 * var(--shade)));
   box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
   color: var(--text);
@@ -2682,7 +2712,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   margin: 0;
   padding: 4px;
   list-style: none;
-  border-radius: 8px;
+  border-radius: var(--r-pop);
   border: 1px solid var(--border);
   background: var(--surface);
   box-shadow: var(--shadow-pop);
@@ -2698,7 +2728,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   align-items: center;
   column-gap: 10px;
   padding: 8px 10px;
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   cursor: pointer;
   outline: none;
 }
@@ -2768,7 +2798,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .pane__row--code code {
   flex: 1 1 auto;
   padding: 7px 9px;
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   font-size: 12px; line-height: 15px;
   color: var(--text-muted);
   background: rgb(0 0 0 / calc(0.28 * var(--shade)));
@@ -2786,7 +2816,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   display: flex; align-items: stretch;
   width: max-content; max-width: 100%;
   margin-top: 9px;
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   background: rgb(0 0 0 / calc(0.24 * var(--shade)));
   box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
   transition: box-shadow 200ms var(--ease), background 200ms var(--ease);
@@ -2865,7 +2895,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
    address that was written and did not answer, red for a config that
    produced nothing and for an answer that was invented. */
 
-.tally__mark { flex: none; width: 11px; height: 11px; stroke-width: 2.6; }
+.tally__mark { flex: none; width: 11px; height: 11px; stroke-width: 1.75; }
 
 .tally__mark.is-served { color: var(--ok); }
 
@@ -2892,7 +2922,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .ws-cap__stage {
   position: relative;
   width: 100%;
-  border-radius: var(--r-ctl);
+  border-radius: var(--r-pop);
   overflow: hidden;
   background: var(--control);
   border: 1px solid var(--border);
@@ -2926,7 +2956,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .ws-cap__rail {
   position: relative;
   height: 34px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   background: var(--control);
   border: 1px solid var(--border);
   touch-action: none;
@@ -2941,7 +2971,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   position: absolute;
   top: 3px; left: 3px;
   width: 46px; height: 26px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--control-active);
   border: 1px solid var(--border);
   will-change: transform;
@@ -3066,7 +3096,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   margin-left: 4px;
   padding: 0;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: none;
   color: var(--text-off);
   cursor: help;
@@ -3091,7 +3121,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   width: max-content;
   max-width: min(280px, calc(100vw - 44px));
   padding: 9px 11px;
-  border-radius: var(--r-ctl);
+  border-radius: var(--r-pop);
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-muted);
@@ -3143,7 +3173,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   position: relative;
   overflow: hidden;
   padding: 16px 16px 15px;
-  border-radius: 4px;
+  border-radius: var(--r-card);
   background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--stroke);
 }
@@ -3188,7 +3218,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 .accthero__bar i {
   height: 4px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: rgb(var(--wash) / 0.08);
   transition: background 320ms var(--ease);
 }
@@ -3209,7 +3239,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   display: grid;
   gap: 14px;
   padding: 14px 14px 12px;
-  border-radius: 8px;
+  border-radius: var(--r-card);
   background: rgb(var(--wash) / 0.025);
   box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.07);
   transition: box-shadow 220ms var(--ease), background-color 220ms var(--ease);
@@ -3232,7 +3262,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   display: grid;
   place-items: center;
   width: 42px; height: 42px;
-  border-radius: 8px;
+  border-radius: var(--r-ctl);
   background: color-mix(in srgb, var(--brand) 14%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 32%, transparent);
 }
@@ -3257,7 +3287,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .prov__state {
   flex: none;
   padding: 2px 9px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   font-size: 12px; line-height: 15px; letter-spacing: 0;
   color: var(--text-off);
   background: rgb(var(--wash) / 0.05);
@@ -3315,7 +3345,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   flex: 1;
   height: 2px;
   margin: 0 4px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   background: rgb(var(--wash) / 0.08);
   transition: background 220ms var(--ease);
 }
@@ -3335,7 +3365,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 .prov__accts {
   display: grid;
-  border-radius: 8px;
+  border-radius: var(--r-card);
   background: rgb(var(--deep, 10 10 16) / 0.35);
   box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.06);
 }
@@ -3404,7 +3434,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   height: 28px;
   padding: 0 10px;
   font-size: 12px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
 }
 
 /* Remove asks once more in place, because it cannot be undone and it sits
@@ -3421,7 +3451,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   width: 28px; height: 28px;
   padding: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   background: none;
   color: var(--text-off);
   cursor: pointer;
@@ -3449,7 +3479,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .prov__do {
   height: 32px;
   padding: 0 13px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   border: 1px solid var(--border);
   background: var(--control);
   color: var(--text);
@@ -3480,7 +3510,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   place-items: center;
   width: 32px; height: 32px;
   padding: 0;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   border: 1px solid rgb(var(--wash) / 0.08);
   background: none;
   color: var(--text-off);
@@ -3538,7 +3568,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   position: relative;
   flex: none;
   width: 34px; height: 20px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: rgb(var(--wash) / 0.08);
   box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.12);
   transition: background 200ms var(--ease), box-shadow 200ms var(--ease);
@@ -3583,7 +3613,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   gap: 13px;
   margin-top: 4px;
   padding: 14px;
-  border-radius: 8px;
+  border-radius: var(--r-card);
   background: var(--surface);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 28%, transparent);
 }
@@ -3595,7 +3625,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   display: grid;
   place-items: center;
   width: 46px; height: 46px;
-  border-radius: 8px;
+  border-radius: var(--r-ctl);
   background: color-mix(in srgb, var(--brand) 16%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 35%, transparent);
 }
@@ -3611,7 +3641,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .addacct__full {
   margin-top: 14px;
   padding: 14px;
-  border-radius: 8px;
+  border-radius: var(--r-card);
   background: rgb(var(--wash) / 0.03);
   font-size: 12px; line-height: 18px;
   color: var(--text-muted);
@@ -3623,7 +3653,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 .addacct__form .field:first-child { margin-top: 0; }
 
-.addacct__form .field__in { height: 40px; border-radius: 4px; }
+.addacct__form .field__in { height: 40px; border-radius: var(--r-ctl); }
 
 .addacct__safe {
   display: flex;
@@ -3631,7 +3661,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   gap: 9px;
   margin-top: 14px;
   padding: 9px 11px;
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   background: rgb(var(--wash) / 0.035);
   font-size: 12px; line-height: 15px;
   color: var(--text-muted);
@@ -3644,7 +3674,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   height: 44px;
   margin-top: 14px;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: var(--r-pill);
   background: var(--ok);
   color: var(--ink, #06281d);
   font-weight: 600;
@@ -3660,7 +3690,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   margin-top: 6px;
   padding: 6px 10px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   background: none;
   color: var(--text-off);
   font: inherit;
@@ -3688,7 +3718,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 .load {
   width: 22px; height: 4px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: rgb(var(--wash) / 0.10);
   overflow: hidden;
   position: relative;
@@ -4031,7 +4061,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   overflow-y: auto;
   overscroll-behavior: contain;
   margin: 11px 0 2px;
-  border-radius: 4px;
+  border-radius: var(--r-pop);
   background: rgb(var(--wash) / 0.02);
   box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
 }
@@ -4196,7 +4226,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .first__go {
   height: 44px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--r-pill);
   color: var(--on-state);
   background: var(--ok);
   font-size: 14px;
@@ -4238,7 +4268,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .intro__dots { display: flex; justify-content: center; gap: 7px; }
 
 .intro__dots i {
-  width: 7px; height: 7px; border-radius: 4px; background: rgb(var(--wash) / 0.18);
+  width: 7px; height: 7px; border-radius: var(--r-pill); background: rgb(var(--wash) / 0.18);
   transition: width 380ms cubic-bezier(0.22, 1, 0.36, 1), background 300ms ease;
 }
 
@@ -4246,7 +4276,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 .choice {
   width: 100%; margin-bottom: 12px; padding: 14px;
-  border: 1px solid rgb(var(--wash) / 0.08); border-radius: 8px;
+  border: 1px solid rgb(var(--wash) / 0.08); border-radius: var(--r-card);
   background: rgb(var(--wash) / 0.03); color: inherit; font: inherit; text-align: left;
 }
 
@@ -4258,7 +4288,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 .choice__glyph {
   width: 36px; height: 36px; flex: none; display: grid; place-items: center;
-  border-radius: 4px; color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent);
+  border-radius: var(--r-ctl); color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent);
 }
 
 .choice__copy { display: flex; flex-direction: column; gap: 2px; }
@@ -4300,7 +4330,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 .steps__detail:empty { display: none; }
 
-.steps__bar { display: none; height: 4px; border-radius: 4px; background: rgb(var(--wash) / 0.08); overflow: hidden; }
+.steps__bar { display: none; height: 4px; border-radius: var(--r-pill); background: rgb(var(--wash) / 0.08); overflow: hidden; }
 
 .steps__row[data-at='now'] .steps__bar { display: block; }
 
@@ -4320,7 +4350,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 .theme {
   display: flex; flex-direction: column; gap: 6px; padding: 6px;
-  border: 1px solid var(--border); border-radius: 8px;
+  border: 1px solid var(--border); border-radius: var(--r-ctl);
   background: transparent; color: var(--text-muted); font: inherit; font-size: 12px;
   cursor: pointer; text-align: left;
 }
@@ -4330,14 +4360,14 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .theme[aria-checked='true'] { border-color: var(--ok); color: var(--text); box-shadow: 0 0 0 1px var(--ok); }
 
 .theme__page {
-  position: relative; height: 34px; border-radius: 4px; overflow: hidden;
+  position: relative; height: 34px; border-radius: var(--r-ctl); overflow: hidden;
   background: var(--page);
   box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.08);
 }
 
 .theme__page i {
   position: absolute; left: 6px; right: 14px; bottom: 6px; height: 12px;
-  border-radius: 4px; background: var(--card);
+  border-radius: var(--r-ctl); background: var(--card);
 }
 
 .theme__page b {
@@ -4369,7 +4399,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   margin: auto;
   padding: 18px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-sheet);
   background: var(--surface);
   color: var(--text);
 }
@@ -4433,7 +4463,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
    Home and the location list.
 
    Everything below is the "Instrument" layer: type and data do the work,
-   colour is the connection state and nothing else, and the globe is the one
+   colour is the connection state and nothing else, and the flag is the one
    expressive object on the screen. Nothing glows, floats or breathes.
    ========================================================================= */
 
@@ -4553,7 +4583,7 @@ body {
   min-height: 36px;
   margin: 4px 0 0 -8px;
   padding: 4px 8px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   font-family: var(--font-display);
   font-size: 20px;
   line-height: 28px;
@@ -4618,42 +4648,22 @@ body {
 
 .head__more svg { transition: transform var(--t-small) var(--decel); }
 
-/* --------------------------------------------------------------- the globe */
+/* ---------------------------------------------------------------- the flag */
 
-/* The canvas is sized and placed by globe.js to the part of the window the disc
-   touches, so it never carries pixels nobody sees. It sits above the flag
-   backdrop and under the app (.app is z-index 1). Its colour is the grid's
-   ink: cyan off, the state colour when the connection has one. globe.js reads
-   the computed value and eases to it. */
-
-.globe {
+/* The world (atlas.js): the whole window, under the app (.app is z-index 1);
+   transparent wherever there is no planet. */
+.atlas {
   position: fixed;
-  left: 0;
-  top: 0;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   z-index: 0;
   display: block;
   pointer-events: none;
-  --globe-off: #35D6E6;
-  color: var(--globe-off);
-  /* Steps back to 65% once connected, so the flag behind and the numbers in
-     front have the stage. */
-  transition: opacity var(--t-large, 333ms) cubic-bezier(0, 0, 0, 1);
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .globe { transition: none; }
-}
-
-:root[data-theme='white'] .globe { --globe-off: #0A8CA6; }
-
-:root[data-conn='busy'] .globe { color: var(--work); }
-
-:root[data-conn='on'] .globe { color: var(--ok); opacity: 0.65; }
-
-:root[data-conn='fail'] .globe { color: var(--fail); }
 
 /* The middle band: the sparkline top-left under the status block, and the
-   globe's click area over all of it. */
+   flag's click area over all of it. */
 
 .mid {
   grid-row: 2;
@@ -4669,7 +4679,7 @@ body {
 .globe-hit {
   position: absolute;
   inset: 0;
-  border-radius: 8px;
+  border-radius: var(--r-ctl);
   cursor: default;
 }
 
@@ -4816,7 +4826,7 @@ body {
 
 .dd__field {
   min-height: 40px;
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--stroke);
 }
@@ -4835,7 +4845,7 @@ body {
   top: auto;
   bottom: calc(100% + 4px);
   transform-origin: 50% 100%;
-  border-radius: 8px;
+  border-radius: var(--r-pop);
   background: var(--surface);
   box-shadow: var(--shadow-pop);
 }
@@ -4846,7 +4856,7 @@ body {
   place-items: center;
   width: 100%;
   height: 48px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   border: 1px solid var(--stroke-strong);
   background: transparent;
   color: var(--text);
@@ -4948,7 +4958,7 @@ body {
 .textbtn {
   flex: none;
   padding: 4px 8px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   font-size: 14px;
   line-height: 20px;
   color: var(--text-2);
@@ -4965,7 +4975,7 @@ body {
   flex: none;
   height: 40px;
   margin: 0 16px 8px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--stroke);
   transition: box-shadow var(--t-fade) linear;
@@ -4997,7 +5007,7 @@ body {
   flex: none;
   margin-right: 12px;
   padding: 0 6px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   box-shadow: inset 0 0 0 1px var(--stroke-strong);
   font-family: var(--font-mono);
   font-size: 12px;
@@ -5034,7 +5044,7 @@ body {
   width: auto;
   height: 32px;
   padding: 0 12px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   box-shadow: inset 0 0 0 1px var(--stroke);
   background: transparent;
   color: var(--text-2);
@@ -5065,7 +5075,7 @@ body {
   height: 32px;
   margin-left: auto;
   padding: 0 8px 0 12px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   box-shadow: inset 0 0 0 1px var(--stroke);
   color: var(--text-2);
   font-size: 12px;
@@ -5134,11 +5144,37 @@ body {
 
 .gh__n { font-size: 12px; line-height: 16px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 
+/* A continent's heading is its drawer's handle: the whole line, a chevron at
+   the trailing edge that turns when it is open. */
+button.gh {
+  width: 100%;
+  align-items: center;
+  border: 0;
+  border-bottom: 1px solid var(--stroke);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  color: inherit;
+}
+
+button.gh:hover .gh__name, button.gh.is-cursor .gh__name { color: var(--text); }
+
+button.gh:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
+
+.gh__chev { margin-left: auto; width: 16px; height: 16px; color: var(--text-3);
+  transition: transform var(--t-small, 167ms) var(--decel, ease-out); }
+
+.gh[aria-expanded='true'] .gh__chev { transform: rotate(180deg); }
+
+.grp[data-open='false'] > .grp__in { display: none; }
+
+.grp__in { overflow: hidden; }
+
 .group { border-bottom: 1px solid var(--stroke); }
 
 .group:not(.is-open) { content-visibility: auto; contain-intrinsic-size: auto 53px; }
 
-.grp > .group:last-child { border-bottom: 0; }
+.grp__in > .group:last-child { border-bottom: 0; }
 
 .group__in { overflow: hidden; }
 
@@ -5153,7 +5189,7 @@ body {
   width: 100%;
   min-height: 52px;
   padding: 8px 4px 8px 8px;
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   text-align: left;
   color: var(--text);
   transition: background var(--t-fade) linear;
@@ -5227,7 +5263,7 @@ body {
 
 .mark {
   padding: 0 4px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   box-shadow: inset 0 0 0 1px var(--stroke-strong);
   font-size: 12px;
   line-height: 16px;
@@ -5253,7 +5289,7 @@ body {
   place-items: center;
   width: 28px;
   height: 28px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   color: var(--text-3);
   cursor: pointer;
   transition: color var(--t-fade) linear, background var(--t-fade) linear;
@@ -5279,7 +5315,7 @@ body {
 
 .expand--empty { visibility: hidden; pointer-events: none; }
 
-.expand__ico { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.expand__ico { fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
 
 .expand__chev { transform-origin: 12px 12px; transition: transform var(--t-small) var(--decel); }
 
@@ -5297,7 +5333,7 @@ body {
   width: 100%;
   min-height: 36px;
   padding: 0 8px;
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   text-align: left;
   transition: background var(--t-fade) linear;
 }
@@ -5365,8 +5401,8 @@ body {
 }
 
 :root {
-  --font-ui: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", "Estedad Relay", system-ui, sans-serif;
-  --font-display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", "Estedad Relay", system-ui, sans-serif;
+  --font-ui: "Geist Relay", "Estedad Relay", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Geist Relay", "Estedad Relay", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
   --seg-on: color-mix(in srgb, var(--surface-2), var(--text) 12%);
 }
 
@@ -5394,7 +5430,7 @@ body {
   margin: 8px 16px 0;
   padding: 0;
   overflow: hidden;
-  border-radius: 8px;
+  border-radius: var(--r-card);
   background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--stroke);
 }
@@ -5508,7 +5544,7 @@ body {
 
 .cards {
   overflow: hidden;
-  border-radius: 8px;
+  border-radius: var(--r-card);
   background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--stroke);
 }
@@ -5544,7 +5580,7 @@ body {
 
 /* Expander rows */
 
-.expander { border-radius: 8px; }
+.expander { border-radius: var(--r-card); }
 
 .expander__sum {
   display: flex;
@@ -5560,7 +5596,7 @@ body {
   font-weight: 600;
   background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--stroke);
-  border-radius: 8px;
+  border-radius: var(--r-card);
 }
 
 .expander__sum::-webkit-details-marker { display: none; }
@@ -5575,7 +5611,7 @@ body {
 
 .expander > :not(summary) { margin-top: 12px; }
 
-.lan .expander > .pane__why { margin: 0; padding: 12px 16px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--stroke); border-top: 0; border-radius: 0 0 8px 8px; }
+.lan .expander > .pane__why { margin: 0; padding: 12px 16px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--stroke); border-top: 0; border-radius: 0 0 var(--r-card) var(--r-card); }
 
 .lan .expander > .pane__why { margin-top: 0; }
 
@@ -5600,7 +5636,7 @@ body {
 
 /* Label / value */
 
-.kv { margin-top: 0; border-radius: 8px; overflow: hidden; background: var(--surface); box-shadow: inset 0 0 0 1px var(--stroke); }
+.kv { margin-top: 0; border-radius: var(--r-card); overflow: hidden; background: var(--surface); box-shadow: inset 0 0 0 1px var(--stroke); }
 
 .kv__row { display: flex; align-items: center; gap: 12px; min-height: 40px; padding: 4px 16px; }
 
@@ -5682,7 +5718,7 @@ body {
   width: 40px;
   height: 20px;
   padding: 0;
-  border-radius: 10px;
+  border-radius: var(--r-pill);
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--text-3);
   transition: background var(--t-fade) linear, box-shadow var(--t-fade) linear;
@@ -5707,7 +5743,7 @@ body {
 
 .toggle[data-busy='1'] span { background: var(--work); }
 
-.toggle--sm { width: 32px; height: 16px; padding: 0; border-radius: 8px; }
+.toggle--sm { width: 32px; height: 16px; padding: 0; border-radius: var(--r-pill); }
 
 .toggle--sm span { top: 3px; left: 3px; width: 10px; height: 10px; }
 
@@ -5762,7 +5798,7 @@ body {
 
 .split {
   padding: 0 16px;
-  border-radius: 8px;
+  border-radius: var(--r-card);
   background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--stroke);
 }
@@ -5779,15 +5815,15 @@ body {
 
 .fold__cap:hover { background: var(--surface-2); }
 
-.load { height: 4px; border-radius: 2px; background: var(--stroke); }
+.load { height: 4px; border-radius: var(--r-pill); background: var(--stroke); }
 
 .load::after { background: var(--text-2); }
 
 .load[data-level="low"]::after { background: var(--ok); }
 
-.meter, .steps__bar, .accthero__bar i { border-radius: 2px; }
+.meter, .steps__bar, .accthero__bar i { border-radius: var(--r-pill); }
 
-.btn--quiet { border-radius: 4px; }
+.btn--quiet { border-radius: var(--r-pill); }
 
 /* Busy: an indeterminate bar along the bottom edge, in the working colour. No
    conic arc round the rim. */
@@ -5886,7 +5922,7 @@ body {
 
 .themes { gap: 8px; margin-top: 4px; }
 
-.theme { padding: 8px; border-radius: 8px; background: var(--surface); box-shadow: none; color: var(--text-2); }
+.theme { padding: 8px; border-radius: var(--r-ctl); background: var(--surface); box-shadow: none; color: var(--text-2); }
 
 .theme:hover { border-color: var(--stroke-strong); }
 
@@ -6046,7 +6082,7 @@ body {
 
 .first__go {
   height: 40px;
-  border-radius: 4px;
+  border-radius: var(--r-pill);
   color: var(--bg);
   background: var(--text);
 }
@@ -6093,7 +6129,7 @@ body {
   margin-bottom: 8px;
   padding: 16px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--r-card);
   background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--stroke);
 }
@@ -6126,7 +6162,7 @@ body {
   .spark[data-mode='running']::after { animation: none; transform: none; width: 100%; opacity: 0.5; }
 }
 
-.kv .btn--bare { width: auto; height: auto; margin: 0; padding: 4px 8px; border-top: 0; border-radius: 4px; flex: none; }
+.kv .btn--bare { width: auto; height: auto; margin: 0; padding: 4px 8px; border-top: 0; border-radius: var(--r-pill); flex: none; }
 
 .kv .btn--bare:hover { background: var(--surface-2); }
 
@@ -6158,7 +6194,7 @@ body {
 
 .pane > .pane__copy > .seg { margin-top: 0; }
 
-.folds { gap: 0; margin-top: 12px; overflow: hidden; border-radius: 8px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--stroke); }
+.folds { gap: 0; margin-top: 12px; overflow: hidden; border-radius: var(--r-card); background: var(--surface); box-shadow: inset 0 0 0 1px var(--stroke); }
 
 .fold { border-radius: 0; }
 
@@ -6166,7 +6202,7 @@ body {
 
 .fold[data-open] { background: none; box-shadow: none; }
 
-.pane__aside { align-items: center; margin-top: 12px; padding: 12px 16px; border-radius: 8px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--stroke); }
+.pane__aside { align-items: center; margin-top: 12px; padding: 12px 16px; border-radius: var(--r-card); background: var(--surface); box-shadow: inset 0 0 0 1px var(--stroke); }
 
 .pane__aside .pane__why { margin-bottom: 0; }
 
@@ -6181,3 +6217,811 @@ body {
 .sheet__body { overflow-x: hidden; }
 
 .sheet__list::-webkit-scrollbar-thumb, .sheet__body::-webkit-scrollbar-thumb { border-color: var(--bg); background: var(--stroke-strong); }
+
+/* ========================================================== the world layer
+
+   The home screen sits on the map (atlas.js): a night room, fine film grain
+   over it, one soft cone of light from the top. Type stays on the left and
+   reads over the planet on a shadow; the addresses and the action share one
+   frosted panel at the foot - the only glass in the app - with "from" on the
+   left and "to" on the right, each under its own flag. The old flag wash
+   behind the page is gone: the map is where the country is now. */
+
+:root {
+  --glass: rgba(255, 255, 255, 0.045);
+  --glass-edge: rgba(255, 255, 255, 0.10);
+  --glass-top: rgba(255, 255, 255, 0.18);
+  --type-shadow: 0 2px 16px rgba(0, 0, 0, 0.75);
+}
+
+:root[data-theme='white'] {
+  --glass: rgba(255, 255, 255, 0.62);
+  --glass-edge: rgba(0, 0, 0, 0.08);
+  --glass-top: rgba(255, 255, 255, 0.9);
+  --type-shadow: 0 1px 12px rgba(255, 255, 255, 0.85);
+}
+
+.backdrop { display: none; }
+
+/* the cone from above, behind the planet; the grain over it, under the app */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(60% 45% at 50% -8%, rgba(255, 255, 255, 0.07), transparent 70%);
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.08;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.status {
+  min-height: 0;
+  font-size: clamp(28px, 7.4vw, 34px);
+  line-height: 1.12;
+  letter-spacing: -0.01em;
+}
+
+.head, .mid .flux { text-shadow: var(--type-shadow); }
+
+/* one panel: the addresses on top, the way out and the action below */
+.hero__foot {
+  margin: 0 -2px;
+  padding: 16px 18px 4px;
+  border-radius: 24px 24px 0 0;
+  background: var(--glass);
+  border: 1px solid var(--glass-edge);
+  border-top-color: var(--glass-top);
+  border-bottom: 0;
+  backdrop-filter: blur(24px) saturate(140%);
+}
+
+.card {
+  margin: 0 -2px;
+  padding: 12px 18px 18px;
+  border-radius: 0 0 24px 24px;
+  background: var(--glass);
+  border: 1px solid var(--glass-edge);
+  border-top: 0;
+  backdrop-filter: blur(24px) saturate(140%);
+}
+
+.ips {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.ips__row { display: block; min-width: 0; }
+
+.ips dt {
+  font: 11px/14px var(--font-mono, monospace);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.ips dd { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; margin-top: 4px; }
+
+.ips__row--exit { text-align: right; }
+
+.ips__row--exit dd { align-items: flex-end; }
+
+.ips__place {
+  order: -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  font-size: 17px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--text);
+  text-align: inherit;
+}
+
+.ips__row--exit .ips__place { flex-direction: row-reverse; }
+
+.ips__flag {
+  flex: none;
+  width: 22px;
+  height: 16.5px;
+  border-radius: 3px;
+  background-size: cover;
+  background-position: center;
+  box-shadow: 0 0 0 1px var(--stroke);
+}
+
+.ips__flag:not([style*='url']) { display: none; }
+
+.ips__ip { font-size: 12px; line-height: 16px; color: var(--text-2); }
+
+/* the action: one light pill; once there is something to stop, a quiet outline */
+.go {
+  height: 48px;
+  border-radius: var(--r-pill);
+  border-color: transparent;
+  background: var(--text);
+  color: var(--bg);
+}
+
+.go:hover:not(:disabled) { background: var(--text); filter: brightness(0.94); }
+
+.go[data-mode='busy'],
+.go[data-mode='on'] {
+  background: transparent;
+  border-color: var(--glass-edge);
+  color: var(--text);
+}
+
+.go[data-mode='busy']:hover:not(:disabled),
+.go[data-mode='on']:hover:not(:disabled) { background: var(--surface-2); filter: none; }
+
+.dd__field { border-radius: var(--r-ctl); }
+
+/* ============================================================= night room
+
+   .claude/DESIGN-NIGHT.md over everything above - last in the file so it
+   wins at equal weight. Cards are solid Slate with a 1px Edge and radius 28;
+   only floating layers (sheets, dialogs, menus, dropdowns, tooltips, the
+   home panel) are frosted glass. The Pulse glow belongs to the one active
+   item in a view and to the live dot, nothing else; a set of items with one
+   chosen shares a single glow that slides (app.js, GSAP). */
+
+:root {
+  --edge: var(--stroke-strong);
+  --sheet-glass: rgba(10, 10, 12, 0.80);
+  --pop-glass: rgba(21, 21, 24, 0.84);
+  --blur: blur(24px) saturate(140%);
+  /* the active item: a 1px Pulse edge fading out, a Pulse wash fading out,
+     one halo, and the 3x24 bar on its outer edge */
+  --active-border: linear-gradient(90deg, var(--pulse), transparent 80%);
+  --active-fill: linear-gradient(90deg, var(--pulse-fill), transparent 80%);
+  --halo-ring: 0 0 32px -6px var(--halo);
+  --edge-bar: linear-gradient(var(--pulse), var(--pulse)) 0 50% / 3px 24px no-repeat;
+  --lbl: 12.5px;
+  --brand: var(--periwinkle);
+}
+
+:root[data-theme='black'] { --sheet-glass: rgba(6, 6, 7, 0.82); }
+
+:root[data-theme='white'] {
+  --sheet-glass: rgba(246, 246, 247, 0.88);
+  --pop-glass: rgba(255, 255, 255, 0.62);
+  --halo-ring: 0 0 0 0 transparent;   /* glow off on white: bar + fill only */
+}
+
+/* Persian is set in Estedad with room for its marks. */
+:lang(fa), [dir='rtl'] { font-family: 'Estedad Relay', var(--font-ui); line-height: 1.9; }
+
+:focus-visible { outline-color: var(--focus); }
+
+.go:focus-visible, .row:focus-visible, button.gh:focus-visible,
+.globe-hit:focus-visible, .menu__row:focus-visible, .theme:focus-visible,
+.dd__opt:focus-visible { outline: 2px solid var(--focus); }
+
+/* ------------------------------------------------------------ the mark */
+
+.bar__ring, .logo-mark__ring { stroke: var(--text-2); }
+
+.bar__bead { fill: var(--state); transition: fill var(--t-large) var(--decel); }
+
+.logo-mark__bead { fill: var(--text); }
+
+.icon { width: 32px; height: 32px; }
+
+.icon:hover { background: var(--surface-2); }
+
+.icon:active { transform: translateY(1px); }
+
+.icon--log::after { background: var(--pulse); }
+
+/* ------------------------------------------------------------ home */
+
+.status-line { display: flex; align-items: center; gap: 12px; min-width: 0; }
+
+.status-line .status { min-width: 0; }
+
+.status { font-weight: 600; letter-spacing: -0.025em; }
+
+.status[data-state='on'] { color: var(--pulse); }
+
+/* the live dot: 8px of Pulse, its ring breathing out (app.js) */
+.live {
+  position: relative;
+  flex: none;
+  display: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--pulse);
+}
+
+:root[data-conn='on'] .live { display: block; }
+
+.live__halo {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--halo);
+  opacity: 0;
+}
+
+:root[data-theme='white'] .live__halo { background: var(--pulse-fill); }
+
+.where { border-radius: var(--r-pill); padding: 4px 12px 4px 8px; }
+
+.where__label { font-weight: 600; letter-spacing: -0.01em; }
+
+.ips dt {
+  font: 500 var(--lbl)/16px var(--font-ui);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-3);
+}
+
+.ips__place { font-weight: 500; font-size: 15px; }
+
+.ips__ip { color: var(--text-2); }
+
+.ips[data-state='on'] .ips__row--exit .ips__ip { color: var(--pulse); }
+
+.hint { font-size: var(--lbl); color: var(--text-3); }
+
+/* the throughput: down in Periwinkle, up in Orchid */
+.flux { --flux-down: var(--periwinkle); --flux-up: var(--orchid); }
+
+.go { font-weight: 500; }
+
+.go:active:not(:disabled) { transform: translateY(1px); }
+
+.go[data-mode='off'] { color: var(--void); }
+
+.dd__field {
+  border-radius: var(--r-pop);
+  background: rgb(var(--wash) / 0.035);
+  box-shadow: inset 0 0 0 1px var(--glass-edge);
+}
+
+.dd__field:hover, .dd[data-open='1'] .dd__field { box-shadow: inset 0 0 0 1px var(--edge); }
+
+.dd__cap { font-size: var(--lbl); color: var(--text-3); }
+
+/* ----------------------------------------------- glass: the floating layers */
+
+.sheet {
+  margin: 6px 0 0;
+  height: calc(100% - 6px);
+  border-radius: var(--r-sheet) var(--r-sheet) 0 0;
+  background: var(--sheet-glass);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  box-shadow: inset 0 1px 0 var(--glass-top), inset 0 0 0 1px var(--glass-edge);
+}
+
+.sheet__title { font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -0.02em; }
+
+.dd__list, .card .dd__list, .runpop, .info__bubble {
+  border: 1px solid var(--glass-edge);
+  border-top-color: var(--glass-top);
+  border-radius: var(--r-pop);
+  background: var(--pop-glass);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  box-shadow: var(--shadow-pop);
+}
+
+.info__bubble { padding: 10px 12px; color: var(--text-2); }
+
+.ask {
+  padding: 24px;
+  border: 1px solid var(--glass-edge);
+  border-top-color: var(--glass-top);
+  border-radius: var(--r-sheet);
+  background: var(--sheet-glass);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+}
+
+.ask__title { font-size: 15px; font-weight: 500; }
+
+.ask__say, .ask__keep { font-size: var(--lbl); color: var(--text-2); }
+
+.ask__keep input { accent-color: var(--pulse); }
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .sheet, .ask, .dd__list, .card .dd__list, .runpop, .info__bubble,
+  .hero__foot, .card { background: var(--glass-solid); }
+}
+
+/* the way out: one glow under the chosen row, sliding between them */
+.dd__list { padding: 6px; }
+
+.dd__opt { position: relative; z-index: 1; border-radius: var(--r-ctl); padding: 10px 12px; }
+
+.dd__opt:hover, .dd__opt:focus-visible, .dd__opt.is-cursor { background: rgb(var(--wash) / 0.045); }
+
+.dd__opt[aria-selected='true'] .dd__name { color: var(--text); font-weight: 500; }
+
+.dd__opt .dd__check { display: none; }
+
+.dd__glow, .themes__glow {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  list-style: none;
+  pointer-events: none;
+  border: 1px solid transparent;
+  background:
+    var(--active-fill) padding-box,
+    linear-gradient(var(--glow-base, var(--surface)), var(--glow-base, var(--surface))) padding-box,
+    var(--active-border) border-box;
+  box-shadow: var(--halo-ring);
+  visibility: hidden;
+}
+
+.dd__glow { left: 6px; right: 6px; height: 0; border-radius: var(--r-ctl); --glow-base: var(--glass-solid); }
+
+.dd__glow::before, .themes__glow::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 50%;
+  width: 3px;
+  height: 24px;
+  margin-top: -12px;
+  border-radius: 0 3px 3px 0;
+  background: var(--pulse);
+}
+
+/* ------------------------------------------------------------ cards */
+
+.cards, .kv, .split, .folds, .pane__aside, .prov, .choice, .qr, .runs,
+.menu, .expander__sum, .addacct__full, .themes {
+  border-radius: var(--r-card);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--edge);
+}
+
+.lan .expander > .pane__why {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--edge);
+}
+
+.setrow { padding: 14px 20px; }
+
+.kv__row { padding: 6px 20px; }
+
+.split { padding: 4px 20px; }
+
+.prov, .choice, .qr { padding: 20px; }
+
+.pane__aside { padding: 16px 20px; }
+
+.expander__sum { padding: 10px 20px; font-weight: 500; }
+
+.expander[open] > .expander__sum { border-radius: var(--r-card) var(--r-card) 0 0; }
+
+.lan .expander > .pane__why { padding: 14px 20px; border-radius: 0 0 var(--r-card) var(--r-card); }
+
+.empty { background: none; box-shadow: none; padding: 24px 12px; color: var(--text-2); }
+
+/* section titles: weight and colour, not size */
+.pane > .pane__head .pane__title,
+.pane > .pane__copy > .pane__title { font-size: 15px; line-height: 22px; font-weight: 500; letter-spacing: -0.005em; }
+
+.setrow .pane__title, .menu__name, .step__cap, .lan__head { font-size: 14px; font-weight: 500; }
+
+.pane__why, .note, .menu__note, .field__cap, .kv dt, .lhead, .logbar__sum,
+.listtotal, .listsplit, .tip, .port__cap, .prov__n, .choice__note { font-size: var(--lbl); }
+
+.menu__note, .field__cap, .kv dt, .lhead, .listtotal, .listsplit, .prov__n { color: var(--text-3); }
+
+/* the settings index: an icon well, the name, a quiet line under it */
+.menu__row { min-height: 60px; padding: 10px 20px 10px 14px; gap: 14px; }
+
+.menu__ico {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 8px;
+  border-radius: var(--r-ctl);
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.menu__row:hover { background: rgb(var(--wash) / 0.03); }
+
+.menu__row[aria-current='true'] { background: var(--edge-bar), var(--active-fill); }
+
+.menu__row[aria-current='true'] .menu__name { color: var(--text); }
+
+.menu__row[aria-current='true'] .menu__ico { color: var(--pulse); }
+
+.menu__row[aria-current='true'] .menu__n { color: var(--text-2); opacity: 1; }
+
+/* accounts: the provider marks keep their data colours */
+.prov, .addacct__hero { --brand: var(--periwinkle); }
+
+.prov[data-provider='windscribe'], .addacct__hero[data-provider='windscribe'] { --brand: var(--aqua); }
+
+.prov__badge, .addacct__badge {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  box-shadow: none;
+}
+
+.prov__mark, .addacct__mark { width: 22px; height: 22px; color: var(--brand); }
+
+.prov[data-on='1'] { background: var(--edge-bar), var(--surface); box-shadow: inset 0 0 0 1px var(--edge); }
+
+.choice__glyph, .pane__glyph { border-radius: var(--r-ctl); background: var(--surface-2); color: var(--text-2); }
+
+.choice__glyph { width: 40px; height: 40px; }
+
+/* ------------------------------------------------------------ buttons */
+
+.btn { height: 40px; font-weight: 500; }
+
+.btn:active:not(:disabled) { transform: translateY(1px); }
+
+.btn--quiet {
+  padding: 0 16px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--edge);
+  color: var(--text);
+}
+
+.btn--quiet:hover { background: var(--surface-2); }
+
+.btn--quiet:active { background: var(--surface-2); }
+
+.btn--bare { border-radius: var(--r-pill); }
+
+/* the primary: one per view, Mist White with Void type */
+.first__go, .btn.addacct__go, .prov__do[data-lead='1'] {
+  border: 0;
+  background: var(--text);
+  color: var(--void);
+  box-shadow: none;
+  font-weight: 500;
+}
+
+.first__go:hover, .btn.addacct__go:hover, .prov__do[data-lead='1']:hover {
+  color: var(--void);
+  filter: none;
+  opacity: 0.92;
+}
+
+.first__go { height: 44px; padding: 0 24px; }
+
+.prov__do { height: 34px; padding: 0 14px; border-color: var(--edge); background: transparent; font-weight: 500; }
+
+.prov__do:hover { border-color: var(--edge); background: var(--surface-2); color: var(--text); }
+
+.prov__do:active, .prov__side:active, .chip:active:not(:disabled) { transform: translateY(1px); }
+
+.textbtn { border-radius: var(--r-pill); padding: 6px 12px; text-decoration: none; }
+
+/* ------------------------------------------------------- chips and badges */
+
+.chip {
+  padding: 5px 12px;
+  background: var(--surface-2);
+  box-shadow: none;
+  color: var(--text-2);
+}
+
+.chip:hover:not(:disabled) { background: color-mix(in srgb, var(--surface-2), var(--text) 6%); color: var(--text); }
+
+.chip[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--surface-2), var(--text) 8%);
+  box-shadow: inset 0 0 0 1px var(--edge);
+  color: var(--text);
+}
+
+.chip.is-current { color: var(--text); background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--edge); }
+
+.chip.is-current .chip__count { color: var(--text-2); }
+
+.gh__n, .mark {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--r-pill);
+  box-shadow: inset 0 0 0 1px var(--edge);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.pill[data-state='on']::before { background: var(--pulse); }
+
+/* ------------------------------------------------------- fields and switches */
+
+.field__in {
+  height: 40px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: var(--r-ctl);
+  background: var(--surface-2);
+  font-size: 13px;
+}
+
+.field__in:hover { background: color-mix(in srgb, var(--surface-2), var(--text) 4%); }
+
+.field__in:focus { border-color: var(--pulse); background: var(--surface-2); }
+
+.field__peek { border-radius: var(--r-ctl); background: var(--surface-2); }
+
+.find {
+  height: 44px;
+  margin: 0 16px 10px;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--edge);
+}
+
+.find:focus-within { box-shadow: inset 0 0 0 1px var(--pulse); }
+
+.find__lens { margin-left: 16px; }
+
+.find__key { border-radius: var(--r-pill); padding: 0 8px; }
+
+.toggle { border-radius: var(--r-pill); }
+
+/* Segmented controls: a Raised Slate track and one sliding piece, moved by
+   app.js through --seg-i (no per-option borders). Its edge and wash are the
+   active item's; the halo stays with the one glowing item in the view. */
+.seg {
+  gap: 0;
+  padding: 3px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--stroke);
+}
+
+:root .seg[class] > i.seg__slide {
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px) / 2);
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
+  background:
+    var(--active-fill) padding-box,
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    var(--active-border) border-box;
+  box-shadow: none;
+  transform: translateX(calc(var(--seg-i, 0) * 100%));
+  transition: none;
+}
+
+:root .seg--three[class] > i.seg__slide { width: calc((100% - 6px) / 3); }
+
+/* the two-way switch over the log wears the same piece */
+.pair:not(#sortBy) { border-radius: var(--r-pill); background: var(--surface-2); }
+
+.pair:not(#sortBy) > .pair__slide {
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
+  background:
+    var(--active-fill) padding-box,
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    var(--active-border) border-box;
+  box-shadow: none;
+}
+
+.seg__opt { position: relative; z-index: 1; padding: 7px 10px; font-size: var(--lbl); border-radius: var(--r-pill); }
+
+.seg__opt[aria-pressed='true'] { color: var(--text); font-weight: 500; }
+
+#sortBy .pair__opt { height: 34px; padding: 0 14px; border-radius: var(--r-pill); box-shadow: none; }
+
+#sortBy .pair__opt[aria-selected='true'] { background: var(--surface-2); box-shadow: none; font-weight: 500; }
+
+.listhead { height: 34px; padding: 0 10px 0 14px; border-radius: var(--r-pill); box-shadow: inset 0 0 0 1px var(--edge); }
+
+/* ------------------------------------------------------------ the theme list
+
+   Three themes as three rows, not three equal tiles; the chosen one sits on
+   the shared glow, which slides. */
+.themes {
+  position: relative;
+  grid-template-columns: 1fr;
+  gap: 0;
+  padding: 4px;
+  margin-top: 4px;
+}
+
+.theme {
+  position: relative;
+  z-index: 1;
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px 10px 12px;
+  border: 0;
+  border-radius: var(--r-sheet);
+  background: none;
+  box-shadow: none;
+  font-size: 14px;
+  color: var(--text-2);
+}
+
+.theme:hover { color: var(--text); background: rgb(var(--wash) / 0.03); }
+
+.theme[aria-checked='true'] { color: var(--text); font-weight: 500; border: 0; box-shadow: none; background: none; }
+
+.theme__page { flex: none; width: 44px; height: 30px; border-radius: 10px; box-shadow: inset 0 0 0 1px var(--edge); }
+
+.theme__page i { left: 6px; right: 12px; bottom: 6px; height: 10px; border-radius: 5px; }
+
+.themes__glow { left: 4px; right: 4px; height: 50px; border-radius: var(--r-sheet); }
+
+/* ------------------------------------------------------- the location list */
+
+.sheet__list { padding: 4px 12px 20px; }
+
+/* A continent: a Slate card, its handle an icon well, the name, an
+   outlined count and a chevron. */
+.grp {
+  margin-bottom: 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-card);
+  background:
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(var(--edge), var(--edge)) border-box;
+  overflow: clip;
+}
+
+.gh, button.gh {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 64px;
+  padding: 11px 18px 11px 11px;
+  border: 0;
+  border-radius: calc(var(--r-card) - 1px);
+  background: var(--surface);
+  text-align: start;
+}
+
+button.gh:hover { background: color-mix(in srgb, var(--surface), var(--text) 3%); }
+
+button.gh:hover .gh__name, button.gh.is-cursor .gh__name { color: var(--text); }
+
+button.gh.is-cursor { background: color-mix(in srgb, var(--surface), var(--text) 4%); }
+
+.gh__well {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.gh__well .ico { width: 20px; height: 20px; }
+
+.gh__name { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--text); }
+
+.gh__chev { margin-left: auto; width: 18px; height: 18px; color: var(--text-3); }
+
+.grp[data-open='true'] > .gh {
+  border-radius: calc(var(--r-card) - 1px) calc(var(--r-card) - 1px) 0 0;
+  box-shadow: inset 0 -1px 0 var(--stroke);
+}
+
+/* the open drawer: the one glowing item in the sheet */
+.grp[data-open='true']:has(> button.gh) {
+  background:
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(165deg, var(--pulse), transparent 45%) border-box;
+  box-shadow: var(--halo-ring);
+}
+
+.grp[data-open='true'] > button.gh {
+  background: var(--active-fill), linear-gradient(var(--surface), var(--surface));
+}
+
+.grp[data-open='true'] > button.gh::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 24px;
+  margin-top: -12px;
+  border-radius: 0 3px 3px 0;
+  background: var(--pulse);
+}
+
+.grp[data-open='true'] > button.gh .gh__well { color: var(--pulse); }
+
+.grp__in { padding: 4px 8px 8px; }
+
+.group { border-bottom-color: var(--stroke); }
+
+.row {
+  grid-template-columns: 24px minmax(0, 1fr) auto auto;
+  min-height: 56px;
+  padding: 8px 6px 8px 12px;
+}
+
+.row:hover, .row.is-cursor { background: rgb(var(--wash) / 0.035); }
+
+.row .flag { width: 24px; height: 24px; box-shadow: inset 0 0 0 1px var(--edge); }
+
+.row__name { font-weight: 500; }
+
+.row__meta { color: var(--text-3); }
+
+/* the picked row: the 3x24 bar, no glow - only the open drawer glows */
+.row.is-picked::before,
+.group.is-in:not(.is-open) > .row::before {
+  top: 50%;
+  bottom: auto;
+  width: 3px;
+  height: 24px;
+  margin-top: -12px;
+  border-radius: 0 3px 3px 0;
+  background: var(--pulse);
+}
+
+/* a country's cities and servers: nested under a hairline, indented */
+.group__in { margin: 0 0 6px 24px; border-left: 1px solid var(--stroke); }
+
+.row--city { grid-template-columns: minmax(0, 1fr) auto auto; padding-left: 16px; min-height: 44px; }
+
+.exits { padding: 0 0 8px 24px; }
+
+.exit:hover { background: rgb(var(--wash) / 0.035); }
+
+.rowtest, .star, .expand { border-radius: 50%; }
+
+/* starred: the same line star with a faint wash of its own ink */
+.star[data-on='true'] .star__ico { fill: currentColor; fill-opacity: 0.22; }
+
+/* a chosen row in a list of answers: the Pulse bar, not a green word */
+.scope__row::before { width: 3px; border-radius: 0 3px 3px 0; background: var(--pulse); }
+
+.scope__row[aria-pressed='true'] { box-shadow: none; }
+
+.scope__row[aria-pressed='true'] .scope__count { color: var(--text); }
+
+/* ------------------------------------------------------------ log */
+
+.lrow__live { background: var(--pulse); }
+
+.lrow[data-live='1'] .lrow__bar { background: var(--periwinkle); opacity: 0.7; }
+
+/* ------------------------------------------------------------ first run */
+
+.first__title { letter-spacing: -0.02em; }
+
+.intro__dots i.is-here { background: var(--text); }
+
+.steps__bar i { background: var(--good); }

@@ -3574,12 +3574,17 @@ def _yaml_quoted(text):
     return "'" + str(text).replace("'", "''") + "'"
 
 
-def tunnel_config_text(domain, password, edges=None, ca_file=None, ss=None):
+def tunnel_config_text(domain, password, edges=None, ca_file=None, ss=None,
+                       port=443):
     """The gost client's configuration, as gost wants it.
 
     Written rather than shipped: the domain and the password are the only
     things that vary, and a file the tool owns cannot drift out of step with
     the server it was installed against.
+
+    `port` is where the server's TLS answers - 443 unless its installer was
+    told otherwise, because something else already held 443 there. Edges are
+    dialled on the same port: Cloudflare proxies a handful besides 443.
 
     Given `edges`, the addresses are dialled and the name moves to the two
     places it is still needed. They go in as several nodes under one
@@ -3596,10 +3601,10 @@ def tunnel_config_text(domain, password, edges=None, ca_file=None, ss=None):
     difference, which is the point: it still talks HTTP to 127.0.0.1.
     """
     services, chains = [], []
-    for mode, port in TUNNEL_PORTS.items():
+    for mode, local in TUNNEL_PORTS.items():
         services.append(
             f'  - name: {mode}\n'
-            f'    addr: "127.0.0.1:{port}"\n'
+            f'    addr: "127.0.0.1:{local}"\n'
             f'    handler: {{type: http, chain: ch-{mode}}}\n'
             f'    listener: {{type: tcp}}\n')
         if ss:
@@ -3631,7 +3636,7 @@ def tunnel_config_text(domain, password, edges=None, ca_file=None, ss=None):
         for n, addr in enumerate(edges or [domain], 1):
             nodes += (
                 f'          - name: {f"edge-{n}" if edges else "server"}\n'
-                f'            addr: {addr}:443\n'
+                f'            addr: {addr}:{int(port)}\n'
                 f'            connector:\n'
                 f'              type: http\n'
                 f'              auth: {{username: relay, password: {password}}}\n'
@@ -3826,7 +3831,8 @@ def tunnel_write_config(saved, edges=None, quiet=True):
     os.makedirs(TUNNEL_STATE, exist_ok=True)
     if edges is None:
         edges = tunnel_edges(TUNNEL_STATE, saved['domain'], quiet=quiet)
-    text = tunnel_config_text(saved['domain'], saved['password'], edges)
+    text = tunnel_config_text(saved['domain'], saved['password'], edges,
+                              port=saved.get('port') or 443)
     config = os.path.join(TUNNEL_STATE, 'config.yaml')
     with open(config, 'w', encoding='utf-8') as f:
         f.write(text)

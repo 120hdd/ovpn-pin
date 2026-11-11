@@ -8,6 +8,9 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Icon
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -177,21 +180,28 @@ private fun heroOrb(full: Dp): Dp {
 /** One step of the setup: its name, where it stands in words, and a bar while it runs. */
 @Composable
 private fun Step(title: String, done: Boolean, active: Boolean, detail: String? = null, progress: Float? = null) {
+    // A status is a mark and a word: a small check in Good when done, never a glow.
     SettingRow(title, desc = detail) {
-        Text(when {
-            done -> "Done"
-            active -> "Working"
-            else -> "Waiting"
-        }, style = Type.caption.copy(color = when {
-            done -> Tone.ok
-            active -> Tone.work
-            else -> Tone.text3
-        }))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (done) {
+                Icon(Glyph.check, null, Modifier.size(14.dp), tint = Tone.good)
+                Spacer(Modifier.width(Space.x1))
+            }
+            Text(when {
+                done -> "Done"
+                active -> "Working"
+                else -> "Waiting"
+            }, style = Type.caption.copy(color = when {
+                done -> Tone.good
+                active -> Tone.work
+                else -> Tone.text3
+            }))
+        }
     }
     if (progress != null) {
-        Box(Modifier.fillMaxWidth().padding(horizontal = Space.x4).padding(bottom = Space.x3).height(4.dp)
+        Box(Modifier.fillMaxWidth().padding(horizontal = Space.x5).padding(bottom = Space.x3).height(4.dp)
             .clip(CircleShape).background(Tone.surface2)) {
-            Box(Modifier.fillMaxWidth(progress.coerceIn(0.02f, 1f)).height(4.dp).background(Tone.text))
+            Box(Modifier.fillMaxWidth(progress.coerceIn(0.02f, 1f)).height(4.dp).clip(CircleShape).background(Tone.text2))
         }
     }
 }

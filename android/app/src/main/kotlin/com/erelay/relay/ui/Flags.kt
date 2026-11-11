@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -41,13 +42,13 @@ import com.erelay.relay.ui.theme.Tone
 private val flags = HashMap<String, ImageBitmap?>()
 
 /** The flag for a country code, decoded once and kept; null if there is none. */
-private fun flagBitmap(context: Context, code: String): ImageBitmap? {
+internal fun flagBitmap(context: Context, code: String): ImageBitmap? {
     val c = code.lowercase().take(2)
     if (c.length != 2) return null
     synchronized(flags) {
         if (flags.containsKey(c)) return flags[c]
-        // The core folds gb into uk; the files are named the ISO way.
-        val got = listOf(c, if (c == "uk") "gb" else c).distinct().firstNotNullOfOrNull { name ->
+        // The core folds gb into uk, the map and the trace say gb; the files have whichever they have.
+        val got = listOf(c, if (c == "uk") "gb" else if (c == "gb") "uk" else c).distinct().firstNotNullOfOrNull { name ->
             try {
                 context.assets.open("flags/$name.webp").use { BitmapFactory.decodeStream(it) }?.asImageBitmap()
             } catch (e: Exception) {
@@ -88,4 +89,18 @@ fun Flag(code: String, size: Dp, modifier: Modifier = Modifier) {
             else -> Icon(Glyph.globe, null, Modifier.size(size * 0.45f), tint = Tone.text2)
         }
     }
+}
+
+/**
+ * The flag as the address panel draws it: the whole 4:3 flag, small, its
+ * corners rounded and a hairline round it. Nothing at all when there is no
+ * picture of it - a grey disc with a globe in it says less than the name beside.
+ */
+@Composable
+fun FlagTile(code: String, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val bitmap = remember(code) { flagBitmap(context, code) } ?: return
+    val shape = RoundedCornerShape(3.dp)
+    Image(bitmap, null, modifier.size(22.dp, 16.5.dp).clip(shape).border(1.dp, Tone.stroke, shape),
+        contentScale = ContentScale.Crop)
 }

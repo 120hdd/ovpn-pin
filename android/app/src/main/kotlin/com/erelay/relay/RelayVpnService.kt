@@ -603,6 +603,7 @@ class RelayVpnService : VpnService() {
             cfg.mode = mode
             cfg.edges = edges
             cfg.pin = pin
+            cfg.port = getSharedPreferences("relay", MODE_PRIVATE).getInt("tunnelPort", 443).toLong()
 
             // Shadowsocks, when the server's key offered it and it is the
             // chosen way in: straight to the address, so there are no edges
@@ -617,7 +618,7 @@ class RelayVpnService : VpnService() {
             if (!viaSs && edges.isBlank()) {
                 say("finding a way in")
                 cfg.edges = try {
-                    Relay.scanEdges(domain, 30000L)
+                    Relay.scanEdges(domain, cfg.port, 30000L)
                 } catch (e: Exception) {
                     // Not fatal. The name may still carry the tunnel on a line
                     // that is only lying about the addresses.

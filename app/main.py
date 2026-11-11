@@ -2411,7 +2411,7 @@ class Api:
         want = (exe, st.get('tunnelDomain'), st.get('tunnelPassword', ''),
                 st.get('tunnelApiPassword', ''),
                 json.dumps(ss, sort_keys=True) if ss else '',
-                st.get('tunnelPin', ''))
+                st.get('tunnelPin', ''), self._tunnel_port())
         if not self._tunnel or self._tunnel_key != want:
             if self._tunnel and self._tunnel_key and self._tunnel_key[4] != want[4]:
                 # The way in changed under a running client. Its config is
@@ -2424,9 +2424,14 @@ class Api:
             self._tunnel = tunnel.Tunnel(
                 exe=exe, workdir=paths.TUNNEL_STATE, domain=want[1],
                 password=want[2], api_password=want[3], ss=ss,
-                expected_pin=want[5])
+                expected_pin=want[5], port=want[6])
             self._tunnel_key = want
         return self._tunnel
+
+    def _tunnel_port(self):
+        """Where the server's TLS answers: what its key said, else 443."""
+        port = self._settings.get('tunnelPort')
+        return port if isinstance(port, int) and 0 < port < 65536 else 443
 
     def _tunnel_ss(self):
         """The Shadowsocks settings, when that is the chosen way in."""
@@ -2449,6 +2454,7 @@ class Api:
         return {
             'mode': st.get('mode', 'surfshark'),
             'domain': st.get('tunnelDomain', ''),
+            'port': self._tunnel_port(),
             'hasPassword': bool(st.get('tunnelPassword')),
             'hasApiPassword': bool(st.get('tunnelApiPassword')),
             'hasClient': bool(paths.gost_exe()),
@@ -2487,6 +2493,12 @@ class Api:
         st['tunnelPassword'] = key['password']
         st['tunnelApiPassword'] = key['api_password']
         st['tunnelPin'] = key['pin']
+        # Kept only when it is not 443, so a key without one puts an earlier
+        # server's port back to the default rather than inheriting it.
+        if key['port'] != 443:
+            st['tunnelPort'] = key['port']
+        else:
+            st.pop('tunnelPort', None)
         if key['ss']:
             st['tunnelSs'] = key['ss']
             st['tunnelTransport'] = 'ss'
@@ -2616,7 +2628,8 @@ class Api:
                     pass
                 # And what a key said about the old one - its Shadowsocks,
                 # its exported locations - is not true of the new one.
-                for name in ('tunnelSs', 'tunnelExport', 'exportLast'):
+                for name in ('tunnelSs', 'tunnelExport', 'exportLast',
+                             'tunnelPort'):
                     self._settings.pop(name, None)
                 self._settings['tunnelTransport'] = 'ws'
             self._settings['tunnelDomain'] = domain.strip()
@@ -2674,7 +2687,8 @@ class Api:
                     return {'ok': False, 'error': str(e), 'verdict': 'pin-changed'}
                 except OSError as e:
                     return {'ok': False, 'verdict': 'unreachable',
-                            'error': f'{client.domain} did not answer on 443: {e}'}
+                            'error': f'{client.domain} did not answer on '
+                                     f'{client.port}: {e}'}
             client.start()
             seen, restarted, found = None, False, []
             try:
@@ -3097,7 +3111,8 @@ class Api:
                     [{'k': 0, 'name': 'Relay · server'}]
                     + [{'k': r['k'], 'name': r['name']} for r in rows
                        if not r.get('error')],
-                    edge=edges[0] if edges else None, ss=st.get('tunnelSs'))
+                    edge=edges[0] if edges else None, ss=st.get('tunnelSs'),
+                    port=self._tunnel_port())
                 by_k = {r['k']: r for r in rows}
                 for row in made:
                     extra = by_k.get(row['k']) or {}
