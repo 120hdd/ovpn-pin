@@ -185,9 +185,9 @@ func (c *Client) FileInfoJSON(name string) (out string) {
 // the pane prints both: one address answering out of fifty and forty
 // answering out of fifty are both "it works", and they are not the same
 // weather.
-func ScanEdgesJSON(domain string, timeoutMs int) (out string) {
+func ScanEdgesJSON(domain string, port, timeoutMs int) (out string) {
 	defer said(&out)
-	return core.EdgeScanJSON(domain, ms(timeoutMs))
+	return core.EdgeScanJSON(domain, port, ms(timeoutMs))
 }
 
 // ms is the one conversion this bridge does over and over. gomobile carries

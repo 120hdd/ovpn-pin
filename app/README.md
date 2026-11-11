@@ -196,6 +196,12 @@ on the first contact, so a key also protects the first connection, which the
 "keep whatever answers first" rule cannot. `cat /etc/relay/key` on the
 server shows it again. It holds passwords: treat it like one.
 
+**Another port.** On a server where something else already answers on 443 —
+an Xray, another site — run the installer with `--port 8443` (or any free
+port; through Cloudflare it has to be one Cloudflare proxies). The key then
+carries the port, and both apps dial it for the WebSocket, the API and the
+certificate; the exported links for other devices carry it too.
+
 **Shadowsocks** is the second way in, beside the WebSocket through Cloudflare.
 The server offers it on two ports (8388 and 8389 unless `--ss-port` moved
 them): the first exits at the server, the second goes on through the same

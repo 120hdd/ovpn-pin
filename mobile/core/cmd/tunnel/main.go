@@ -31,6 +31,7 @@ func main() {
 	timeout := flag.Duration("timeout", 15*time.Second, "budget per step")
 	passwordFile := flag.String("passwordfile", "", "read the tunnel password from this file instead")
 	upload := flag.Int("upload", 0, "then POST this many bytes through the tunnel, -runs times, and time it")
+	port := flag.Int("port", 443, "the TLS port the server listens on")
 	runs := flag.Int("runs", 3, "how many uploads")
 	flag.Parse()
 
@@ -52,7 +53,7 @@ func main() {
 	var edges []string
 	if *scan {
 		fmt.Print("  edges    scanning ... ")
-		found, said, err := core.EdgesFor(ctx, *domain, 2500*time.Millisecond)
+		found, said, err := core.EdgesFor(ctx, *domain, *port, 2500*time.Millisecond)
 		fmt.Println(said)
 		if err != nil {
 			// Not fatal. The name may still resolve and carry the tunnel on a
@@ -67,6 +68,7 @@ func main() {
 	}
 
 	t := core.NewTunnelServer(*domain, *password, edges, core.TunnelMode(*mode))
+	t.Port = *port
 	defer t.Close()
 
 	fmt.Printf("  mode     %s\n", *mode)

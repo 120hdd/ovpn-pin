@@ -49,6 +49,7 @@ import com.erelay.relay.ui.theme.Palette
 import com.erelay.relay.ui.theme.Shape
 import com.erelay.relay.ui.theme.Space
 import com.erelay.relay.ui.theme.Tone
+import com.erelay.relay.ui.theme.Data
 import com.erelay.relay.ui.theme.Type
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -254,21 +255,24 @@ private fun ProviderAccounts(
             // Windscribe only: its proxy credential goes stale now and then, and
             // this fetches another with the session already held - no puzzle.
             SettingRow("Account", desc = if (card.account) "Signed in" else "None yet",
-                icon = if (provider == Accounts.WINDSCRIBE) Glyph.windscribe else Glyph.surfshark) {
+                leading = {
+                    IconWell(if (provider == Accounts.WINDSCRIBE) Glyph.windscribe else Glyph.surfshark,
+                        size = 36.dp, tint = Data.provider(provider))
+                }) {
                 if (provider == Accounts.WINDSCRIBE && card.account) {
                     IconButton(Glyph.refresh, "Refresh the Windscribe credential", { act("refresh") },
                         size = 40.dp, enabled = !busy)
                 } else if (card.account) {
-                    Icon(Glyph.check, null, Modifier.size(18.dp), tint = Tone.ok)
+                    Icon(Glyph.check, null, Modifier.size(18.dp), tint = Tone.good)
                 }
             }
             Sep()
             SettingRow("Servers", desc = if (card.servers > 0 || card.waiting > 0) "Fetched" else "Not fetched yet") {
-                if (card.servers > 0 || card.waiting > 0) Icon(Glyph.check, null, Modifier.size(18.dp), tint = Tone.ok)
+                if (card.servers > 0 || card.waiting > 0) Icon(Glyph.check, null, Modifier.size(18.dp), tint = Tone.good)
             }
             Sep()
             SettingRow("Pinned", desc = if (card.servers > 0) "${card.servers} to real addresses" else "Nothing pinned yet") {
-                if (card.servers > 0) Icon(Glyph.check, null, Modifier.size(18.dp), tint = Tone.ok)
+                if (card.servers > 0) Icon(Glyph.check, null, Modifier.size(18.dp), tint = Tone.good)
             }
             for (a in accounts) {
                 Sep()
@@ -301,7 +305,8 @@ private fun ProviderAccounts(
 private fun AccountLine(a: Account, onUse: () -> Unit, onRemove: () -> Unit) {
     var sure by remember(a.id) { mutableStateOf(false) }
     val title = a.label.ifEmpty { a.username }
-    SettingRow(title, desc = listOfNotNull(if (a.active) "In use" else null,
+    SettingRow(title, leading = if (a.active) ({ LiveDot(ring = false, color = Tone.good) }) else null,
+        desc = listOfNotNull(if (a.active) "In use" else null,
         if (a.signedIn) "signed in" else "not signed in").joinToString(" · ")) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             when {
@@ -769,7 +774,7 @@ private fun Timing(core: RelayCore) {
 private fun Progress(done: Int, total: Int) {
     Box(Modifier.fillMaxWidth().height(4.dp).clip(CircleShape).background(Tone.surface2)) {
         Box(Modifier.fillMaxWidth(if (total > 0) (done.toFloat() / total).coerceIn(0.02f, 1f) else 0.02f)
-            .height(4.dp).background(Tone.text))
+            .height(4.dp).clip(CircleShape).background(Tone.text2))
     }
 }
 
@@ -780,8 +785,8 @@ private fun Look(feel: com.erelay.relay.data.Feel, onFeel: (com.erelay.relay.dat
     val chosen = Palette.of(feel.theme)
     Section("Theme",
         help = "The page and every surface on it. Text and the status colours stay the same " +
-            "in all of them. Black switches an OLED screen's pixels off, which saves battery on " +
-            "a phone that keeps a tunnel up all evening.") {
+            "in all of them. Black is the deepest: on an OLED screen its page is all but off, which " +
+            "saves battery on a phone that keeps a tunnel up all evening.") {
         // Three across; two rows when a narrow phone or a large font would cut a name.
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val scale = LocalDensity.current.fontScale.coerceAtLeast(1f)
@@ -816,8 +821,8 @@ private fun Look(feel: com.erelay.relay.data.Feel, onFeel: (com.erelay.relay.dat
 
     Section("Motion") {
         Group {
-            SwitchRow("Animate the orb",
-                "Off draws it once and leaves it still, which is less for the GPU to do.",
+            SwitchRow("Animate the map",
+                "Off draws it once and leaves it still: no journey between countries, no orbiting rings, less for the GPU to do.",
                 feel.orbMotion, { onFeel(feel.copy(orbMotion = it)) })
             Sep()
             SwitchRow("Show the traffic meter",
@@ -855,24 +860,30 @@ private fun Look(feel: com.erelay.relay.data.Feel, onFeel: (com.erelay.relay.dat
     }
 }
 
-/** One theme as a little picture of itself: its page, a surface on it. */
+/**
+ * One theme as a little picture of itself: its page, a card on it. The chosen
+ * one is selected: a Pulse edge fading across it and the edge bar, no glow.
+ */
 @Composable
 private fun Swatch(p: Palette, on: Boolean, modifier: Modifier, onPick: () -> Unit) {
-    val shape = RoundedCornerShape(Shape.control)
+    val shape = RoundedCornerShape(20.dp)
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(64.dp)
+                .height(72.dp)
                 .press(shape = shape, sink = true, feel = HapticFeedbackType.SegmentTick, onClick = onPick)
                 .clip(shape)
                 .background(p.bg)
-                .border(if (on) 2.dp else 1.dp, if (on) Tone.text else Tone.strokeStrong, shape)
+                .border(1.dp, if (on) androidx.compose.ui.graphics.Brush.linearGradient(
+                    0f to Tone.pulse, 1f to Tone.pulse.copy(alpha = 0.15f))
+                    else androidx.compose.ui.graphics.SolidColor(Tone.strokeStrong), shape)
+                .pickedBar(on)
                 .padding(Space.x2),
             contentAlignment = Alignment.BottomCenter,
         ) {
-            Box(Modifier.fillMaxWidth().height(20.dp).clip(RoundedCornerShape(Space.x1)).background(p.surface)
-                .border(1.dp, p.stroke, RoundedCornerShape(Space.x1)))
+            Box(Modifier.fillMaxWidth().height(24.dp).clip(RoundedCornerShape(12.dp)).background(p.surface)
+                .border(1.dp, p.stroke, RoundedCornerShape(12.dp)))
         }
         Spacer(Modifier.height(Space.x2))
         Text(p.label, style = Type.caption.copy(color = if (on) Tone.text else Tone.text2,
@@ -901,7 +912,7 @@ private fun About(core: RelayCore) {
 /** A label and its value in two columns; the value wraps rather than runs off. */
 @Composable
 private fun Line(label: String, value: String) {
-    Row(Modifier.fillMaxWidth().padding(Space.x4)) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = Space.x5, vertical = Space.x4)) {
         Text(label, style = Type.caption, modifier = Modifier.width(64.dp))
         Text(value, style = Type.mono.copy(color = Tone.text), modifier = Modifier.weight(1f))
     }

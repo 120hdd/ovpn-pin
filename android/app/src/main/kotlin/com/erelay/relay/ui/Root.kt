@@ -1,7 +1,6 @@
 package com.erelay.relay.ui
 
 import android.app.Activity
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
@@ -171,13 +170,13 @@ fun Root(core: RelayCore) {
         if (uri != null) scope.launch {
             val r = core.importTree(uri)
             notice = r.text
-            Toast.makeText(context, r.text, Toast.LENGTH_LONG).show()
+            Toasts.show(r.text, long = true)
         }
     }
 
     fun copy(text: String) {
         core.copy(text)
-        Toast.makeText(context, "Copied $text", Toast.LENGTH_SHORT).show()
+        Toasts.show("Copied $text")
     }
 
     val names = remember(countries) { countries.associate { it.code to it.name } }
@@ -266,7 +265,7 @@ fun Root(core: RelayCore) {
                 exitsIn = { core.exitsIn(it) },
                 onSort = { core.setSort(it) },
                 onStar = { code -> scope.launch { core.toggleFavourite(code) } },
-                onTest = { code -> core.testReach(code).let { if (!it.ok) Toast.makeText(context, it.text, Toast.LENGTH_SHORT).show() } },
+                onTest = { code -> core.testReach(code).let { if (!it.ok) Toasts.show(it.text) } },
                 onCancelTest = { core.cancelReach() },
                 onChoose = { code ->
                     core.remember(code)
@@ -276,7 +275,7 @@ fun Root(core: RelayCore) {
                     if (conn.mode != Mode.BUSY) connect(code)
                 },
                 onSources = { over2 = Over2.SOURCES },
-                onTestAll = { core.quickTest().let { if (!it.ok) Toast.makeText(context, it.text, Toast.LENGTH_SHORT).show() } },
+                onTestAll = { core.quickTest().let { if (!it.ok) Toasts.show(it.text) } },
                 onOpen = { if (core.quickDue()) core.quickTest() },
                 connects = conn.mode != Mode.BUSY,
             ),
@@ -310,7 +309,7 @@ fun Root(core: RelayCore) {
         SourceSheet(over2 == Over2.SOURCES, sources, source,
             onPick = { key -> scope.launch {
                 val r = core.setSource(key)
-                if (!r.ok) Toast.makeText(context, r.text, Toast.LENGTH_SHORT).show()
+                if (!r.ok) Toasts.show(r.text)
                 over2 = Over2.NONE
             } },
             onImport = { over2 = Over2.NONE; importer.launch(null) },
@@ -336,6 +335,9 @@ fun Root(core: RelayCore) {
                 over2 = Over2.NONE
                 scope.launch { core.prepareServers(added) }
             })
+
+        // Over everything: the app's own toasts, on a glass pill.
+        ToastHost()
     }
     }
 

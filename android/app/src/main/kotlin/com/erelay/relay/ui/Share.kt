@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.util.Base64
 import android.util.LruCache
-import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
@@ -86,6 +85,8 @@ import com.erelay.relay.ui.theme.Shape
 import com.erelay.relay.ui.theme.Space
 import com.erelay.relay.ui.theme.Tone
 import com.erelay.relay.ui.theme.Type
+import com.erelay.relay.ui.theme.script
+import androidx.compose.foundation.lazy.itemsIndexed
 import kotlinx.coroutines.delay
 
 /*
@@ -292,7 +293,7 @@ private fun phaseSaid(run: ExportRun): String = when {
 private fun RunBar(fraction: Float) {
     val shown by animateFloatAsState(fraction.coerceIn(0.03f, 1f), tween(400), label = "share-bar")
     Box(Modifier.fillMaxWidth().height(4.dp).clip(CircleShape).background(Tone.surface2)) {
-        Box(Modifier.fillMaxWidth(shown).height(4.dp).background(Tone.text))
+        Box(Modifier.fillMaxWidth(shown).height(4.dp).clip(CircleShape).background(Tone.text2))
     }
 }
 
@@ -320,13 +321,17 @@ private fun stepSaid(s: ExportStep): String = when (s.phase) {
 /** The measured upload, or the word the connect screen uses when there was next to none. */
 private fun upSaid(kbs: Int) = if (kbs > 0) "$kbs KB/s up" else "upload throttled"
 
-/** A dot per location: hollow while it waits, pulsing while tested, a check or a cross after. */
+/**
+ * A mark per location: hollow while it waits, breathing while tested, then a
+ * small check in Good (success: a check and its words, never a glow) or a cross.
+ */
 @Composable
 private fun StepMark(phase: String) {
     val box = Modifier.padding(top = 1.dp).size(18.dp).clip(CircleShape)
+    val reduced = rememberReducedMotion()
     when (phase) {
-        "pinned" -> Box(box.background(Tone.ok), contentAlignment = Alignment.Center) {
-            Icon(Glyph.check, null, Modifier.size(11.dp), tint = Tone.ink)
+        "pinned" -> Box(box.border(1.5.dp, Tone.good, CircleShape), contentAlignment = Alignment.Center) {
+            Icon(Glyph.check, null, Modifier.size(11.dp), tint = Tone.good)
         }
         "failed" -> Box(box.background(Tone.fail.copy(alpha = 0.2f)), contentAlignment = Alignment.Center) {
             Icon(Glyph.x, null, Modifier.size(11.dp), tint = Tone.fail)
@@ -335,7 +340,7 @@ private fun StepMark(phase: String) {
             // The pulse only exists while this one is tested, as the bolt's does in the picker.
             val loop = rememberInfiniteTransition(label = "step")
             val a = loop.animateFloat(1f, 0.3f, infiniteRepeatable(tween(520), RepeatMode.Reverse), label = "a")
-            Box(box.graphicsLayer { alpha = a.value }.background(Tone.work.copy(alpha = 0.25f)),
+            Box(box.graphicsLayer { alpha = if (reduced) 1f else a.value }.background(Tone.work.copy(alpha = 0.25f)),
                 contentAlignment = Alignment.Center) {
                 Box(Modifier.size(8.dp).clip(CircleShape).background(Tone.work))
             }
@@ -379,16 +384,13 @@ private fun SlotCard(core: RelayCore, s: ExportSlotLinks) {
     Block(Modifier.padding(top = Space.x4)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (s.k == 0) {
-                Box(Modifier.size(36.dp).clip(CircleShape).background(Tone.surface2),
-                    contentAlignment = Alignment.Center) {
-                    Icon(Glyph.tower, null, Modifier.size(20.dp), tint = Tone.text2)
-                }
+                IconWell(Glyph.tower, size = 36.dp)
             } else {
                 Flag(countryOfPick(s.code), 36.dp)
             }
             Spacer(Modifier.width(Space.x3))
             Column(Modifier.weight(1f)) {
-                Text(if (s.k == 0) "Your server" else s.place, style = Type.strong, maxLines = 2,
+                Text(if (s.k == 0) "Your server" else s.place, style = Type.strong.script(s.place), maxLines = 2,
                     overflow = TextOverflow.Ellipsis)
                 Text(slotSaid(s), style = Type.caption.copy(color = if (s.ok) Tone.text2 else Tone.fail),
                     maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = Space.x1))
@@ -454,7 +456,7 @@ private fun shareLink(context: Context, link: String, title: String) {
     try {
         context.startActivity(chooser)
     } catch (e: Exception) {
-        Toast.makeText(context, "No app here takes a link to share.", Toast.LENGTH_SHORT).show()
+        Toasts.show("No app here takes a link to share.")
     }
 }
 
@@ -499,7 +501,8 @@ private fun QrCode(core: RelayCore, text: String) {
                 .widthIn(max = QR_SIDE + 12.dp)
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                .clip(RoundedCornerShape(Shape.control))
+                // White on every theme, for the camera's sake: the one white fill besides the primary button.
+                .clip(RoundedCornerShape(Shape.tip))
                 .background(Color.White)
                 .padding(Space.x2),
             contentAlignment = Alignment.Center,
@@ -599,13 +602,17 @@ fun SharePlacesSheet(open: Boolean, core: RelayCore, onClose: () -> Unit) {
                 modifier = Modifier.fillMaxWidth().padding(Space.x6))
             else -> LazyColumn(Modifier.fillMaxWidth().weight(1f),
                 contentPadding = PaddingValues(vertical = Space.x2)) {
-                items(order, key = { it.code }, contentType = { "country" }) { c ->
+                // One Slate card down the list, cut across its rows.
+                itemsIndexed(order, key = { _, c -> c.code }, contentType = { _, _ -> "country" }) { i, c ->
                     // Found by one of its cities rather than by its own name:
                     // opened, at just the cities that matched.
                     val byCity = q.isNotEmpty() && !countryMatches(c, q)
-                    PlaceCountry(c, picks, open = byCity || expanded[c.code] == true,
-                        cityQuery = if (byCity) q else "",
-                        onExpand = { expanded[c.code] = expanded[c.code] != true }, onFlip = flip)
+                    Column(Modifier.padding(horizontal = Space.x4).slateSeg(segOf(i, order.size))) {
+                        if (i > 0) Sep()
+                        PlaceCountry(c, picks, open = byCity || expanded[c.code] == true,
+                            cityQuery = if (byCity) q else "",
+                            onExpand = { expanded[c.code] = expanded[c.code] != true }, onFlip = flip)
+                    }
                 }
                 item { Spacer(Modifier.height(Space.x6)) }
             }
@@ -632,9 +639,9 @@ private fun PlaceCountry(
     Column(Modifier.fillMaxWidth()) {
         androidx.compose.material3.ListItem(
             // The caller answers the touch, with the switch's tick or the refusal.
-            modifier = Modifier.toggleable(on, role = Role.Checkbox) { onFlip(c.code) },
+            modifier = Modifier.toggleable(on, role = Role.Checkbox) { onFlip(c.code) }.padding(horizontal = Space.x1),
             colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = Color.Transparent),
-            leadingContent = { Flag(c.code, 24.dp) },
+            leadingContent = { Flag(c.code, 28.dp) },
             headlineContent = { Text(c.name, style = Type.strong, maxLines = 2, overflow = TextOverflow.Ellipsis) },
             supportingContent = {
                 Text(countryLine(c, inside), style = Type.caption, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -658,7 +665,6 @@ private fun PlaceCountry(
                 }
             }
         }
-        Sep()
     }
 }
 

@@ -3,6 +3,7 @@ package com.erelay.relay.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -78,10 +79,18 @@ import com.erelay.relay.data.Exit
 import com.erelay.relay.data.ReachRun
 import com.erelay.relay.data.Sort
 import com.erelay.relay.data.Source
+import com.erelay.relay.ui.theme.Data
 import com.erelay.relay.ui.theme.Shape
 import com.erelay.relay.ui.theme.Space
 import com.erelay.relay.ui.theme.Tone
 import com.erelay.relay.ui.theme.Type
+import com.erelay.relay.ui.theme.script
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
@@ -224,6 +233,15 @@ fun Picker(open: Boolean, m: PickerModel, onClose: () -> Unit) {
         }
         val byCode = remember(m.countries) { m.countries.associateBy { it.code } }
         val expanded = remember { mutableStateMapOf<String, Boolean>() }
+        // Continents are drawers, all shut each time the sheet opens: a
+        // continent, then a country, then a server - three short choices
+        // instead of one long scroll. One open at a time: the open drawer is
+        // the screen's one active item, and only one thing glows.
+        var drawer by remember(open) { mutableStateOf<String?>(null) }
+        // Rows that have made their entrance this time the sheet is open, so
+        // one scrolled back into view does not make it again.
+        val entered = remember(open) { mutableSetOf<String>() }
+        val reduced = rememberReducedMotion()
         val list = rememberLazyListState()
         // A light detent as each country passes the top of the list, the
         // way a picker wheel clicks under the thumb. Only while a finger has
@@ -309,17 +327,49 @@ fun Picker(open: Boolean, m: PickerModel, onClose: () -> Unit) {
 
         val narrow = narrowScreen()
         CompositionLocalProvider(LocalNarrow provides narrow) {
-            LazyColumn(Modifier.fillMaxWidth().weight(1f), state = list) {
+            // Drawer motion (DESIGN-NIGHT 6): rows arrive over 0.3s expo.out
+            // and leave over 0.18s power2.in; nothing moves with animations off.
+            val rowIn = if (reduced) null else tween<Float>(Shape.DRAWER_OPEN_MS, easing = Shape.expoOut)
+            val rowOut = if (reduced) null else tween<Float>(Shape.DRAWER_CLOSE_MS, easing = Shape.power2In)
+            val rowMove = if (reduced) null
+                else tween<androidx.compose.ui.unit.IntOffset>(Shape.DRAWER_OPEN_MS, easing = Shape.expoOut)
+            LazyColumn(Modifier.fillMaxWidth().weight(1f), state = list,
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = Space.x4)) {
                 if (groups.isEmpty()) {
                     item(key = "none") {
-                        Text("No country matches “$query”.", style = Type.body,
-                            modifier = Modifier.fillMaxWidth().padding(Space.x6))
+                        Text("No country matches “$query”. Try a city or a two-letter code, or clear the search.",
+                            style = Type.body, modifier = Modifier.fillMaxWidth().padding(vertical = Space.x6))
                     }
                 }
                 for ((name, codes) in groups) {
-                    stickyHeader(key = "group-$name", contentType = "header") { GroupHeader(name, codes.size) }
-                    items(codes, key = { it }, contentType = { "country" }) { code ->
-                        byCode[code]?.let { CountryItem(it, m, expanded) }
+                    // Starred is the short list on purpose and stays open, and so
+                    // does everything while a search is typed: a result inside a
+                    // shut drawer is a result not found.
+                    val fixed = q.isNotEmpty() || name == STARRED
+                    val shown = fixed || drawer == name
+                    item(key = "gap-$name", contentType = "gap") { Spacer(Modifier.height(Space.x2)) }
+                    stickyHeader(key = "group-$name", contentType = "header") {
+                        DrawerHead(name, codes.size, if (fixed) null else shown, shown) {
+                            drawer = if (shown) null else name
+                        }
+                    }
+                    if (shown) {
+                        itemsIndexed(codes, key = { _, c -> c }, contentType = { _, _ -> "country" }) { i, code ->
+                            Box(Modifier.animateItem(fadeInSpec = rowIn, placementSpec = rowMove, fadeOutSpec = rowOut)
+                                .slateSeg(Seg.BODY)) {
+                                byCode[code]?.let { c ->
+                                    // The first twelve rows of a drawer come in one after another;
+                                    // decided once, so a later recomposition does not cut it short.
+                                    val stagger = remember { if (!reduced && i < 12 && code !in entered) i else -1 }
+                                    SideEffect { entered += code }
+                                    Entrance(stagger) { CountryItem(c, m, expanded, first = i == 0) }
+                                }
+                            }
+                        }
+                        item(key = "foot-$name", contentType = "foot") {
+                            Box(Modifier.animateItem(fadeInSpec = rowIn, placementSpec = rowMove, fadeOutSpec = rowOut)
+                                .fillMaxWidth().height(Shape.card).slateSeg(Seg.FOOT))
+                        }
                     }
                 }
                 item { Spacer(Modifier.height(Space.x6)) }
@@ -328,35 +378,94 @@ fun Picker(open: Boolean, m: PickerModel, onClose: () -> Unit) {
     }
 }
 
-/** A continent's name in subtitle size, text-2, with how many are under it. Opaque: rows slide beneath it. */
+/**
+ * A continent drawer's head (DESIGN-NIGHT 9): a Slate card holding the
+ * continent's mark in a Raised Slate well, the name, an outlined count and the
+ * chevron. While the drawer is open its rows hang below in the same card, and
+ * the head is the screen's one active item: the Pulse edge and fill, the
+ * halo, the edge bar, the mark in Pulse.
+ *
+ * [open] is null for a heading that is not a drawer (Starred, or any group
+ * while a search is typed): no chevron, and no glow, though its rows still
+ * hang below it ([shown]). Otherwise the whole card opens and shuts it.
+ * Sticky: rows slide beneath it.
+ */
 @Composable
-private fun GroupHeader(name: String, n: Int) {
-    Row(
-        Modifier.fillMaxWidth().background(Tone.bg)
-            .padding(start = Space.x4, end = Space.x4, top = Space.x4, bottom = Space.x2),
-        verticalAlignment = Alignment.Bottom,
+private fun DrawerHead(name: String, n: Int, open: Boolean?, shown: Boolean, onToggle: () -> Unit) {
+    val haptics = rememberHaptics()
+    val reduced = rememberReducedMotion()
+    val active = open == true
+    val lit by animateFloatAsState(if (active) 1f else 0f,
+        tween(if (reduced) 0 else 450, easing = Shape.power3Out), label = "lit")
+    val seg = if (shown) Seg.HEAD else Seg.WHOLE
+    Box(
+        Modifier.fillMaxWidth()
+            // Behind the head's round top corners, the page: a row passing
+            // under the stuck head does not show at its corners.
+            .then(if (shown) Modifier.drawBehind { drawRect(Tone.bg) } else Modifier)
+            .slateSeg(seg, lit = lit)
+            .then(if (open == null) Modifier
+                else Modifier.press(shape = RoundedCornerShape(Shape.card), feel = null) { haptics.tick(); onToggle() })
+            .semantics { if (open != null) stateDescription = if (open) "Open" else "Shut" },
     ) {
-        Text(name, style = Type.subtitle.copy(color = Tone.text2), maxLines = 1,
-            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        Spacer(Modifier.width(Space.x2))
-        Text(n.toString(), style = Type.caption.copy(color = Tone.text3), maxLines = 1)
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 64.dp)
+                .padding(start = Space.x3, end = Space.x2, top = Space.x3, bottom = Space.x3),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val markTint = androidx.compose.ui.graphics.lerp(Tone.text2, Tone.pulse, lit)
+            IconWell(ContinentMark.of(name), tint = markTint)
+            Spacer(Modifier.width(Space.x3))
+            Text(name, style = Type.strong, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false))
+            Spacer(Modifier.width(Space.x2))
+            CountBadge(n.toString(), active = active)
+            Spacer(Modifier.weight(1f))
+            if (open != null) {
+                val turn by animateFloatAsState(if (open) 180f else 0f,
+                    tween(if (reduced) 0 else Shape.DRAWER_OPEN_MS, easing = Shape.expoOut), label = "chev")
+                Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                    Icon(Glyph.chevDown, null, Modifier.size(20.dp).graphicsLayer { rotationZ = turn },
+                        tint = if (open) Tone.text else Tone.text3)
+                }
+            }
+        }
     }
+}
+
+/**
+ * A row's entrance (DESIGN-NIGHT 6): up 8dp from transparent, 30ms after the
+ * row above it. [order] below zero: no entrance, it is simply there.
+ */
+@Composable
+private fun Entrance(order: Int, content: @Composable () -> Unit) {
+    if (order < 0) {
+        content()
+        return
+    }
+    val p = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(Unit) {
+        p.animateTo(1f, tween(Shape.DRAWER_OPEN_MS, delayMillis = order * 30, easing = Shape.expoOut))
+    }
+    Box(Modifier.graphicsLayer {
+        alpha = p.value
+        translationY = (1f - p.value) * 8.dp.toPx()
+    }) { content() }
 }
 
 // -- rows -------------------------------------------------------------------------------
 
-/** The selected row's mark: a 2dp rule on its leading edge in the state colour. */
-private fun Modifier.rule(on: Boolean): Modifier = if (!on) this else drawBehind {
-    val w = 2.dp.toPx()
-    drawRect(Tone.state, topLeft = androidx.compose.ui.geometry.Offset(
-        if (layoutDirection == LayoutDirection.Rtl) size.width - w else 0f, 0f), size = Size(w, size.height))
+/** A hairline between two rows inside a drawer, from [inset] in to the card's inner edge. */
+@Composable
+private fun Hair(inset: Dp = Space.x4) {
+    Box(Modifier.fillMaxWidth().padding(start = inset, end = Space.x4).height(1.dp).background(Tone.hairline))
 }
 
 @Composable
 private fun rowColors() = ListItemDefaults.colors(containerColor = Color.Transparent)
 
 @Composable
-private fun CountryItem(c: Country, m: PickerModel, expanded: MutableMap<String, Boolean>) {
+private fun CountryItem(c: Country, m: PickerModel, expanded: MutableMap<String, Boolean>, first: Boolean = false) {
     val open = expanded[c.code] == true
     val haptics = rememberHaptics()
     val starred = c.code in m.favourites
@@ -371,13 +480,14 @@ private fun CountryItem(c: Country, m: PickerModel, expanded: MutableMap<String,
     val p2p = c.cities.any { it.p2p == true }
 
     Column(Modifier.fillMaxWidth().alpha(if (c.blocked) 0.6f else 1f)) {
+        if (!first) Hair()
         ListItem(
             modifier = Modifier
-                .rule(picked)
+                .pickedBar(picked)
                 // No haptic of its own: the caller's says whether this connects.
-                .clickable { haptics.chose(m.connects); m.onChoose(c.code) },
+                .press(feel = null) { haptics.chose(m.connects); m.onChoose(c.code) },
             colors = rowColors(),
-            leadingContent = { Flag(c.code, 24.dp) },
+            leadingContent = { Flag(c.code, 28.dp) },
             headlineContent = {
                 Text(c.name, style = Type.strong, maxLines = 2, overflow = TextOverflow.Ellipsis)
             },
@@ -400,30 +510,37 @@ private fun CountryItem(c: Country, m: PickerModel, expanded: MutableMap<String,
                 }
             },
         )
+        // The country's cities and servers hang under it, indented past the
+        // flag, each set off by a hairline.
         Expand(open) {
             Column(Modifier.padding(start = Space.x10)) {
+                Hair(Space.x4)
                 TestRow(testing, reach) { if (testing) m.onCancelTest() else m.onTest(c.code) }
                 if (c.cities.size > 1) {
                     // Starred cities first; the rest keep the order the core gave.
                     // Keyed by city, so a city's own open/closed state goes with it
                     // when starring one moves it up, rather than staying at the slot.
-                    for (city in c.cities.sortedBy { it.code !in m.favourites }) key(city.code) { CityBlock(city, m) }
+                    for (city in c.cities.sortedBy { it.code !in m.favourites }) key(city.code) {
+                        Hair(Space.x4)
+                        CityBlock(city, m)
+                    }
                 } else {
                     ExitList(c.code, m)
                 }
             }
         }
-        Divider()
     }
 }
 
-/** Opens in place, the way the list moves: height, with a fade. */
+/** Opens in place (DESIGN-NIGHT 6): height and opacity, 0.3s expo.out; shuts in 0.18s power2.in. */
 @Composable
 private fun Expand(visible: Boolean, content: @Composable () -> Unit) {
-    val ms = if (rememberReducedMotion()) 0 else Shape.ENTER_MS
+    val reduced = rememberReducedMotion()
+    val inMs = if (reduced) 0 else Shape.DRAWER_OPEN_MS
+    val outMs = if (reduced) 0 else Shape.DRAWER_CLOSE_MS
     AnimatedVisibility(visible,
-        enter = expandVertically(tween(ms, easing = Shape.ease)) + fadeIn(tween(ms, easing = Shape.ease)),
-        exit = shrinkVertically(tween(ms, easing = Shape.ease)) + fadeOut(tween(if (ms == 0) 0 else 167))) {
+        enter = expandVertically(tween(inMs, easing = Shape.expoOut)) + fadeIn(tween(inMs, easing = Shape.expoOut)),
+        exit = shrinkVertically(tween(outMs, easing = Shape.power2In)) + fadeOut(tween(outMs, easing = Shape.power2In))) {
         content()
     }
 }
@@ -460,13 +577,16 @@ private fun PingText(ping: Int?, blocked: Boolean, testing: ReachRun?) {
         modifier = Modifier.padding(end = Space.x1))
 }
 
-/** A star, felt as a switch: on with one tick, off with a softer one. */
+/**
+ * A star, felt as a switch: on with one tick, off with a softer one. A line
+ * star either way (no filled icons beside line ones); on, it is in Pulse.
+ */
 @Composable
 private fun Star(starred: Boolean, onClick: () -> Unit) {
     val haptics = rememberHaptics()
     IconToggleButton(checked = starred, onCheckedChange = { haptics.toggle(it); onClick() }) {
-        Icon(if (starred) Glyph.starFilled else Glyph.star, if (starred) "Unstar" else "Star",
-            Modifier.size(20.dp), tint = if (starred) Tone.text else Tone.text3)
+        Icon(Glyph.star, if (starred) "Unstar" else "Star",
+            Modifier.size(20.dp), tint = if (starred) Tone.pulse else Tone.text3)
     }
 }
 
@@ -486,7 +606,7 @@ private fun Chevron(open: Boolean, onToggle: () -> Unit) {
 @Composable
 private fun TestRow(testing: Boolean, reach: ReachRun?, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = onClick)
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).press(onClick = onClick)
             .padding(horizontal = Space.x4),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -509,8 +629,8 @@ private fun CityBlock(city: City, m: PickerModel) {
     Column(Modifier.fillMaxWidth()) {
         ListItem(
             modifier = Modifier
-                .rule(m.picked == city.code)
-                .clickable { haptics.chose(m.connects); m.onChoose(city.code) },
+                .pickedBar(m.picked == city.code)
+                .press(feel = null) { haptics.chose(m.connects); m.onChoose(city.code) },
             colors = rowColors(),
             headlineContent = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -518,7 +638,7 @@ private fun CityBlock(city: City, m: PickerModel) {
                         overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                     if (city.nick.isNotEmpty()) {
                         Spacer(Modifier.width(Space.x2))
-                        Text(city.nick, style = Type.caption.copy(color = Tone.text3), maxLines = 1,
+                        Text(city.nick, style = Type.caption.copy(color = Tone.text3).script(city.nick), maxLines = 1,
                             overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                     }
                 }
@@ -543,11 +663,11 @@ private fun CityBlock(city: City, m: PickerModel) {
         )
         Expand(open) {
             Column(Modifier.padding(start = Space.x6)) {
+                Hair(Space.x4)
                 TestRow(testing, reach) { if (testing) m.onCancelTest() else m.onTest(city.code) }
                 ExitList(city.code, m)
             }
         }
-        Divider()
     }
 }
 
@@ -560,10 +680,17 @@ private fun ExitList(code: String, m: PickerModel) {
     val got = exits
     val haptics = rememberHaptics()
     when {
-        got == null -> Text("Reading…", style = Type.caption, modifier = Modifier.padding(Space.x4))
-        got.isEmpty() -> Text("No exits here.", style = Type.caption, modifier = Modifier.padding(Space.x4))
+        got == null -> Column(Modifier.padding(Space.x4)) {
+            // A skeleton of the rows that are coming, not a spinner.
+            Skeleton(Modifier.fillMaxWidth(0.6f).height(12.dp))
+            Spacer(Modifier.height(Space.x2))
+            Skeleton(Modifier.fillMaxWidth(0.4f).height(10.dp))
+        }
+        got.isEmpty() -> Text("No exits here. Time them again, or pick the country itself.", style = Type.caption,
+            modifier = Modifier.padding(Space.x4))
         else -> Column {
             for (e in got) key(e.file) {
+                Hair(Space.x4)
                 ExitRow(e, m.picked == "file:${e.file}") {
                     haptics.chose(m.connects)
                     m.onChoose("file:${e.file}")
@@ -589,7 +716,7 @@ private fun ExitRow(e: Exit, picked: Boolean, onClick: () -> Unit) {
     // tell two exits in it apart.
     val number = serverNumber(e.host.ifEmpty { e.file })
     ListItem(
-        modifier = Modifier.rule(picked).clickable(onClick = onClick),
+        modifier = Modifier.pickedBar(picked).press(feel = null, onClick = onClick),
         colors = rowColors(),
         leadingContent = {
             ProviderTag(e.provider, count = 1, tested = if (e.ok != null) 1 else 0,
@@ -601,7 +728,7 @@ private fun ExitRow(e: Exit, picked: Boolean, onClick: () -> Unit) {
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 if (e.nick.isNotEmpty()) {
                     Spacer(Modifier.width(Space.x2))
-                    Text(e.nick, style = Type.caption.copy(color = Tone.text3), maxLines = 1,
+                    Text(e.nick, style = Type.caption.copy(color = Tone.text3).script(e.nick), maxLines = 1,
                         overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -636,18 +763,25 @@ private fun sortNote(m: PickerModel): String {
     }
 }
 
-/** The search box over a long list: this sheet's countries, the split tunnel's apps. */
+/** The search box over a long list: this sheet's countries, the split tunnel's apps. A pill; Pulse ring while typing. */
 @Composable
 fun Search(value: String, hint: String = "Search a country or city", onChange: (String) -> Unit) {
+    val focus = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val focused by focus.collectIsFocusedAsState()
+    val shape = RoundedCornerShape(Shape.pill)
     Row(
         Modifier
             .fillMaxWidth()
             // At least the height it was drawn at; taller when a large font
             // needs it, rather than the text being cut through the middle.
             .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(Shape.control))
+            .clip(shape)
             .background(Tone.surface2)
-            .border(1.dp, if (value.isEmpty()) Tone.stroke else Tone.strokeStrong, RoundedCornerShape(Shape.control))
+            .border(1.dp, when {
+                focused -> Tone.focus
+                value.isEmpty() -> Tone.stroke
+                else -> Tone.strokeStrong
+            }, shape)
             .padding(start = Space.x4, end = Space.x1, top = Space.x1, bottom = Space.x1),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -657,46 +791,80 @@ fun Search(value: String, hint: String = "Search a country or city", onChange: (
             if (value.isEmpty()) Text(hint, style = Type.body.copy(fontSize = 16.sp, color = Tone.text3),
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
             BasicTextField(value, onChange, singleLine = true,
-                textStyle = Type.body.copy(fontSize = 16.sp, color = Tone.text),
-                cursorBrush = SolidColor(Tone.text), modifier = Modifier.fillMaxWidth())
+                textStyle = Type.body.copy(fontSize = 16.sp, color = Tone.text).script(value),
+                cursorBrush = SolidColor(Tone.pulse), interactionSource = focus, modifier = Modifier.fillMaxWidth())
         }
         if (value.isNotEmpty()) IconButton(Glyph.x, "Clear", { onChange("") }, size = 40.dp)
     }
 }
 
-/** A sort, as a filter chip that always says what it is. */
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * A chip (DESIGN-NIGHT 4): a pill, Raised Slate with a stronger Edge when on,
+ * a bare Edge when off. 36dp to look at, 44dp to touch.
+ */
+@Composable
+fun Chip(
+    label: String, on: Boolean, onClick: () -> Unit,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    trailing: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    maxWidth: Dp = Dp.Unspecified,
+) {
+    val shape = RoundedCornerShape(Shape.pill)
+    Box(Modifier.heightIn(min = 44.dp).press(shape = shape, feel = null, onClick = onClick)
+        .semantics { selected = on }, contentAlignment = Alignment.Center) {
+        Row(
+            Modifier.heightIn(min = 36.dp).clip(shape)
+                .background(if (on) Tone.surface2 else Color.Transparent)
+                .border(1.dp, if (on) Tone.strokeStrong else Tone.stroke, shape)
+                .padding(horizontal = Space.x3),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (icon != null) {
+                Icon(icon, null, Modifier.size(16.dp), tint = if (on) Tone.text else Tone.text3)
+                Spacer(Modifier.width(6.dp))
+            }
+            Text(label, style = Type.body.copy(color = if (on) Tone.text else Tone.text2), maxLines = 1,
+                softWrap = false, overflow = TextOverflow.Ellipsis,
+                modifier = if (maxWidth != Dp.Unspecified) Modifier.widthIn(max = maxWidth) else Modifier)
+            if (trailing != null) {
+                Spacer(Modifier.width(4.dp))
+                Icon(trailing, null, Modifier.size(16.dp), tint = Tone.text3)
+            }
+        }
+    }
+}
+
+/** A sort, as a chip that always says what it is. */
 @Composable
 private fun SortChip(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, on: Boolean,
                      onClick: () -> Unit) {
     val haptics = rememberHaptics()
-    FilterChip(
-        selected = on,
-        onClick = { haptics.tick(); onClick() },
-        label = { Text(label, style = Type.body.copy(color = if (on) Tone.text else Tone.text2), maxLines = 1,
-            softWrap = false) },
-        leadingIcon = { Icon(icon, null, Modifier.size(16.dp), tint = if (on) Tone.text else Tone.text3) },
-        shape = RoundedCornerShape(Shape.control),
-        colors = FilterChipDefaults.filterChipColors(
-            containerColor = Color.Transparent, selectedContainerColor = Tone.surface2),
-        border = FilterChipDefaults.filterChipBorder(
-            enabled = true, selected = on,
-            borderColor = Tone.stroke, selectedBorderColor = Tone.strokeStrong),
-    )
+    Chip(label, on, { haptics.tick(); onClick() }, icon = icon)
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SourceChip(name: String, onClick: () -> Unit) {
-    AssistChip(
-        onClick = onClick,
-        label = { Text(name, style = Type.body.copy(color = Tone.text2), maxLines = 1,
-            overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 180.dp)) },
-        trailingIcon = { Icon(Glyph.chevDown, null, Modifier.size(16.dp), tint = Tone.text3) },
-        shape = RoundedCornerShape(Shape.control),
-        colors = AssistChipDefaults.assistChipColors(containerColor = Color.Transparent),
-        border = AssistChipDefaults.assistChipBorder(enabled = true, borderColor = Tone.stroke),
-    )
+    Chip(name, false, onClick, trailing = Glyph.chevDown, maxWidth = 180.dp)
+}
+
+/**
+ * Loading, as the shape of what is coming (DESIGN-NIGHT 4): a Raised Slate
+ * bar with a soft sheen passing over it. Still with animations off.
+ */
+@Composable
+fun Skeleton(modifier: Modifier = Modifier) {
+    val reduced = rememberReducedMotion()
+    val t = androidx.compose.animation.core.rememberInfiniteTransition(label = "skeleton")
+    val x by t.animateFloat(-1f, 2f, androidx.compose.animation.core.infiniteRepeatable(
+        tween(1400, easing = androidx.compose.animation.core.LinearEasing)), label = "sheen")
+    Box(modifier.clip(RoundedCornerShape(Shape.pill)).background(Tone.surface2).drawBehind {
+        if (!reduced) {
+            val w = size.width
+            drawRect(androidx.compose.ui.graphics.Brush.horizontalGradient(
+                0f to Color.Transparent, 0.5f to Tone.wash.copy(alpha = 0.06f), 1f to Color.Transparent,
+                startX = w * (x - 0.5f), endX = w * (x + 0.5f)))
+        }
+    })
 }
 
 /**
@@ -711,9 +879,10 @@ private fun SourceChip(name: String, onClick: () -> Unit) {
  */
 @Composable
 fun ProviderTag(provider: String, count: Int = 1, tested: Int = 0, ok: Int = 0, slot: Dp = 17.dp) {
+    // Untested, the provider's own data colour; once asked, the status colours.
     val c = when {
-        tested <= 0 -> Tone.text3
-        ok > 0 -> if (ok < tested) Tone.work else Tone.ok
+        tested <= 0 -> Data.provider(provider)
+        ok > 0 -> if (ok < tested) Tone.work else Tone.good
         tested >= count -> Tone.fail
         else -> Tone.work
     }
@@ -737,17 +906,19 @@ fun SourceSheet(
     onPick: (String) -> Unit, onImport: () -> Unit, onClose: () -> Unit,
 ) {
     Sheet(open, "Servers", onClose) {
-        for (s in sources) {
-            ListItem(
-                modifier = Modifier.rule(s.key == source).clickable { onPick(s.key) },
-                colors = rowColors(),
-                headlineContent = { Text(s.name, style = Type.strong) },
-                supportingContent = { Text(s.note, style = Type.caption) },
-                trailingContent = { Text(s.count.toString(), style = Type.mono) },
-            )
-            Divider()
+        if (sources.isNotEmpty()) Group {
+            sources.forEachIndexed { i, s ->
+                if (i > 0) Sep()
+                ListItem(
+                    modifier = Modifier.pickedBar(s.key == source).press { onPick(s.key) }.padding(horizontal = Space.x1),
+                    colors = rowColors(),
+                    headlineContent = { Text(s.name, style = Type.strong.script(s.name)) },
+                    supportingContent = { Text(s.note, style = Type.caption) },
+                    trailingContent = { CountBadge(s.count.toString(), active = s.key == source) },
+                )
+            }
         }
-        if (sources.isEmpty()) Text("Nothing has been read yet.", style = Type.body,
+        if (sources.isEmpty()) Text("Nothing has been read yet. Import a folder of configs to begin.", style = Type.body,
             modifier = Modifier.padding(vertical = Space.x4))
         ButtonRow {
             Btn("Import a folder…", onImport, icon = Glyph.folder)

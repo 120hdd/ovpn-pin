@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"strconv"
 	"strings"
 )
 
 // The key the server's installer prints: relay:// and then base64url of a
 // JSON object holding the server, its certificate's pin when it is reached
-// by address, both passwords and - when the server offers it - Shadowsocks.
+// by address, both passwords, the TLS port when it is not 443 and - when the
+// server offers it - Shadowsocks.
 // Pasted into the app, it is the whole of setting a server up.
 //
 // The desktop reads the same key in app/tunnel.py (parse_key); the two
@@ -21,11 +23,14 @@ const KeyPrefix = "relay://"
 
 // RelayKey is a key, read and checked.
 type RelayKey struct {
-	Host        string      `json:"host"`
-	Pin         string      `json:"pin"`
-	Password    string      `json:"password"`
-	APIPassword string      `json:"apiPassword"`
-	SS          *RelayKeySS `json:"ss,omitempty"`
+	Host        string `json:"host"`
+	Pin         string `json:"pin"`
+	Password    string `json:"password"`
+	APIPassword string `json:"apiPassword"`
+	// Port is where the server listens for TLS: 443 unless the installer was
+	// given another with --port, in which case the key says so.
+	Port int         `json:"port"`
+	SS   *RelayKeySS `json:"ss,omitempty"`
 	// The locations the server keeps for other devices, when it has them.
 	// See export.go.
 	Export *RelayKeyExport `json:"export,omitempty"`
@@ -62,11 +67,15 @@ func ParseRelayKey(text string) (*RelayKey, error) {
 		return nil, errors.New("that is not a Relay key - it should start with relay://")
 	}
 	var wire struct {
-		V   int    `json:"v"`
+		V    int    `json:"v"`
 		Host string `json:"host"`
 		Pin  string `json:"pin"`
-		PW   string `json:"pw"`
-		APW  string `json:"apw"`
+		// Raw, because "absent" and "present but not a whole number" have to
+		// stay apart: a plain int would read "8443.5" and "true" as errors
+		// with the wrong words and a string as zero.
+		Port json.RawMessage `json:"port"`
+		PW   string          `json:"pw"`
+		APW  string          `json:"apw"`
 		SS   *struct {
 			Method   string `json:"method"`
 			Password string `json:"password"`
@@ -89,6 +98,15 @@ func ParseRelayKey(text string) (*RelayKey, error) {
 		Pin:         strings.ToLower(strings.TrimSpace(wire.Pin)),
 		Password:    strings.TrimSpace(wire.PW),
 		APIPassword: strings.TrimSpace(wire.APW),
+	}
+	k.Port = 443
+	if raw := strings.TrimSpace(string(wire.Port)); raw != "" && raw != "null" {
+		// Digits only: no sign, fraction, exponent, quotes or true/false.
+		n, err := strconv.Atoi(raw)
+		if err != nil || strings.Trim(raw, "0123456789") != "" || !validPort(n) {
+			return nil, errors.New("the port in that key is malformed")
+		}
+		k.Port = n
 	}
 	switch {
 	case k.Host == "":

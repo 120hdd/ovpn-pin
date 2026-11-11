@@ -107,6 +107,14 @@ def parse_key(text):
     if out['pin'] and (len(out['pin']) != 64 or
                        any(c not in '0123456789abcdef' for c in out['pin'])):
         raise ValueError('the certificate pin in that key is malformed')
+    # The TLS door, when the server keeps it somewhere other than 443 -
+    # because an Xray or another site already answers there. Absent is 443,
+    # which is every key made before the installer could say otherwise.
+    port = body.get('port', 443)
+    if (not isinstance(port, int) or isinstance(port, bool)
+            or not 0 < port < 65536):
+        raise ValueError('the port in that key is malformed')
+    out['port'] = port
     ss = body.get('ss')
     if ss is not None:
         ok = (isinstance(ss, dict) and ss.get('method') in SS_METHODS
@@ -136,12 +144,15 @@ class Tunnel:
     """The gost client process, and the server's API behind it."""
 
     def __init__(self, exe, workdir, domain, password, api_password,
-                 ss=None, expected_pin=''):
+                 ss=None, expected_pin='', port=443):
         self.exe = exe
         self.dir = workdir
         self.domain = domain
         self.password = password
         self.api_password = api_password
+        # Where the server's TLS answers: the WebSocket paths, the API and
+        # the certificate all sit behind the one nginx on this port.
+        self.port = int(port or 443)
         # The server's Shadowsocks settings when that is the way in, else None
         # and the WebSocket through Cloudflare (or the address) is.
         self.ss = ss
@@ -177,7 +188,8 @@ class Tunnel:
         if edges is None:
             edges = edges_for(self.dir, self.domain, quiet=True)
         ca = self.ensure_cert() if is_address(self.domain) else None
-        text = config_text(self.domain, self.password, edges, ca_file=ca)
+        text = config_text(self.domain, self.password, edges, ca_file=ca,
+                           port=self.port)
         with open(self.config_path, 'w', encoding='utf-8') as f:
             f.write(text)
         # And into any other client folder this machine has been told about,
@@ -213,7 +225,8 @@ class Tunnel:
         made on the server, so it knows which certificate is the real one,
         and taking whatever answers first would waste that."""
         if not os.path.exists(self.cert_path):
-            pem = ssl.get_server_certificate((self.domain, 443), timeout=timeout)
+            pem = ssl.get_server_certificate((self.domain, self.port),
+                                             timeout=timeout)
             if self.expected_pin:
                 got = hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest()
                 if got != self.expected_pin:
@@ -231,7 +244,8 @@ class Tunnel:
         """Whether the server still shows the kept certificate."""
         if not is_address(self.domain) or not os.path.exists(self.cert_path):
             return True
-        pem = ssl.get_server_certificate((self.domain, 443), timeout=timeout)
+        pem = ssl.get_server_certificate((self.domain, self.port),
+                                         timeout=timeout)
         got = hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest()
         if got != self.pin():
             raise PinChanged(
@@ -402,8 +416,13 @@ class Tunnel:
     # would be sent straight back out to this machine's own loopback, where
     # nothing is listening. Basic auth over the same TLS the tunnel uses.
 
+    @property
+    def origin(self):
+        """`host`, or `host:port` when the server's TLS is not on 443."""
+        return self.domain if self.port == 443 else f'{self.domain}:{self.port}'
+
     def _api(self, path, payload=None, method='GET', timeout=20):
-        url = f'https://{self.domain}/api/{path}'
+        url = f'https://{self.origin}/api/{path}'
         data = json.dumps(payload).encode() if payload is not None else None
         req = urllib.request.Request(url, data=data, method=method)
         token = base64.b64encode(f'relay:{self.api_password}'.encode()).decode()

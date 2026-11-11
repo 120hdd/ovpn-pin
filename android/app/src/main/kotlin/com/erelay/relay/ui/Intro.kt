@@ -75,8 +75,9 @@ fun Intro(paused: Boolean, onDone: () -> Unit) {
             Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = Space.x3),
                 verticalAlignment = Alignment.CenterVertically) {
                 Spacer(Modifier.weight(1f))
-                if (!last) Box(Modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(Shape.control))
-                    .tap(onClick = onDone).padding(horizontal = Space.x4, vertical = Space.x3),
+                if (!last) Box(Modifier.heightIn(min = 48.dp)
+                    .press(shape = RoundedCornerShape(Shape.pill), nudge = true, onClick = onDone)
+                    .padding(horizontal = Space.x4, vertical = Space.x3),
                     contentAlignment = Alignment.Center) {
                     Text("Skip", style = Type.strong.copy(color = Tone.text2))
                 }
@@ -108,7 +109,7 @@ fun Intro(paused: Boolean, onDone: () -> Unit) {
             Row(Modifier.fillMaxWidth().padding(horizontal = Space.x6, vertical = Space.x4),
                 horizontalArrangement = Arrangement.spacedBy(Space.x1)) {
                 repeat(SLIDES.size) { i ->
-                    Box(Modifier.weight(1f).height(2.dp)
+                    Box(Modifier.weight(1f).height(3.dp).clip(RoundedCornerShape(Shape.pill))
                         .background(if (i == pager.currentPage) Tone.text else Tone.strokeStrong))
                 }
             }
@@ -119,7 +120,7 @@ fun Intro(paused: Boolean, onDone: () -> Unit) {
                 AnimatedContent(last, Modifier.align(Alignment.Center), transitionSpec = {
                     fadeIn(tween(if (reduced) 0 else Shape.ENTER_MS)) togetherWith fadeOut(tween(if (reduced) 0 else Shape.SINK_MS))
                 }, label = "next") { end ->
-                    Text(if (end) "Get started" else "Next", style = Type.button.copy(color = Tone.bg))
+                    Text(if (end) "Get started" else "Next", style = Type.button.copy(color = Tone.ink))
                 }
             }
         }

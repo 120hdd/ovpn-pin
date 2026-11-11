@@ -58,7 +58,7 @@ func TestExportLinksByName(t *testing.T) {
 	if err := json.Unmarshal(raw, &vm); err != nil {
 		t.Fatal(err)
 	}
-	if vm["id"] != SlotUUID("abcDEF123", 1) || vm["add"] != "104.16.1.2" || vm["host"] != "relay.example.com" ||
+	if vm["port"] != "443" || vm["id"] != SlotUUID("abcDEF123", 1) || vm["add"] != "104.16.1.2" || vm["host"] != "relay.example.com" ||
 		vm["path"] != "/vm" || vm["net"] != "ws" || vm["tls"] != "tls" || vm["v"] != "2" || vm["ps"] != "Relay · Germany" {
 		t.Errorf("vmess: %v", vm)
 	}
@@ -89,6 +89,31 @@ func TestExportLinksByAddress(t *testing.T) {
 	// address itself, and its own certificate accepted.
 	if u.Host != "203.0.113.7:443" || u.Query().Get("allowInsecure") != "1" || u.Query().Get("sni") != "" {
 		t.Errorf("vless by address: %s", links[0].VLESS)
+	}
+}
+
+func TestExportLinksOnAnotherPort(t *testing.T) {
+	for _, srv := range []ExportServer{
+		{Host: "203.0.113.7", Port: 8443, ID: "x1"},
+		{Host: "relay.example.com", Port: 8443, Edge: "104.16.1.2", ID: "x1"},
+	} {
+		links, err := ExportLinks(srv, []ExportSlot{{1, "Relay"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, _ := url.Parse(links[0].VLESS)
+		want := srv.Host + ":8443"
+		if srv.Edge != "" {
+			want = srv.Edge + ":8443"
+		}
+		if u.Host != want {
+			t.Errorf("vless host %q, want %q", u.Host, want)
+		}
+		raw, _ := base64.StdEncoding.DecodeString(strings.TrimPrefix(links[0].VMess, "vmess://"))
+		var vm map[string]string
+		if err := json.Unmarshal(raw, &vm); err != nil || vm["port"] != "8443" {
+			t.Errorf("vmess port: %v %v", vm["port"], err)
+		}
 	}
 }
 

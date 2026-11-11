@@ -34,6 +34,33 @@ func TestParseRelayKey(t *testing.T) {
 	}
 }
 
+func TestParseRelayKeyPort(t *testing.T) {
+	base := func(port string) string {
+		return key(`{"v":1,"host":"203.0.113.7","pw":"p","apw":"a"` + port + `}`)
+	}
+	k, err := ParseRelayKey(base(`,"port":8443`))
+	if err != nil || k.Port != 8443 {
+		t.Fatalf("port 8443: %+v %v", k, err)
+	}
+	// No port is the installer's default, and must not read as zero.
+	if k, err = ParseRelayKey(base(``)); err != nil || k.Port != 443 {
+		t.Fatalf("no port: %+v %v", k, err)
+	}
+	for name, p := range map[string]string{
+		"zero":     `0`,
+		"too big":  `65536`,
+		"negative": `-1`,
+		"fraction": `8443.5`,
+		"string":   `"8443"`,
+		"bool":     `true`,
+		"object":   `{}`,
+	} {
+		if _, err := ParseRelayKey(base(`,"port":` + p)); err == nil {
+			t.Errorf("port %s (%s): accepted", name, p)
+		}
+	}
+}
+
 func TestParseRelayKeyRefuses(t *testing.T) {
 	for name, text := range map[string]string{
 		"empty":        "  ",

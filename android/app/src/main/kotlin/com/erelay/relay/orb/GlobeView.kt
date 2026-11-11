@@ -38,7 +38,6 @@ import kotlin.math.sqrt
  *
  * Where the globe sits is [place]: its centre as fractions of the view (x from
  * the left, y from the top) and its radius as a fraction of the view's height.
- * A centre on the view's edge is how the Home screen shows half of it.
  */
 class GlobeView(context: Context) : TextureView(context), TextureView.SurfaceTextureListener {
 
@@ -64,20 +63,6 @@ class GlobeView(context: Context) : TextureView(context), TextureView.SurfaceTex
     @Volatile var still: Boolean = false
         set(value) {
             val same = field == value
-            field = value
-            if (!same) render?.wake()
-        }
-
-    /**
-     * Where the tunnel comes out, as [latitude, longitude] in radians; null
-     * when there is nowhere to point at. The globe turns to face it and wears
-     * one marker there.
-     */
-    @Volatile var focus: FloatArray? = null
-        set(value) {
-            val old = field
-            val same = if (old == null || value == null) old == null && value == null
-                       else old.contentEquals(value)
             field = value
             if (!same) render?.wake()
         }
@@ -285,7 +270,7 @@ class GlobeView(context: Context) : TextureView(context), TextureView.SurfaceTex
             last = frameTimeNanos
 
             val still = still || reduced
-            val moving = globe.ease(dt, mode, color, focus, still)
+            val moving = globe.ease(dt, mode, color, null, still)
             if (still) {
                 // One still frame, redrawn only while the colours are still
                 // easing. Then nothing is scheduled until wake() says the

@@ -110,10 +110,11 @@ fun <T> Dropdown(
     // menu has nothing to offer meanwhile.
     LaunchedEffect(enabled) { if (!enabled) open = false }
 
-    val shape = RoundedCornerShape(Shape.control)
+    val shape = RoundedCornerShape(Shape.tip)
     val turn by animateFloatAsState(if (open) 180f else 0f,
         spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMediumLow), label = "turn")
-    val edge by animateColorAsState(if (open) Tone.text2 else Tone.strokeStrong,
+    // Open, the field has focus, and the focus ring is Pulse.
+    val edge by animateColorAsState(if (open) Tone.focus else Tone.strokeStrong,
         tween(if (open) 120 else 260), label = "edge")
     val tint by animateColorAsState(if (open) Tone.text else Tone.text3,
         tween(if (open) 120 else 260), label = "chevTint")
@@ -138,7 +139,7 @@ fun <T> Dropdown(
                 .clip(shape)
                 .background(Tone.surface2.copy(alpha = if (enabled) 1f else 0.5f))
                 .border(1.dp, edge, shape)
-                .padding(start = Space.x3, end = Space.x3, top = Space.x2, bottom = Space.x2),
+                .padding(start = Space.x4, end = Space.x3, top = Space.x2, bottom = Space.x2),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val dim = if (enabled) 1f else 0.5f
@@ -187,7 +188,8 @@ fun <T> Dropdown(
                 val fade by t.animateFloat(transitionSpec = {
                     if (false isTransitioningTo true) tween(110) else tween(130, delayMillis = 20)
                 }, label = "fade") { if (it) 1f else 0f }
-                val menuShape = RoundedCornerShape(Shape.control)
+                // A menu is a floating layer: Ink Glass, radius 14, the Edge brighter along the top.
+                val menuShape = RoundedCornerShape(Shape.tip)
                 Column(
                     Modifier
                         .then(if (width > 0) Modifier.width(with(density) { width.toDp() })
@@ -200,10 +202,8 @@ fun <T> Dropdown(
                             scaleY = 0.8f + 0.2f * grow
                             alpha = fade
                         }
-                        .shadow(18.dp, menuShape)
-                        .clip(menuShape)
-                        .background(Tone.surface2)
-                        .border(1.dp, Tone.strokeStrong, menuShape)
+                        .floatShadow(menuShape)
+                        .glass(menuShape)
                         .semantics { paneTitle = caption }
                         .padding(Space.x1),
                 ) {
@@ -244,18 +244,22 @@ fun <T> Dropdown(
     }
 }
 
-/** One option: its mark, its name and a line under it, and the check when it is the one. */
+/**
+ * One option: its mark, its name and a line under it. The chosen one is
+ * the selected row - Raised Slate under it and the Pulse edge bar, no glow -
+ * with its check.
+ */
 @Composable
 private fun MenuOption(
     icon: ImageVector?, text: String, note: String?, on: Boolean,
     shown: () -> Float, from: Float, onClick: () -> Unit,
 ) {
-    val itemShape = RoundedCornerShape(Shape.control)
+    val itemShape = RoundedCornerShape(10.dp)
     // The check springs in with a little overshoot, and out without one.
     val pop by animateFloatAsState(if (on) 1f else 0f,
         if (on) spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessMedium) else tween(120),
         label = "check")
-    val wash by animateColorAsState(if (on) Tone.text.copy(alpha = 0.08f) else Color.Transparent,
+    val wash by animateColorAsState(if (on) Tone.surface2 else Color.Transparent,
         tween(200), label = "wash")
     Row(
         Modifier
@@ -273,6 +277,7 @@ private fun MenuOption(
             }
             .clip(itemShape)
             .background(wash)
+            .pickedBar(on)
             .padding(horizontal = Space.x3, vertical = Space.x2),
         verticalAlignment = Alignment.CenterVertically,
     ) {

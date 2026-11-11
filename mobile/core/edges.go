@@ -82,11 +82,11 @@ const (
 // stands behind it is our nginx and our gost rather than somebody else's
 // site. Nothing secret is sent to find that out, which is what makes it safe
 // to fire at several dozen strangers' addresses at once.
-func EdgeProbe(ctx context.Context, domain, ip string, timeout time.Duration) (EdgeVerdict, time.Duration) {
+func EdgeProbe(ctx context.Context, domain, ip string, port int, timeout time.Duration) (EdgeVerdict, time.Duration) {
 	started := time.Now()
 
 	raw, err := (&net.Dialer{Timeout: timeout}).DialContext(
-		ctx, "tcp", net.JoinHostPort(ip, "443"))
+		ctx, "tcp", net.JoinHostPort(ip, strconv.Itoa(tlsPort(port))))
 	if err != nil {
 		return EdgeBlocked, time.Since(started)
 	}
@@ -149,7 +149,7 @@ func EdgeProbe(ctx context.Context, domain, ip string, timeout time.Duration) (E
 // waits for, and they are the majority on a bad day. The tally is what tells
 // a filtered line apart from a dead server, and the times are what make the
 // choice a choice rather than whichever goroutine won.
-func EdgeScan(ctx context.Context, domain string, timeout time.Duration, width int) ([]string, map[EdgeVerdict]int) {
+func EdgeScan(ctx context.Context, domain string, port int, timeout time.Duration, width int) ([]string, map[EdgeVerdict]int) {
 	if width <= 0 {
 		width = 28
 	}
@@ -171,7 +171,7 @@ func EdgeScan(ctx context.Context, domain string, timeout time.Duration, width i
 			defer wg.Done()
 			gate <- struct{}{}
 			defer func() { <-gate }()
-			v, took := EdgeProbe(ctx, domain, ip, timeout)
+			v, took := EdgeProbe(ctx, domain, ip, port, timeout)
 			answers[i] = answer{ip, v, took}
 		}(i, ip)
 	}
@@ -195,13 +195,13 @@ func EdgeScan(ctx context.Context, domain string, timeout time.Duration, width i
 }
 
 // EdgesFor is EdgeScan cut to the number that goes into the client.
-func EdgesFor(ctx context.Context, domain string, timeout time.Duration) ([]string, string, error) {
+func EdgesFor(ctx context.Context, domain string, port int, timeout time.Duration) ([]string, string, error) {
 	// A server reached by address is not behind Cloudflare, so there are no
 	// edges to look for: the address is the one way in.
 	if net.ParseIP(domain) != nil {
 		return []string{domain}, "an address, dialled directly", nil
 	}
-	live, tally := EdgeScan(ctx, domain, timeout, 0)
+	live, tally := EdgeScan(ctx, domain, port, timeout, 0)
 	if len(live) > EdgeKeep {
 		live = live[:EdgeKeep]
 	}
@@ -234,11 +234,11 @@ func EdgesFor(ctx context.Context, domain string, timeout time.Duration) ([]stri
 // last two are what turn "it works" into a weather report - one address out
 // of fifty and forty out of fifty are both a working tunnel, and only one of
 // them is worth looking at again tomorrow.
-func EdgeScanJSON(domain string, timeout time.Duration) string {
+func EdgeScanJSON(domain string, port int, timeout time.Duration) string {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	live, tally := EdgeScan(ctx, domain, 2500*time.Millisecond, 0)
+	live, tally := EdgeScan(ctx, domain, port, 2500*time.Millisecond, 0)
 	if len(live) > EdgeKeep {
 		live = live[:EdgeKeep]
 	}

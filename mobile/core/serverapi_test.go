@@ -47,10 +47,10 @@ func TestServerByAddress(t *testing.T) {
 
 	// The API answers with the right password and refuses a wrong one.
 	if api := os.Getenv("RELAY_TEST_API"); api != "" {
-		if err := SetExit(host, "wrong", pin, "146.70.194.221", "CHANGEME", "CHANGEME", "", 10*time.Second); err == nil {
+		if err := SetExit(host, 0, "wrong", pin, "146.70.194.221", "CHANGEME", "CHANGEME", "", 10*time.Second); err == nil {
 			t.Fatal("a wrong API password was accepted")
 		}
-		if err := SetExit(host, api, pin, "146.70.194.221", "CHANGEME", "CHANGEME", "", 10*time.Second); err != nil {
+		if err := SetExit(host, 0, api, pin, "146.70.194.221", "CHANGEME", "CHANGEME", "", 10*time.Second); err != nil {
 			t.Fatalf("set exit: %v", err)
 		}
 	}
@@ -67,7 +67,7 @@ func TestUploadThroughExits(t *testing.T) {
 		t.Skip("RELAY_TEST_SERVER or RELAY_TEST_EXITS not set")
 	}
 	for _, ip := range strings.Split(exits, ",") {
-		if err := SetExit(host, os.Getenv("RELAY_TEST_API"), os.Getenv("RELAY_TEST_PIN"), ip,
+		if err := SetExit(host, 0, os.Getenv("RELAY_TEST_API"), os.Getenv("RELAY_TEST_PIN"), ip,
 			os.Getenv("RELAY_TEST_EXIT_USER"), os.Getenv("RELAY_TEST_EXIT_PASS"), "", 15*time.Second); err != nil {
 			t.Fatalf("set %s: %v", ip, err)
 		}

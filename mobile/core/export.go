@@ -80,6 +80,7 @@ type ExportLink struct {
 // ExportServer is how other devices reach the server.
 type ExportServer struct {
 	Host string // the server's address or name, as the key has it
+	Port int    // its TLS port; 0 means 443, which is what links carried before
 	// Edge is a Cloudflare address measured to carry the name from here,
 	// put in the link's address so the device does not have to look the name
 	// up on a line that lies about it. Empty to use the name.
@@ -105,8 +106,8 @@ func ExportLinks(srv ExportServer, slots []ExportSlot) ([]ExportLink, error) {
 		}
 		id := SlotUUID(srv.ID, s.K)
 		l := ExportLink{K: s.K, Name: s.Name,
-			VLESS: vlessLink(id, addr, srv.Host, byIP, s.Name),
-			VMess: vmessLink(id, addr, srv.Host, byIP, s.Name)}
+			VLESS: vlessLink(id, addr, srv.Port, srv.Host, byIP, s.Name),
+			VMess: vmessLink(id, addr, srv.Port, srv.Host, byIP, s.Name)}
 		if s.K == 0 && srv.SS != nil {
 			l.SS = ssLink(srv.Host, srv.SS, s.Name)
 		}
@@ -120,7 +121,7 @@ func ExportLinks(srv ExportServer, slots []ExportSlot) ([]ExportLink, error) {
 // certificate of its own that no device will trust by itself, so the link
 // says to accept it - which is what the apps' pinning replaces, and these
 // clients have no way to pin.
-func vlessLink(id, addr, host string, byIP bool, name string) string {
+func vlessLink(id, addr string, port int, host string, byIP bool, name string) string {
 	q := url.Values{}
 	q.Set("encryption", "none")
 	q.Set("security", "tls")
@@ -133,14 +134,14 @@ func vlessLink(id, addr, host string, byIP bool, name string) string {
 		q.Set("host", host)
 	}
 	q.Set("fp", "chrome")
-	return "vless://" + id + "@" + net.JoinHostPort(addr, "443") + "?" + q.Encode() +
+	return "vless://" + id + "@" + net.JoinHostPort(addr, strconv.Itoa(tlsPort(port))) + "?" + q.Encode() +
 		"#" + url.PathEscape(name)
 }
 
 // vmessLink is v2rayN's format: base64 of a JSON object, version 2.
-func vmessLink(id, addr, host string, byIP bool, name string) string {
+func vmessLink(id, addr string, port int, host string, byIP bool, name string) string {
 	m := map[string]string{
-		"v": "2", "ps": name, "add": addr, "port": "443", "id": id, "aid": "0",
+		"v": "2", "ps": name, "add": addr, "port": strconv.Itoa(tlsPort(port)), "id": id, "aid": "0",
 		"scy": "auto", "net": "ws", "type": "none", "path": ExportVMessPath,
 		"tls": "tls", "fp": "chrome",
 	}

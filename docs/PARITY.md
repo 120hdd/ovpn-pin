@@ -17,7 +17,7 @@ changes a feature updates its row.
 | Race the provider's exits, first to answer wins | yes | yes | |
 | Own server, and server + exit | yes | yes | by IP (self-signed, pinned on first Test) or domain; one install command from Settings with the app's own passwords; server + exit sends the picked location and its provider's account |
 | Every program through it, not only proxy-aware ones (TUN) | yes | yes | Windows: Settings → Connection → Tunnel, sing-box + UAC; Android: always, VpnService |
-| Own server set up from one pasted key (relay://…) | yes | yes | printed by install-server.sh, kept in /etc/relay/key; carries the pin, both passwords and Shadowsocks |
+| Own server set up from one pasted key (relay://…) | yes | yes | printed by install-server.sh, kept in /etc/relay/key; carries the pin, both passwords, Shadowsocks and the TLS port when it is not 443 (--port) |
 | Shadowsocks straight to your own server's address | yes | yes | the server's port exits there, the next port goes through the exit-chain (server + exit); Windows via gost, Android in the Go core |
 | Way out chosen from a dropdown, not a three-way strip | yes | yes | three labels side by side did not fit narrow phones |
 | Split tunnel: all except a list, or only a list | yes | yes | sites, addresses and ranges; Windows: sing-box rules with the adapter, the worker with the proxy setting; Android: the Go core, UDP included for what goes around |

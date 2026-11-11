@@ -51,6 +51,8 @@ import androidx.compose.ui.unit.sp
 import com.erelay.relay.data.Captcha
 import com.erelay.relay.data.Said
 import com.erelay.relay.ui.theme.Space
+import com.erelay.relay.ui.theme.Data
+import com.erelay.relay.ui.theme.Shape
 import com.erelay.relay.ui.theme.Tone
 import com.erelay.relay.ui.theme.Type
 import kotlinx.coroutines.launch
@@ -198,7 +200,7 @@ fun AddAccount(
 private fun ProviderHero(w: Who) {
     Row(Modifier.fillMaxWidth().padding(horizontal = Space.x1), verticalAlignment = Alignment.Top) {
         Icon(if (w == Who.WINDSCRIBE) Glyph.windscribe else Glyph.surfshark, w.label,
-            Modifier.size(32.dp), tint = Tone.text2)
+            Modifier.size(32.dp), tint = Data.provider(w.key))
         Spacer(Modifier.width(Space.x4))
         Column(Modifier.weight(1f)) {
             Text("Connect ${w.label}", style = Type.subtitle)
@@ -252,7 +254,7 @@ private fun CaptchaSheet(
             Text(captcha.art, style = Type.mono.copy(fontFamily = FontFamily.Monospace, fontSize = 7.sp,
                 lineHeight = 8.sp, color = Tone.text),
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-                    .clip(RoundedCornerShape(12.dp)).background(Tone.bg).padding(Space.x3))
+                    .clip(RoundedCornerShape(Shape.tip)).background(Tone.bg).border(1.dp, Tone.stroke, RoundedCornerShape(Shape.tip)).padding(Space.x3))
             Spacer(Modifier.height(Space.x3))
             Field(answer, { answer = it }, "Answer")
             ButtonRow {
@@ -303,7 +305,7 @@ private fun CaptchaSheet(
                     Modifier
                         .fillMaxWidth()
                         .height(stageH)
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(Shape.tip))
                         .pointerInput(puzzle) {
                             detectDragGestures(
                                 onDragStart = { xs.clear(); ys.clear() },
@@ -328,7 +330,7 @@ private fun CaptchaSheet(
                         .height(40.dp)
                         .clip(CircleShape)
                         .background(Tone.surface2)
-                        .border(1.dp, Tone.strokeStrong, CircleShape)
+                        .border(1.dp, Tone.stroke, CircleShape)
                         .pointerInput(puzzle) {
                             detectDragGestures(
                                 onDragStart = { xs.clear(); ys.clear() },

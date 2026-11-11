@@ -16,28 +16,30 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
 
 // SetExit points the server's multi-IP mode at exitIP, with that exit's
-// provider credential. host is the server's IP or domain; pin is its
+// provider credential. host is the server's IP or domain and port its TLS
+// port (0 for 443); pin is its
 // certificate's SHA-256 when it is reached by IP.
-func SetExit(host, apiPassword, pin, exitIP, user, password, name string, timeout time.Duration) error {
-	return setChain(host, apiPassword, pin, "exit-chain", exitIP, user, password, name, timeout)
+func SetExit(host string, port int, apiPassword, pin, exitIP, user, password, name string, timeout time.Duration) error {
+	return setChain(host, port, apiPassword, pin, "exit-chain", exitIP, user, password, name, timeout)
 }
 
 // SetSlot points one exported location - loc-<k> on the server, which the
 // links handed to other devices are routed to - at exitIP. The same node as
 // SetExit writes, under another chain's name.
-func SetSlot(host, apiPassword, pin string, k int, exitIP, user, password, name string, timeout time.Duration) error {
+func SetSlot(host string, port int, apiPassword, pin string, k int, exitIP, user, password, name string, timeout time.Duration) error {
 	if k < 1 {
 		return fmt.Errorf("slot %d is not one the server has: they start at 1", k)
 	}
-	return setChain(host, apiPassword, pin, fmt.Sprintf("loc-%d", k), exitIP, user, password, name, timeout)
+	return setChain(host, port, apiPassword, pin, fmt.Sprintf("loc-%d", k), exitIP, user, password, name, timeout)
 }
 
-func setChain(host, apiPassword, pin, chain, exitIP, user, password, name string, timeout time.Duration) error {
+func setChain(host string, port int, apiPassword, pin, chain, exitIP, user, password, name string, timeout time.Duration) error {
 	if name == "" {
 		name = "current"
 	}
@@ -50,15 +52,15 @@ func setChain(host, apiPassword, pin, chain, exitIP, user, password, name string
 			"dialer":    map[string]any{"type": "tls", "tls": map[string]any{"secure": false}},
 		}}}},
 	})
-	_, err := ServerAPI(host, apiPassword, pin, http.MethodPut, "config/chains/"+chain, body, timeout)
+	_, err := ServerAPI(host, port, apiPassword, pin, http.MethodPut, "config/chains/"+chain, body, timeout)
 	return err
 }
 
 // ChainJSON is one chain as the server has it now, for putting back later -
 // what an export does with the server's own exit-chain, which finding each
 // location's best exit moves about.
-func ChainJSON(host, apiPassword, pin, chain string, timeout time.Duration) (string, error) {
-	out, err := ServerAPI(host, apiPassword, pin, http.MethodGet, "config/chains/"+chain, nil, timeout)
+func ChainJSON(host string, port int, apiPassword, pin, chain string, timeout time.Duration) (string, error) {
+	out, err := ServerAPI(host, port, apiPassword, pin, http.MethodGet, "config/chains/"+chain, nil, timeout)
 	if err != nil {
 		return "", err
 	}
@@ -73,8 +75,8 @@ func ChainJSON(host, apiPassword, pin, chain string, timeout time.Duration) (str
 }
 
 // PutChainJSON puts back a chain ChainJSON read.
-func PutChainJSON(host, apiPassword, pin, chain, body string, timeout time.Duration) error {
-	_, err := ServerAPI(host, apiPassword, pin, http.MethodPut, "config/chains/"+chain, []byte(body), timeout)
+func PutChainJSON(host string, port int, apiPassword, pin, chain, body string, timeout time.Duration) error {
+	_, err := ServerAPI(host, port, apiPassword, pin, http.MethodPut, "config/chains/"+chain, []byte(body), timeout)
 	return err
 }
 
@@ -82,15 +84,24 @@ func PutChainJSON(host, apiPassword, pin, chain, body string, timeout time.Durat
 // starts from, so what was set through the API outlives a restart. Without
 // it, exported locations would all go back to the installer's placeholder -
 // one that refuses - the next time the server rebooted.
-func PersistServer(host, apiPassword, pin string, timeout time.Duration) error {
-	_, err := ServerAPI(host, apiPassword, pin, http.MethodPost,
+func PersistServer(host string, port int, apiPassword, pin string, timeout time.Duration) error {
+	_, err := ServerAPI(host, port, apiPassword, pin, http.MethodPost,
 		"config?format=yaml&path=/etc/gost/config.yaml", nil, timeout)
 	return err
 }
 
+// apiHost is the host part of the API's URL: the server's own TLS port when
+// the installer was given one other than 443, nothing extra otherwise.
+func apiHost(host string, port int) string {
+	if tlsPort(port) == 443 {
+		return host
+	}
+	return net.JoinHostPort(host, strconv.Itoa(tlsPort(port)))
+}
+
 // ServerAPI is one request to the server's API, straight to it - protected
 // out of the phone's own tunnel, and pinned when the server is an address.
-func ServerAPI(host, apiPassword, pin, method, path string, body []byte, timeout time.Duration) ([]byte, error) {
+func ServerAPI(host string, port int, apiPassword, pin, method, path string, body []byte, timeout time.Duration) ([]byte, error) {
 	tr := &http.Transport{DialContext: (&net.Dialer{Timeout: timeout, Control: dialControl}).DialContext}
 	if net.ParseIP(host) != nil {
 		tr.TLSClientConfig = PinnedTLS(pin, nil)
@@ -103,7 +114,7 @@ func ServerAPI(host, apiPassword, pin, method, path string, body []byte, timeout
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, "https://"+host+"/api/"+path, reader)
+	req, err := http.NewRequestWithContext(ctx, method, "https://"+apiHost(host, port)+"/api/"+path, reader)
 	if err != nil {
 		return nil, err
 	}

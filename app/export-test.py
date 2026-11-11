@@ -82,6 +82,18 @@ def test_links_by_address():
     q = dict(urllib.parse.parse_qsl(u.query))
     # No Cloudflare in front of an address, and no name to vouch for it.
     assert u.hostname == '203.0.113.7' and q['allowInsecure'] == '1' and 'sni' not in q
+    assert u.port == 443
+
+
+def test_links_carry_the_servers_port():
+    # A server whose 443 belongs to something else (an Xray): both kinds of
+    # link dial the port its key named, as the phone's do.
+    rows = export.links('203.0.113.7', 'x1', [{'k': 1, 'name': 'Relay · Germany'}],
+                        port=8443)
+    u = urllib.parse.urlsplit(rows[0]['vless'])
+    assert u.hostname == '203.0.113.7' and u.port == 8443
+    vm = json.loads(base64.b64decode(rows[0]['vmess'][len('vmess://'):]))
+    assert vm['add'] == '203.0.113.7' and vm['port'] == '8443'
 
 
 def test_refuses_without_an_export_id():

@@ -2,7 +2,7 @@
 # Relay tunnel - server installer.
 #
 #   ./install-server.sh <ip-or-domain> [--password P] [--api-password A]
-#                       [--ss-port N] [--no-ss] [--slots N]
+#                       [--port N] [--ss-port N] [--no-ss] [--slots N]
 #
 # One run sets up everything; the apps write this line themselves, with the
 # passwords they already hold, so nothing has to be copied back into them.
@@ -37,6 +37,12 @@
 # location it was asked for, with that provider's own credential, through
 # the API each time it connects - so no account ever goes into this line.
 #
+# --port moves the TLS door off 443, for a server where something else
+# already answers there - an Xray, another site. The key carries the port, so
+# the apps dial it; 443 is left out of the key, as it always was. Through
+# Cloudflare it has to be one of the ports Cloudflare proxies (8443, 2053,
+# 2083, 2087, 2096); straight to the address any port will do.
+#
 # Idempotent: safe to re-run. Leaves any other nginx site alone - the block it
 # writes carries its own server_name. Passwords already on the server are
 # kept unless new ones are passed.
@@ -45,6 +51,7 @@ set -euo pipefail
 DOMAIN=""
 NEWPW=""
 NEWAPW=""
+TLSPORT=443
 SSPORT=8388
 WITH_SS=1
 SLOTS=8
@@ -52,6 +59,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --password)     NEWPW="${2:-}"; shift 2 ;;
     --api-password) NEWAPW="${2:-}"; shift 2 ;;
+    --port)         TLSPORT="${2:-}"; shift 2 ;;
     --ss-port)      SSPORT="${2:-}"; shift 2 ;;
     --no-ss)        WITH_SS=0; shift ;;
     --slots)        SLOTS="${2:-}"; shift 2 ;;
@@ -59,7 +67,9 @@ while [ $# -gt 0 ]; do
     *)  DOMAIN="$1"; shift ;;
   esac
 done
-[ -n "$DOMAIN" ] || { echo "usage: $0 <ip-or-domain> [--password P] [--api-password A] [--ss-port N] [--no-ss] [--slots N]" >&2; exit 1; }
+[ -n "$DOMAIN" ] || { echo "usage: $0 <ip-or-domain> [--password P] [--api-password A] [--port N] [--ss-port N] [--no-ss] [--slots N]" >&2; exit 1; }
+[[ "$TLSPORT" =~ ^[0-9]+$ ]] && [ "$TLSPORT" -ge 1 ] && [ "$TLSPORT" -le 65535 ] \
+  || { echo "--port wants a number from 1 to 65535" >&2; exit 1; }
 [[ "$SLOTS" =~ ^[0-9]+$ ]] && [ "$SLOTS" -le 32 ] \
   || { echo "--slots wants a number from 0 to 32" >&2; exit 1; }
 [[ "$SSPORT" =~ ^[0-9]+$ ]] && [ "$SSPORT" -ge 1 ] && [ "$SSPORT" -le 65534 ] \
@@ -192,7 +202,7 @@ NGX
   PIN=""
 fi
 
-say "nginx :443"
+say "nginx :${TLSPORT}"
 ws_block() {  # $1 = path, $2 = upstream port
 cat <<NGX
     location /$1 {
@@ -211,8 +221,8 @@ NGX
 {
   cat <<NGX
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
+    listen ${TLSPORT} ssl;
+    listen [::]:${TLSPORT} ssl;
     server_name ${DOMAIN};
     ssl_certificate     ${CERT};
     ssl_certificate_key ${KEY};
@@ -426,14 +436,19 @@ for unit in gost sing-box; do
 done
 sleep 2
 
-if [ "$WITH_SS" = 1 ] && command -v ufw >/dev/null 2>&1 \
+if command -v ufw >/dev/null 2>&1 \
     && ufw status 2>/dev/null | grep -q '^Status: active'; then
   # Only when ufw is already guarding the box: switching a firewall on is not
   # this script's decision, but leaving its own ports shut behind one is.
   say "firewall"
-  ufw allow "${SSPORT}/tcp" >/dev/null
-  ufw allow "${SSXPORT}/tcp" >/dev/null
-  echo "  opened ${SSPORT}/tcp and ${SSXPORT}/tcp"
+  OPENED="${TLSPORT}/tcp"
+  ufw allow "${TLSPORT}/tcp" >/dev/null
+  if [ "$WITH_SS" = 1 ]; then
+    ufw allow "${SSPORT}/tcp" >/dev/null
+    ufw allow "${SSXPORT}/tcp" >/dev/null
+    OPENED="${OPENED}, ${SSPORT}/tcp and ${SSXPORT}/tcp"
+  fi
+  echo "  opened ${OPENED}"
 fi
 
 # The key: everything an app needs, in one line to paste. base64url of a JSON
@@ -448,10 +463,12 @@ fi
 if command -v python3 >/dev/null 2>&1; then
   KEY=$(HOST="$DOMAIN" PIN="$PIN" PW="$PW" APW="$APW" SS="$WITH_SS" \
         SSM="$SSMETHOD" SSP="$SSPW" SSPORT="$SSPORT" SSX="$SSXPORT" \
-        XID="$XID" SLOTS="$SLOTS" python3 - <<'PY'
+        XID="$XID" SLOTS="$SLOTS" TLSPORT="$TLSPORT" python3 - <<'PY'
 import base64, json, os
 e = os.environ
 key = {'v': 1, 'host': e['HOST'], 'pin': e['PIN'], 'pw': e['PW'], 'apw': e['APW']}
+if int(e['TLSPORT']) != 443:
+    key['port'] = int(e['TLSPORT'])
 if e['SS'] == '1':
     key['ss'] = {'method': e['SSM'], 'password': e['SSP'],
                  'port': int(e['SSPORT']), 'exitPort': int(e['SSX'])}
@@ -464,7 +481,9 @@ PY
 else
   # Every value here is an address, hex, a number or a generated password,
   # none of which needs escaping in JSON.
-  RAW="{\"v\":1,\"host\":\"${DOMAIN}\",\"pin\":\"${PIN}\",\"pw\":\"${PW}\",\"apw\":\"${APW}\"${SSJSON}}"
+  PORTJSON=""
+  if [ "$TLSPORT" != 443 ]; then PORTJSON=",\"port\":${TLSPORT}"; fi
+  RAW="{\"v\":1,\"host\":\"${DOMAIN}\",\"pin\":\"${PIN}\",\"pw\":\"${PW}\",\"apw\":\"${APW}\"${PORTJSON}${SSJSON}}"
   KEY="relay://$(printf '%s' "$RAW" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
 fi
 printf '%s\n' "$KEY" > /etc/relay/key
@@ -473,7 +492,7 @@ chmod 600 /etc/relay/key
 say "result"
 for unit in gost sing-box; do printf '  %-9s %s
 ' "$unit" "$(systemctl is-active "$unit")"; done
-ss -lnt | grep -E "127.0.0.1:(1000[0-4]|101[0-3][0-9]|18080)|:(${SSPORT}|${SSXPORT}) " | awk '{print "  listening " $4}'
+ss -lnt | grep -E "127.0.0.1:(1000[0-4]|101[0-3][0-9]|18080)|:(${TLSPORT}|${SSPORT}|${SSXPORT}) " | awk '{print "  listening " $4}'
 cat <<SUMMARY
 
   Done. The app that gave you this command already has what it needs:
@@ -487,11 +506,13 @@ if [ -n "$PIN" ]; then
   echo "    certificate     sha256 ${PIN}"
   echo "                    (the apps pin this the first time they connect)"
 fi
+AT="${DOMAIN}"
+if [ "$TLSPORT" != 443 ]; then AT="${DOMAIN}:${TLSPORT}"; fi
 cat <<SUMMARY
 
-    single-IP  wss://${DOMAIN}/gw     (exits here)
-    multi-IP   wss://${DOMAIN}/ex     (exits at the location the app picks)
-    control    https://${DOMAIN}/api/config/chains/exit-chain
+    single-IP  wss://${AT}/gw     (exits here)
+    multi-IP   wss://${AT}/ex     (exits at the location the app picks)
+    control    https://${AT}/api/config/chains/exit-chain
 SUMMARY
 if [ "$WITH_SS" = 1 ]; then
   cat <<SUMMARY
