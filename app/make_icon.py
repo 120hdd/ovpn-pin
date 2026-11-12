@@ -20,9 +20,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, 'assets', 'app.ico')
 PNG = os.path.join(HERE, 'assets', 'app.png')
 
-# The disc white, the ring and bead the connected green (--ok).
-DISC = (255, 255, 255, 255)
-RING = (63, 207, 142, 255)
+DISC = (97, 239, 191, 255)
+RING = (255, 255, 255, 255)
 EDGE = (150, 158, 172, 255)
 
 # The grid. The ring runs clockwise from 10 degrees above three o'clock to
@@ -49,9 +48,6 @@ def mark(d, s, inset):
     def dot(x, y, r, fill):
         d.ellipse([x - r, y - r, x + r, y + r], fill=fill)
 
-    # The white disc over a slightly wider grey one: with no panel behind it,
-    # white on a light taskbar is not there at all.
-    dot(cx, cy, DISC_R * k + max(1, 4 * k), EDGE)
     dot(cx, cy, DISC_R * k, DISC)
 
     def ring_and_bead(colour, grow):
@@ -63,8 +59,9 @@ def mark(d, s, inset):
             dot(*at(end, RING_R), w / 2, colour)
         dot(*at(BEAD_ANGLE, BEAD_OUT), BEAD_R * k + grow, colour)
 
-    # Green reads on a light taskbar and a dark one alike, so the ring needs
-    # no edge of its own.
+    # The white ring and bead drawn over a slightly wider grey one: with no
+    # panel behind it, white on a light taskbar is not there at all.
+    ring_and_bead(EDGE, max(1, 4 * k))
     ring_and_bead(RING, 0)
 
 

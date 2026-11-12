@@ -13,24 +13,6 @@ import com.erelay.relay.ui.theme.Shape
 import kotlinx.coroutines.delay
 
 /**
- * Whether the phone has animations switched off (Developer options, or
- * Remove animations): the animator duration scale is 0. Then nothing fades;
- * it just swaps.
- */
-@Composable
-fun rememberReducedMotion(): Boolean {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    return remember(context) {
-        try {
-            android.provider.Settings.Global.getFloat(context.contentResolver,
-                android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
-        } catch (e: Exception) {
-            false
-        }
-    }
-}
-
-/**
  * Rises into place: fades in while travelling up a short way, after
  * [delayMs]. Given increasing delays, a column of these arrives one after
  * another rather than all at once - the entrance of the welcome screens.
