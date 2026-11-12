@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -37,7 +36,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.erelay.relay.data.Traffic
 import com.erelay.relay.ui.theme.Tone
-import com.erelay.relay.ui.theme.Data
 import com.erelay.relay.ui.theme.Type
 import kotlin.math.abs
 import kotlin.math.exp
@@ -91,6 +89,13 @@ private class Wave {
     }
 }
 
+/** 0..1 for how busy the line is: the beads around the orb swell with it. */
+fun paceOf(t: Traffic): Float {
+    val bps = (t.downRate + t.upRate).toFloat()
+    if (bps < 512) return 0f
+    return min(1f, (kotlin.math.ln(bps / 512f) / kotlin.math.ln(4096f)))
+}
+
 @Composable
 fun Flux(traffic: Traffic, modifier: Modifier = Modifier) {
     val wave = remember { Wave() }
@@ -121,8 +126,8 @@ fun Flux(traffic: Traffic, modifier: Modifier = Modifier) {
         ) {
             val f = frame
             val mid = size.height * 0.62f
-            band(wave.down, wave.scaleDown, f, top = 0f, base = mid, up = true, color = Data.periwinkle)
-            band(wave.up, wave.scaleUp, f, top = mid, base = size.height, up = false, color = Data.orchid)
+            band(wave.down, wave.scaleDown, f, top = 0f, base = mid, up = true, color = Tone.fluxDown)
+            band(wave.up, wave.scaleUp, f, top = mid, base = size.height, up = false, color = Tone.fluxUp)
             // The left quarter fades out: old readings leave rather than drop off an edge.
             drawRect(
                 Brush.horizontalGradient(0f to Color.Transparent, 0.24f to Color.Black,
@@ -133,9 +138,9 @@ fun Flux(traffic: Traffic, modifier: Modifier = Modifier) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Glyph.arrowDown, "Downloaded", Modifier.size(12.dp), tint = Data.periwinkle)
+                Icon(Glyph.arrowDown, "Downloaded", Modifier.size(12.dp), tint = Tone.fluxDown)
                 Spacer(Modifier.width(4.dp))
-                Text(bytes(traffic.down), style = Type.mono.copy(color = Tone.text,
+                Text(bytes(traffic.down), style = Type.mono.copy(color = Tone.text, fontSize = 13.sp,
                     fontWeight = FontWeight.Medium))
                 Spacer(Modifier.width(8.dp))
                 Text(rate(traffic.downRate), style = Type.mono)
@@ -143,10 +148,10 @@ fun Flux(traffic: Traffic, modifier: Modifier = Modifier) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(rate(traffic.upRate), style = Type.mono)
                 Spacer(Modifier.width(8.dp))
-                Text(bytes(traffic.up), style = Type.mono.copy(color = Tone.text,
+                Text(bytes(traffic.up), style = Type.mono.copy(color = Tone.text, fontSize = 13.sp,
                     fontWeight = FontWeight.Medium))
                 Spacer(Modifier.width(4.dp))
-                Icon(Glyph.arrowDown, "Uploaded", Modifier.size(12.dp).rotate(180f), tint = Data.orchid)
+                Icon(Glyph.arrowDown, "Uploaded", Modifier.size(12.dp).rotate(180f), tint = Tone.fluxUp)
             }
         }
     }
@@ -208,99 +213,8 @@ private fun DrawScope.band(
     val hx = xs[n - 1]
     val hy = ys[n - 1]
     if (hx in 0f..size.width + 1 && abs(hy - (if (up) base else top)) >= 0f) {
+        drawCircle(Brush.radialGradient(listOf(color.copy(alpha = 0.5f), Color.Transparent),
+            center = Offset(hx, hy), radius = 8.dp.toPx()), 8.dp.toPx(), Offset(hx, hy))
         drawCircle(color, 2.5.dp.toPx(), Offset(hx, hy))
     }
 }
-
-/**
- * The last minute of throughput as two thin lines over faint fills (data
- * colours, DESIGN-NIGHT 2): download in Periwinkle, upload in Orchid, 1.5dp
- * each over a 16% fill, the newest reading at the right.
- * Beside it the current rates in mono tabular figures. One reading a second
- * for sixty seconds; both lines share a scale that climbs fast and settles
- * slowly, with a floor, so a quiet line stays flat rather than magnified.
- *
- * [shown] fades it in (swaps with [reduced]); the history is cleared when it
- * is next shown, not while it fades out.
- */
-@Composable
-fun Sparkline(traffic: Traffic, shown: Boolean, reduced: Boolean, modifier: Modifier = Modifier) {
-    val down = remember { androidx.compose.runtime.mutableStateListOf<Float>() }
-    val up = remember { androidx.compose.runtime.mutableStateListOf<Float>() }
-    val latest by androidx.compose.runtime.rememberUpdatedState(traffic)
-    var scale by remember { mutableFloatStateOf(SPARK_FLOOR) }
-
-    LaunchedEffect(shown) {
-        if (!shown) return@LaunchedEffect
-        down.clear()
-        up.clear()
-        while (true) {
-            down += latest.downRate.toFloat()
-            up += latest.upRate.toFloat()
-            if (down.size > SPARK_N) { down.removeAt(0); up.removeAt(0) }
-            val want = max(max(down.max(), up.max()) * 1.15f, SPARK_FLOOR)
-            scale += (want - scale) * (if (want > scale) 0.7f else 0.08f)
-            kotlinx.coroutines.delay(1000)
-        }
-    }
-
-    val fade by androidx.compose.animation.core.animateFloatAsState(
-        if (shown) 1f else 0f,
-        androidx.compose.animation.core.tween(if (reduced) 0 else 400,
-            delayMillis = if (shown && !reduced) 250 else 0),
-        label = "sparkAlpha")
-    if (fade <= 0f) return
-
-    val ink = Data.periwinkle
-    val ink2 = Data.orchid
-    val grid = Tone.hairline
-    Row(modifier.fillMaxWidth().graphicsLayer { alpha = fade },
-        verticalAlignment = Alignment.CenterVertically) {
-        Canvas(Modifier.weight(1f).height(36.dp)) {
-            val w = size.width
-            val h = size.height
-            val pad = 2.dp.toPx()
-            drawLine(grid, Offset(0f, h - pad / 2), Offset(w, h - pad / 2), 1.dp.toPx())
-            fun line(v: List<Float>, color: Color) {
-                if (v.size < 2) return
-                val path = Path()
-                val n = v.size
-                for (i in 0 until n) {
-                    val x = w * (i + SPARK_N - n) / (SPARK_N - 1).toFloat()
-                    val y = (h - pad) - min(1f, v[i] / scale) * (h - pad * 2)
-                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-                }
-                val area = Path().apply {
-                    addPath(path)
-                    lineTo(w, h - pad / 2)
-                    lineTo(w * (SPARK_N - n) / (SPARK_N - 1).toFloat(), h - pad / 2)
-                    close()
-                }
-                drawPath(area, Brush.verticalGradient(listOf(color.copy(alpha = 0.16f), color.copy(alpha = 0f))))
-                drawPath(path, color, style = Stroke(1.5.dp.toPx(),
-                    cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                    join = androidx.compose.ui.graphics.StrokeJoin.Round))
-            }
-            line(up, ink2)
-            line(down, ink)
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(horizontalAlignment = Alignment.End) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Glyph.arrowDown, "Download", Modifier.size(12.dp), tint = ink)
-                Spacer(Modifier.width(4.dp))
-                Text(rate(traffic.downRate), style = Type.mono.copy(color = Tone.text), maxLines = 1,
-                    modifier = Modifier.widthIn(min = 64.dp), textAlign = androidx.compose.ui.text.style.TextAlign.End)
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Glyph.arrowDown, "Upload", Modifier.size(12.dp).rotate(180f), tint = ink2)
-                Spacer(Modifier.width(4.dp))
-                Text(rate(traffic.upRate), style = Type.mono.copy(color = Tone.text2), maxLines = 1,
-                    modifier = Modifier.widthIn(min = 64.dp), textAlign = androidx.compose.ui.text.style.TextAlign.End)
-            }
-        }
-    }
-}
-
-private const val SPARK_N = 60
-private const val SPARK_FLOOR = 16f * 1024

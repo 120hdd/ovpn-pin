@@ -1,6 +1,7 @@
 package com.erelay.relay.ui
 
 import android.app.Activity
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
@@ -32,7 +33,7 @@ enum class Gate { LOADING, INTRO, WELCOME, SETUP, READY }
 enum class Over { NONE, PICKER, PREFS, LOG, DROP }
 
 /** A sheet that can open over another one. */
-enum class Over2 { NONE, SOURCES, ADD_ACCOUNT, SPLIT_APPS, SHARE_PLACES }
+enum class Over2 { NONE, SOURCES, ADD_ACCOUNT }
 
 /**
  * The window: the main screen, and whichever sheet is over it.
@@ -71,8 +72,7 @@ fun Root(core: RelayCore) {
     val feel by core.feel.collectAsStateWithLifecycle()
     androidx.compose.runtime.SideEffect {
         com.erelay.relay.ui.theme.Tone.palette = com.erelay.relay.ui.theme.Palette.of(feel.theme)
-        // The one accent the app has is the connection state.
-        com.erelay.relay.ui.theme.Tone.mode = conn.mode
+        com.erelay.relay.ui.theme.Tone.signal = feel.orbColors != "desktop"
     }
 
     var over by rememberSaveable { mutableStateOf(Over.NONE) }
@@ -170,13 +170,13 @@ fun Root(core: RelayCore) {
         if (uri != null) scope.launch {
             val r = core.importTree(uri)
             notice = r.text
-            Toasts.show(r.text, long = true)
+            Toast.makeText(context, r.text, Toast.LENGTH_LONG).show()
         }
     }
 
     fun copy(text: String) {
         core.copy(text)
-        Toasts.show("Copied $text")
+        Toast.makeText(context, "Copied $text", Toast.LENGTH_SHORT).show()
     }
 
     val names = remember(countries) { countries.associate { it.code to it.name } }
@@ -265,7 +265,7 @@ fun Root(core: RelayCore) {
                 exitsIn = { core.exitsIn(it) },
                 onSort = { core.setSort(it) },
                 onStar = { code -> scope.launch { core.toggleFavourite(code) } },
-                onTest = { code -> core.testReach(code).let { if (!it.ok) Toasts.show(it.text) } },
+                onTest = { code -> core.testReach(code).let { if (!it.ok) Toast.makeText(context, it.text, Toast.LENGTH_SHORT).show() } },
                 onCancelTest = { core.cancelReach() },
                 onChoose = { code ->
                     core.remember(code)
@@ -275,9 +275,8 @@ fun Root(core: RelayCore) {
                     if (conn.mode != Mode.BUSY) connect(code)
                 },
                 onSources = { over2 = Over2.SOURCES },
-                onTestAll = { core.quickTest().let { if (!it.ok) Toasts.show(it.text) } },
+                onTestAll = { core.quickTest().let { if (!it.ok) Toast.makeText(context, it.text, Toast.LENGTH_SHORT).show() } },
                 onOpen = { if (core.quickDue()) core.quickTest() },
-                connects = conn.mode != Mode.BUSY,
             ),
             onClose = { over = Over.NONE },
         )
@@ -291,8 +290,6 @@ fun Root(core: RelayCore) {
             onAddAccount = { provider -> addFor = provider; over2 = Over2.ADD_ACCOUNT },
             onImport = { importer.launch(null) },
             onDrop = { over = Over.DROP },
-            onSplitApps = { over2 = Over2.SPLIT_APPS },
-            onSharePlaces = { over2 = Over2.SHARE_PLACES },
             notice = notice,
             start = prefsStart,
             feel = feel,
@@ -309,17 +306,11 @@ fun Root(core: RelayCore) {
         SourceSheet(over2 == Over2.SOURCES, sources, source,
             onPick = { key -> scope.launch {
                 val r = core.setSource(key)
-                if (!r.ok) Toasts.show(r.text)
+                if (!r.ok) Toast.makeText(context, r.text, Toast.LENGTH_SHORT).show()
                 over2 = Over2.NONE
             } },
             onImport = { over2 = Over2.NONE; importer.launch(null) },
             onClose = { over2 = Over2.NONE })
-
-        // Over Settings → Split tunnel, which it was opened from and goes back to.
-        SplitAppsSheet(over2 == Over2.SPLIT_APPS, core, onClose = { over2 = Over2.NONE })
-
-        // Over Settings → Share with other devices, likewise.
-        SharePlacesSheet(over2 == Over2.SHARE_PLACES, core, onClose = { over2 = Over2.NONE })
 
         AddAccount(over2 == Over2.ADD_ACCOUNT, provider = addFor,
             taken = accounts.map { it.provider }.toSet(),
@@ -335,9 +326,6 @@ fun Root(core: RelayCore) {
                 over2 = Over2.NONE
                 scope.launch { core.prepareServers(added) }
             })
-
-        // Over everything: the app's own toasts, on a glass pill.
-        ToastHost()
     }
     }
 
@@ -396,16 +384,6 @@ fun failureSaid(why: String, picked: String, names: Map<String, String>): String
             "password on the provider's manual-setup page — they are not the email you log in " +
             "with, and they change when you reset them there."
     why.startsWith("no-servers") -> "No servers for that country."
-    // The service narrowed to the pick's configs and none were in the folder
-    // any more: re-pinned under new names, or set aside, since the list was read.
-    why.startsWith("pick-gone") -> "Those servers are no longer in the folder - they were " +
-        "re-pinned or set aside. Pick the place again from the list."
-    // Every exit behind the pick is one provider's, and that provider has no
-    // account here: a Windscribe-only phone picking a Surfshark city.
-    why.startsWith("no credentials for ") -> "There is no " +
-        providerName(why.removePrefix("no credentials for ").trim()) + " account on this phone, " +
-        "and everything behind that pick is theirs. Add one under Settings → Accounts, or pick " +
-        "somewhere the other provider has."
     why.startsWith("no-credentials") || why.startsWith("no credentials") ->
         "There is no account to sign in with. Add one under Settings → Accounts."
     why.startsWith("permission refused") ->

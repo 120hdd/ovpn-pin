@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -32,9 +31,6 @@ import com.erelay.relay.ui.theme.Tone
  * flag-icons, MIT, the licence beside them in assets/flags - rasterised from
  * app/ui/flags' SVGs to 144px WebP, because Compose has no SVG of its own.
  *
- * Iran's is the exception: the Lion and Sun flag, from Wikimedia Commons
- * ("State flag of Iran (1964-1980)", public domain), cut to the same 4:3.
- *
  * The emoji they replace sat small in the middle of a grey disc, with the
  * disc showing round it, and every phone drew them in its own hand.
  */
@@ -42,13 +38,13 @@ import com.erelay.relay.ui.theme.Tone
 private val flags = HashMap<String, ImageBitmap?>()
 
 /** The flag for a country code, decoded once and kept; null if there is none. */
-internal fun flagBitmap(context: Context, code: String): ImageBitmap? {
+private fun flagBitmap(context: Context, code: String): ImageBitmap? {
     val c = code.lowercase().take(2)
     if (c.length != 2) return null
     synchronized(flags) {
         if (flags.containsKey(c)) return flags[c]
-        // The core folds gb into uk, the map and the trace say gb; the files have whichever they have.
-        val got = listOf(c, if (c == "uk") "gb" else if (c == "gb") "uk" else c).distinct().firstNotNullOfOrNull { name ->
+        // The core folds gb into uk; the files are named the ISO way.
+        val got = listOf(c, if (c == "uk") "gb" else c).distinct().firstNotNullOfOrNull { name ->
             try {
                 context.assets.open("flags/$name.webp").use { BitmapFactory.decodeStream(it) }?.asImageBitmap()
             } catch (e: Exception) {
@@ -58,13 +54,6 @@ internal fun flagBitmap(context: Context, code: String): ImageBitmap? {
         flags[c] = got
         return got
     }
-}
-
-/** The flag's picture alone, for a background that wants more than a circle of it. */
-@Composable
-fun rememberFlagBitmap(code: String): ImageBitmap? {
-    val context = LocalContext.current
-    return remember(code) { flagBitmap(context, code) }
 }
 
 /**
@@ -79,28 +68,14 @@ fun Flag(code: String, size: Dp, modifier: Modifier = Modifier) {
         modifier
             .size(size)
             .clip(CircleShape)
-            .background(Tone.surface2)
-            .border(1.dp, Tone.stroke, CircleShape),
+            .background(Tone.control)
+            .border(1.dp, Tone.wash.copy(alpha = 0.14f), CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         when {
             bitmap != null -> Image(bitmap, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             flagOf(code).isNotEmpty() -> Text(flagOf(code), fontSize = (size.value * 0.55f).sp)
-            else -> Icon(Glyph.globe, null, Modifier.size(size * 0.45f), tint = Tone.text2)
+            else -> Icon(Glyph.globe, null, Modifier.size(size * 0.45f), tint = Tone.textMuted)
         }
     }
-}
-
-/**
- * The flag as the address panel draws it: the whole 4:3 flag, small, its
- * corners rounded and a hairline round it. Nothing at all when there is no
- * picture of it - a grey disc with a globe in it says less than the name beside.
- */
-@Composable
-fun FlagTile(code: String, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    val bitmap = remember(code) { flagBitmap(context, code) } ?: return
-    val shape = RoundedCornerShape(3.dp)
-    Image(bitmap, null, modifier.size(22.dp, 16.5.dp).clip(shape).border(1.dp, Tone.stroke, shape),
-        contentScale = ContentScale.Crop)
 }

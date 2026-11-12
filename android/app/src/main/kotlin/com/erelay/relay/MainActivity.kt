@@ -44,6 +44,7 @@ class MainActivity : ComponentActivity() {
         // Before the first frame, so a Black or Graphite theme does not open
         // on one frame of Midnight - and before the bars take their colour.
         Tone.palette = Palette.of(core.feel.value.theme)
+        Tone.signal = core.feel.value.orbColors != "desktop"
         paintBars()
         setContent {
             // The bars and the window behind Compose follow the theme as it

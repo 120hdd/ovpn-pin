@@ -247,6 +247,7 @@ class RelayCore(private val app: Application) {
         orbTap = prefs.getBoolean("orbTap", true),
         orbMotion = prefs.getBoolean("orbMotion", true),
         meter = prefs.getBoolean("meter", true),
+        orbColors = prefs.getString("orbColors", "signal") ?: "signal",
     )
 
     fun setFeel(next: Feel) {
@@ -256,6 +257,7 @@ class RelayCore(private val app: Application) {
             .putBoolean("orbTap", next.orbTap)
             .putBoolean("orbMotion", next.orbMotion)
             .putBoolean("meter", next.meter)
+            .putString("orbColors", next.orbColors)
             .apply()
         _feel.value = next
     }

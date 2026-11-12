@@ -1,40 +1,45 @@
 package com.erelay.relay.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.material3.Icon
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.erelay.relay.Accounts
 import com.erelay.relay.data.Mode
 import com.erelay.relay.data.PinRun
 import com.erelay.relay.data.Setup
 import com.erelay.relay.orb.OrbStage
-import com.erelay.relay.ui.theme.Space
 import com.erelay.relay.ui.theme.Tone
 import com.erelay.relay.ui.theme.Type
 import com.erelay.relay.ui.theme.restTone
@@ -62,34 +67,44 @@ fun Welcome(
                 .statusBarsPadding()
                 .navigationBarsPadding()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = Space.x6),
+                .padding(horizontal = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // The orb is the one object: small, at the trailing edge, above the words.
-            Row(Modifier.fillMaxWidth().padding(top = Space.x4), horizontalArrangement = Arrangement.End) {
-                OrbStage(Mode.OFF, 0f, paused = paused, size = heroOrb(120.dp), toneOverride = restTone())
+            Spacer(Modifier.height(16.dp))
+            // Arrives in order - the orb, the question, then each answer -
+            // so the eye is led down the page rather than handed all of it.
+            Rise(0, distance = 12f) {
+                OrbStage(Mode.OFF, 0f, paused = paused, size = 200.dp, toneOverride = restTone())
             }
-            Text("Connect with an account or a server of your own.", style = Type.display)
-            Spacer(Modifier.height(Space.x3))
-            Text("Relay needs one of these before it can carry anything. More can be added later in Settings.",
-                style = Type.body)
+            Rise(140) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Welcome to Relay", style = Type.title.copy(fontSize = 26.sp))
+                    Spacer(Modifier.height(8.dp))
+                    Text("How will you connect? Relay needs one of these before it can carry " +
+                        "anything - more can be added later under Settings.",
+                        style = Type.body, textAlign = TextAlign.Center)
+                }
+            }
+            Spacer(Modifier.height(24.dp))
 
-            Section("A VPN account",
-                note = "Sign in, and Relay gets the provider's servers and pins them to real addresses.") {
-                Group {
-                    NavRow("Surfshark", "Sign in with the service login", { onProvider(Accounts.SURFSHARK) },
-                        Glyph.surfshark)
-                    Sep()
-                    NavRow("Windscribe", "Sign in with your Windscribe login", { onProvider(Accounts.WINDSCRIBE) },
-                        Glyph.windscribe)
+            Rise(280) { Choice(Glyph.key, "A VPN account",
+                "Sign in, and Relay gets the provider's servers and pins them to real " +
+                    "addresses for you.") {
+                Row(Modifier.fillMaxWidth().padding(top = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Btn("Surfshark", { onProvider(Accounts.SURFSHARK) }, Modifier.weight(1f),
+                        strong = true)
+                    Btn("Windscribe", { onProvider(Accounts.WINDSCRIBE) }, Modifier.weight(1f),
+                        strong = true)
                 }
+            } }
+            Spacer(Modifier.height(12.dp))
+            Rise(400) {
+                Choice(Glyph.tower, "My own server",
+                    "A server of yours behind Cloudflare. Set its domain and password.",
+                    onClick = onServer)
             }
-            Section("Your own server") {
-                Group {
-                    NavRow("My own server", "A server of yours behind Cloudflare. Set its domain and password.",
-                        onServer, Glyph.tower)
-                }
-            }
-            Spacer(Modifier.height(Space.x6))
+            Spacer(Modifier.height(24.dp))
         }
     }
 }
@@ -99,7 +114,6 @@ fun Welcome(
  * fetched and pinned, and this says how far along that is. Nothing to press
  * unless it fails.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SetupScreen(
     setup: Setup,
@@ -120,88 +134,125 @@ fun SetupScreen(
                 .statusBarsPadding()
                 .navigationBarsPadding()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = Space.x6),
+                .padding(horizontal = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Row(Modifier.fillMaxWidth().padding(top = Space.x4), horizontalArrangement = Arrangement.End) {
-                OrbStage(if (setup.step == "failed") Mode.FAIL else Mode.BUSY, 0f, paused = paused,
-                    size = heroOrb(140.dp), toneOverride = if (setup.step == "failed") null else restTone())
-            }
-            Text(if (setup.step == "failed") "Setup did not finish." else "Getting your servers ready.",
-                style = Type.display)
-            Spacer(Modifier.height(Space.x3))
-            Text("Once, on a new phone. After this Relay connects in a second.", style = Type.body)
-            Spacer(Modifier.height(Space.x6))
+            Spacer(Modifier.height(24.dp))
+            Rise(0, distance = 12f) { OrbStage(if (setup.step == "failed") Mode.FAIL else Mode.BUSY, 0f, paused = paused,
+                size = 220.dp, toneOverride = if (setup.step == "failed") null else restTone()) }
+            Text(if (setup.step == "failed") "Setup did not finish" else "Getting your servers ready",
+                style = Type.title.copy(fontSize = 24.sp), textAlign = TextAlign.Center)
+            Spacer(Modifier.height(8.dp))
+            Text("Once, on a new phone. After this Relay connects in a second.",
+                style = Type.body, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(28.dp))
 
             val fetched = setup.step == "pinning" || setup.step == "done"
-            Group {
-                Step("Signed in to $provider", done = true, active = false)
-                Sep()
-                Step("Getting $provider's server list", done = fetched, active = setup.step == "servers")
-                Sep()
-                Step("Pinning each server to its real address", done = setup.step == "done",
-                    active = setup.step == "pinning",
-                    detail = if (setup.step == "pinning" && run.total > 0)
-                        "${run.done} of ${run.total} · ${run.reachable} answering" else null,
-                    progress = if (setup.step == "pinning" && run.total > 0) run.done.toFloat() / run.total else null)
-            }
+            Step("Signed in to $provider", done = true, active = false)
+            Step("Getting $provider's server list", done = fetched,
+                active = setup.step == "servers")
+            Step("Pinning each server to its real address", done = setup.step == "done",
+                active = setup.step == "pinning",
+                detail = if (setup.step == "pinning" && run.total > 0)
+                    "${run.done} of ${run.total} · ${run.reachable} answering" else null,
+                progress = if (setup.step == "pinning" && run.total > 0) run.done.toFloat() / run.total else null)
 
             if (setup.step == "failed") {
+                Spacer(Modifier.height(16.dp))
                 SaidLine(setup.error, bad = true)
-                Spacer(Modifier.height(Space.x4))
+                Spacer(Modifier.height(16.dp))
                 // The second goes under the first when they do not fit side by side.
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.x2),
-                    verticalArrangement = Arrangement.spacedBy(Space.x2)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Btn("Try again", onRetry, strong = true, icon = Glyph.refresh)
                     Btn("Use another account", onOtherAccount)
                 }
             } else {
+                Spacer(Modifier.height(20.dp))
                 Text("This line's DNS forges answers, so each server is looked up over " +
                     "DNS-over-HTTPS and kept at the address that is really it.",
-                    style = Type.caption, modifier = Modifier.padding(top = Space.x4, start = Space.x1))
+                    style = Type.small, textAlign = TextAlign.Center)
             }
-            Spacer(Modifier.height(Space.x6))
+            Spacer(Modifier.height(24.dp))
         }
     }
 }
 
-/**
- * The orb over a page of words: [full] on a phone with the height for it,
- * down to 96 on a short one - a little less again when a large font makes
- * the words under it taller - so the statement and its first answer still
- * show without a scroll.
- */
-@Composable
-private fun heroOrb(full: Dp): Dp {
-    val tall = windowDp().height
-    val font = androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceAtLeast(1f)
-    return (tall * (0.18f / font)).coerceIn(96.dp, full)
-}
-
-/** One step of the setup: its name, where it stands in words, and a bar while it runs. */
 @Composable
 private fun Step(title: String, done: Boolean, active: Boolean, detail: String? = null, progress: Float? = null) {
-    // A status is a mark and a word: a small check in Good when done, never a glow.
-    SettingRow(title, desc = detail) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (done) {
-                Icon(Glyph.check, null, Modifier.size(14.dp), tint = Tone.good)
-                Spacer(Modifier.width(Space.x1))
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.Top) {
+        Box(
+            Modifier
+                .padding(top = 1.dp)
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(when {
+                    done -> Tone.ok
+                    active -> Tone.ok.copy(alpha = 0.18f)
+                    else -> Tone.control
+                })
+                .border(1.dp, if (active) Tone.ok else androidx.compose.ui.graphics.Color.Transparent, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            // The tick pops in with a little overshoot when its step finishes.
+            val pop by androidx.compose.animation.core.animateFloatAsState(if (done) 1f else 0f,
+                androidx.compose.animation.core.spring(dampingRatio = 0.45f,
+                    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow), label = "tick")
+            if (pop > 0.01f) Icon(Glyph.check, null,
+                Modifier.size(13.dp).graphicsLayer { scaleX = pop; scaleY = pop }, tint = Tone.ink)
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = Type.strong.copy(
+                color = if (done || active) Tone.text else Tone.textOff,
+                fontWeight = if (active) FontWeight.W700 else FontWeight.W600))
+            if (detail != null) {
+                Spacer(Modifier.height(4.dp))
+                Text(detail, style = Type.mono)
             }
-            Text(when {
-                done -> "Done"
-                active -> "Working"
-                else -> "Waiting"
-            }, style = Type.caption.copy(color = when {
-                done -> Tone.good
-                active -> Tone.work
-                else -> Tone.text3
-            }))
+            if (progress != null) {
+                Spacer(Modifier.height(8.dp))
+                Box(Modifier.fillMaxWidth().height(4.dp).clip(CircleShape).background(Tone.control)) {
+                    Box(Modifier.fillMaxWidth(progress.coerceIn(0.02f, 1f)).height(4.dp).background(Tone.ok))
+                }
+            }
         }
     }
-    if (progress != null) {
-        Box(Modifier.fillMaxWidth().padding(horizontal = Space.x5).padding(bottom = Space.x3).height(4.dp)
-            .clip(CircleShape).background(Tone.surface2)) {
-            Box(Modifier.fillMaxWidth(progress.coerceIn(0.02f, 1f)).height(4.dp).clip(CircleShape).background(Tone.text2))
+}
+
+/** One answer: a card with an icon, what it is, and how it works. */
+@Composable
+private fun Choice(
+    icon: ImageVector,
+    title: String,
+    say: String,
+    onClick: (() -> Unit)? = null,
+    extra: @Composable () -> Unit = {},
+) {
+    val shape = RoundedCornerShape(18.dp)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.press(shape = shape, sink = true, onClick = onClick)
+                  else Modifier)
+            .clip(shape)
+            .background(Tone.surface)
+            .border(1.dp, Tone.border, shape)
+            .padding(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(Tone.ok.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center) {
+                Icon(icon, null, Modifier.size(20.dp), tint = Tone.ok)
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = Type.strong.copy(fontSize = 17.sp, fontWeight = FontWeight.W700))
+                Spacer(Modifier.height(2.dp))
+                Text(say, style = Type.small.copy(color = Tone.textMuted))
+            }
+            if (onClick != null) Icon(Glyph.chevRight, null, Modifier.size(18.dp), tint = Tone.textOff)
         }
+        extra()
     }
 }
